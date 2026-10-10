@@ -184,6 +184,7 @@ fn main() {
             commands::plan_new_project,
             commands::serial_ports,
             commands::debug_probes,
+            commands::boot_devices,
             commands::plan_flash,
             commands::build_plan,
             debug::debug_start,
@@ -419,6 +420,7 @@ mod wire_names {
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,
             cmd::flash::DEBUG_PROBES => commands::debug_probes,
+            cmd::flash::BOOT_DEVICES => commands::boot_devices,
             cmd::flash::PLAN => commands::plan_flash,
             cmd::firmware::BUILD_PLAN => commands::build_plan,
             cmd::debug::START => debug::debug_start,

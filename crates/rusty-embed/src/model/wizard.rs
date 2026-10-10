@@ -18,6 +18,21 @@ pub struct WizardChoice {
     /// One crate, or the split this workbench is built around.
     #[serde(default)]
     pub layout: WizardLayout,
+    /// Rust, or C built with CMake — for a part whose catalogue entry names
+    /// a C template (`c_template`).
+    #[serde(default)]
+    pub language: Language,
+}
+
+/// What a new project is written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Language {
+    #[default]
+    Rust,
+    /// C with CMake, a startup file and a linker script — no vendor SDK —
+    /// written from one of rusty's templates.
+    C,
 }
 
 /// The shape of a new project.

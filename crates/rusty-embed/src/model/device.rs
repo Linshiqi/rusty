@@ -40,6 +40,32 @@ pub struct Probe {
     pub description: String,
 }
 
+/// A board waiting in its USB bootloader, which takes an image with no
+/// probe and no serial bootloader: a Raspberry Pi RP2040 or RP2350 held in
+/// BOOTSEL, which mounts as a drive, or an STM32 in its system bootloader,
+/// which speaks USB DFU.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BootDevice {
+    pub kind: BootKind,
+    /// What the transport carries: the drive's root (`E:\`,
+    /// `/media/me/RPI-RP2`) or the DFU device's `vid:pid`.
+    pub id: String,
+    /// The device's serial number, for telling two DFU boards apart.
+    #[serde(default)]
+    pub serial: Option<String>,
+    /// How the device names itself: the UF2 drive's `Board-ID`
+    /// (`RPI-RP2`, `RP2350`), or the DFU interface's name.
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BootKind {
+    Uf2,
+    Dfu,
+}
+
 /// How to reach the board.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -49,6 +75,14 @@ pub enum Transport {
     /// Through a JTAG/SWD probe. Adds breakpoints and RTT, and is the only way
     /// onto a part with no serial bootloader.
     Probe { identifier: Option<String> },
+    /// Onto a UF2 bootloader's drive: the image copied as a UF2 file.
+    Uf2 { drive: String },
+    /// Through USB DFU, `dfu-util` writing a raw binary.
+    Dfu {
+        device: String,
+        #[serde(default)]
+        serial: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

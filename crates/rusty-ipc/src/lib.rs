@@ -117,6 +117,8 @@ pub mod firmware {
 pub mod flash {
     pub const SERIAL_PORTS: &str = "serial_ports";
     pub const DEBUG_PROBES: &str = "debug_probes";
+    /// Boards waiting in a USB bootloader: UF2 drives and DFU devices.
+    pub const BOOT_DEVICES: &str = "boot_devices";
     pub const PLAN: &str = "plan_flash";
     pub const RUN: &str = "run_flash";
     pub const STOP: &str = "stop_flash";

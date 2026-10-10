@@ -31,7 +31,7 @@ fn duration(ms: f64) -> String {
     }
 }
 
-fn running(activity: &Activity) -> String {
+pub(crate) fn running(activity: &Activity) -> String {
     let target = activity.target.clone().unwrap_or_default();
     let head = match activity.kind {
         Kind::Build => t!("activity.building"),

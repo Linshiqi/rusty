@@ -16,7 +16,7 @@ use leptos::task::spawn_local;
 use rusty_i18n::t;
 
 use rusty_embed::{
-    CommandPlan, FlashAction, Flasher, LogLevel, LogLine, LogStream, MemoryReport, Probe,
+    BootKind, CommandPlan, FlashAction, Flasher, LogLevel, LogLine, LogStream, MemoryReport, Probe,
     SerialPort, Transport,
 };
 
@@ -72,7 +72,31 @@ fn scan_then(state: AppState, then: impl FnOnce() + 'static) {
                         }
                     });
                     state.device.probes.set(probes);
-                    then();
+                    track(
+                        state,
+                        ipc::get::<Vec<rusty_embed::BootDevice>>(cmd::flash::BOOT_DEVICES),
+                        move |boot| {
+                            // A board leaves its bootloader the moment it is
+                            // written: a chosen drive or DFU device that is
+                            // gone is not kept as the choice.
+                            state.device.transport.update(|transport| {
+                                let gone = match transport.as_ref() {
+                                    Some(Transport::Uf2 { drive }) => {
+                                        !boot.iter().any(|b| &b.id == drive)
+                                    }
+                                    Some(Transport::Dfu { device, .. }) => {
+                                        !boot.iter().any(|b| &b.id == device)
+                                    }
+                                    _ => false,
+                                };
+                                if gone {
+                                    *transport = None;
+                                }
+                            });
+                            state.device.boot.set(boot);
+                            then();
+                        },
+                    );
                 },
             );
         },
@@ -85,10 +109,14 @@ fn scan_then(state: AppState, then: impl FnOnce() + 'static) {
 /// `serial` is whether the project's chip has a ROM serial bootloader. When
 /// it does, only ports that look like boards count — an ESP32-C3 with native
 /// USB appears as a port *and* a probe, and counting both would ask every
-/// time about one board. When it does not, the probes are all there is.
+/// time about one board. When it does not, the probes are all there is —
+/// with `boot`, the boards waiting in a bootloader the part can be written
+/// through: a Pico held in BOOTSEL with no probe plugged in is the one
+/// board, as much as a probe would be.
 pub(crate) fn only_candidate(
     ports: &[SerialPort],
     probes: &[Probe],
+    boot: &[rusty_embed::BootDevice],
     serial: bool,
 ) -> Option<Transport> {
     if serial {
@@ -98,10 +126,52 @@ pub(crate) fn only_candidate(
             port: first.name.clone(),
         });
     }
-    let mut found = probes.iter();
+    let mut found = probes
+        .iter()
+        .map(|probe| Transport::Probe {
+            identifier: Some(probe.identifier.clone()),
+        })
+        .chain(boot.iter().map(boot_transport));
     let first = found.next()?;
-    found.next().is_none().then(|| Transport::Probe {
-        identifier: Some(first.identifier.clone()),
+    found.next().is_none().then_some(first)
+}
+
+/// How a board waiting in its bootloader is written to.
+pub fn boot_transport(device: &rusty_embed::BootDevice) -> Transport {
+    match device.kind {
+        BootKind::Uf2 => Transport::Uf2 {
+            drive: device.id.clone(),
+        },
+        BootKind::Dfu => Transport::Dfu {
+            device: device.id.clone(),
+            serial: device.serial.clone(),
+        },
+    }
+}
+
+/// The bootloaders the open project's part can be written through, of those
+/// plugged in: a UF2 drive for a part with a UF2 boot ROM, a DFU device for
+/// one with a DFU bootloader. Untracked.
+fn usable_boot(state: AppState) -> Vec<rusty_embed::BootDevice> {
+    let chip = state
+        .project
+        .detected
+        .with_untracked(|p| p.as_ref().and_then(|p| p.chip.clone()));
+    let flashers = state.project.chips.with_untracked(|chips| {
+        chips
+            .iter()
+            .find(|c| Some(&c.id) == chip.as_ref())
+            .map(|c| c.flashers.clone())
+            .unwrap_or_default()
+    });
+    state.device.boot.with_untracked(|boot| {
+        boot.iter()
+            .filter(|device| match device.kind {
+                BootKind::Uf2 => flashers.contains(&Flasher::Uf2),
+                BootKind::Dfu => flashers.contains(&Flasher::Dfu),
+            })
+            .cloned()
+            .collect()
     })
 }
 
@@ -155,11 +225,17 @@ pub fn device_action(state: AppState, action: DeviceAction) {
             .filter(|transport| !debugging || matches!(transport, Transport::Probe { .. }));
         let transport = chosen.or_else(|| {
             let serial = serial_capable(state) && !debugging;
+            // Nothing runs in a bootloader to debug, or to watch.
+            let boot = if debugging || action == DeviceAction::Monitor {
+                Vec::new()
+            } else {
+                usable_boot(state)
+            };
             let pick = state.device.ports.with_untracked(|ports| {
                 state
                     .device
                     .probes
-                    .with_untracked(|probes| only_candidate(ports, probes, serial))
+                    .with_untracked(|probes| only_candidate(ports, probes, &boot, serial))
             });
             if let Some(transport) = &pick
                 && state.device.transport.with_untracked(Option::is_none)
@@ -486,6 +562,8 @@ pub fn device_label(transport: &Transport) -> String {
             identifier: Some(id),
         } => id.clone(),
         Transport::Probe { identifier: None } => "probe".to_string(),
+        Transport::Uf2 { drive } => drive.clone(),
+        Transport::Dfu { device, .. } => device.clone(),
     }
 }
 
@@ -815,13 +893,13 @@ mod tests {
     fn the_only_board_is_chosen_and_anything_more_is_asked() {
         let one = [port("COM3", true), port("COM1", false)];
         assert!(matches!(
-            only_candidate(&one, &[], true),
+            only_candidate(&one, &[], &[], true),
             Some(Transport::Serial { port }) if port == "COM3"
         ));
         let two = [port("COM3", true), port("COM7", true)];
-        assert!(only_candidate(&two, &[], true).is_none());
-        assert!(only_candidate(&[port("COM1", false)], &[], true).is_none());
-        assert!(only_candidate(&[], &[], true).is_none());
+        assert!(only_candidate(&two, &[], &[], true).is_none());
+        assert!(only_candidate(&[port("COM1", false)], &[], &[], true).is_none());
+        assert!(only_candidate(&[], &[], &[], true).is_none());
     }
 
     /// A C3 on native USB is a port and a probe at once. For a chip with a
@@ -832,14 +910,31 @@ mod tests {
         let ports = [port("COM5", true)];
         let probes = [probe("303a:1001:34:85:18:0A:47:F4")];
         assert!(matches!(
-            only_candidate(&ports, &probes, true),
+            only_candidate(&ports, &probes, &[], true),
             Some(Transport::Serial { .. })
         ));
         assert!(matches!(
-            only_candidate(&ports, &probes, false),
+            only_candidate(&ports, &probes, &[], false),
             Some(Transport::Probe { identifier: Some(id) }) if id.starts_with("303a")
         ));
-        assert!(only_candidate(&ports, &[probe("a"), probe("b")], false).is_none());
+        assert!(only_candidate(&ports, &[probe("a"), probe("b")], &[], false).is_none());
+    }
+
+    /// A Pico held in BOOTSEL with no probe plugged in is the one board; a
+    /// probe as well is two, and asked about.
+    #[test]
+    fn a_board_in_its_bootloader_is_a_candidate_like_a_probe() {
+        let drive = rusty_embed::BootDevice {
+            kind: BootKind::Uf2,
+            id: "E:\\".to_string(),
+            serial: None,
+            label: "RPI-RP2".to_string(),
+        };
+        assert!(matches!(
+            only_candidate(&[], &[], std::slice::from_ref(&drive), false),
+            Some(Transport::Uf2 { drive }) if drive == "E:\\"
+        ));
+        assert!(only_candidate(&[], &[probe("a")], &[drive], false).is_none());
     }
 
     /// Debug goes to the board when the part can be debugged through a

@@ -13,7 +13,7 @@
 use leptos::{ev, prelude::*};
 
 use rusty_embed::{
-    Chip, CrateNameProblem, Runtime, ToolchainRequirement, WizardChoice, WizardLayout,
+    Chip, CrateNameProblem, Language, Runtime, ToolchainRequirement, WizardChoice, WizardLayout,
     crate_name_problem,
 };
 
@@ -88,6 +88,7 @@ pub fn Wizard() -> impl IntoView {
                         name: "firmware".to_string(),
                         options: Vec::new(),
                         layout: WizardLayout::Single,
+                        language: Language::Rust,
                     },
                 );
             }
@@ -319,7 +320,11 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
                     // catalogue names without a package (`stm32f411`) used
                     // to be listed, and picking it ended at the last step on
                     // "this combination has no generator".
-                    .filter(|chip| chip.generator.is_some() || chip.std_generator.is_some())
+                    .filter(|chip| {
+                        chip.generator.is_some()
+                            || chip.std_generator.is_some()
+                            || chip.c_template.is_some()
+                    })
                     .filter(|chip| {
                         needle.is_empty()
                             || chip.name.to_lowercase().contains(&needle)
@@ -333,6 +338,7 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
                         // esp-generate: none of its options, and bare metal
                         // is all there is.
                         let written = chip.writes_itself(Runtime::BareMetal);
+                        let has_c = chip.c_template.is_some();
                         view! {
                             <button
                                 type="button"
@@ -344,6 +350,11 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
                                             if written {
                                                 next.options.clear();
                                                 next.runtime = Runtime::BareMetal;
+                                            }
+                                            // C only where the part has a C
+                                            // template to write it from.
+                                            if !has_c {
+                                                next.language = Language::Rust;
                                             }
                                         },
                                     )
@@ -456,6 +467,46 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     });
 
     let hal = chip_hal(state, &choice.chip);
+    let language = choice.language;
+    let has_c = state.project.chips.with_untracked(|chips| {
+        chips
+            .iter()
+            .find(|c| c.id == choice.chip)
+            .is_some_and(|c| c.c_template.is_some())
+    });
+    // C is a project of another kind rather than a runtime of Rust's, but
+    // it is the same decision — what the firmware is written on — so it is
+    // a row of this step, shown only for a part rusty has a C project for.
+    let c_row = has_c.then(|| {
+        let on = language == Language::C;
+        view! {
+            <button
+                type="button"
+                on:click=move |_| {
+                    amend(
+                        state,
+                        |next| {
+                            next.language = Language::C;
+                            next.runtime = Runtime::BareMetal;
+                            next.layout = WizardLayout::Single;
+                            next.options.clear();
+                        },
+                    )
+                }
+                class=move || {
+                    let base = "flex w-full items-center gap-2 rounded-[6px] px-2 py-1.5 \
+                                text-left transition-colors";
+                    if on {
+                        format!("{base} bg-selection text-rust")
+                    } else {
+                        format!("{base} text-label-2 hover:bg-sunken hover:text-label")
+                    }
+                }
+            >
+                <span class="flex-1 text-body font-medium">{t!("wizard.c-label")}</span>
+            </button>
+        }
+    });
     let list = view! {
         {[Runtime::BareMetal, Runtime::EspIdf]
                 .into_iter()
@@ -471,12 +522,20 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
                         <button
                             type="button"
                             disabled=move || disabled.get()
-                            on:click=move |_| amend(state, |next| next.runtime = runtime)
+                            on:click=move |_| {
+                                amend(
+                                    state,
+                                    |next| {
+                                        next.runtime = runtime;
+                                        next.language = Language::Rust;
+                                    },
+                                )
+                            }
                             class=move || {
                                 let base = "flex w-full items-center gap-2 rounded-[6px] px-2 \
                                             py-1.5 text-left transition-colors \
                                             disabled:pointer-events-none disabled:opacity-35";
-                                if runtime == selected {
+                                if runtime == selected && language == Language::Rust {
                                     format!("{base} bg-selection text-rust")
                                 } else {
                                     format!("{base} text-label-2 hover:bg-sunken hover:text-label")
@@ -500,19 +559,27 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
                     }
                 })
                 .collect_view()}
+        {c_row}
     }
     .into_any();
 
-    let detail = view! {
-        <DetailHeading title=selected.label_on(hal.as_deref()) />
-        <p class="text-callout leading-relaxed text-label-2">
-            {match selected {
-                Runtime::BareMetal => t!("wizard.bare-metal"),
-                Runtime::EspIdf => t!("wizard.esp-idf"),
-            }}
-        </p>
-    }
-    .into_any();
+    let detail = match language {
+        Language::C => view! {
+            <DetailHeading title=t!("wizard.c-label") />
+            <p class="text-callout leading-relaxed text-label-2">{t!("wizard.c-detail")}</p>
+        }
+        .into_any(),
+        Language::Rust => view! {
+            <DetailHeading title=selected.label_on(hal.as_deref()) />
+            <p class="text-callout leading-relaxed text-label-2">
+                {match selected {
+                    Runtime::BareMetal => t!("wizard.bare-metal"),
+                    Runtime::EspIdf => t!("wizard.esp-idf"),
+                }}
+            </p>
+        }
+        .into_any(),
+    };
 
     view! { <Split list=list detail=detail /> }
 }
@@ -592,13 +659,17 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
         </div>
     };
 
-    let written = chip_writes_itself(state, &choice.chip, choice.runtime);
+    let c = choice.language == Language::C;
+    let written = c || chip_writes_itself(state, &choice.chip, choice.runtime);
+    let said = if c {
+        t!("wizard.c-no-options")
+    } else {
+        t!("wizard.written-by-rusty")
+    };
     let list = view! {
-        {layout_row}
+        {(!c).then_some(layout_row)}
         {written.then(|| view! {
-            <p class="px-2 py-1 text-callout leading-relaxed text-label-2">
-                {t!("wizard.written-by-rusty")}
-            </p>
+            <p class="px-2 py-1 text-callout leading-relaxed text-label-2">{said}</p>
         })}
         {move || {
                 if written {
@@ -734,9 +805,12 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
     let state = AppState::expect();
     let name = choice.name.clone();
     let summary_chip = choice.chip.clone();
-    let summary_runtime = choice
-        .runtime
-        .label_on(chip_hal(state, &choice.chip).as_deref());
+    let summary_runtime = match choice.language {
+        Language::C => t!("wizard.c-label"),
+        Language::Rust => choice
+            .runtime
+            .label_on(chip_hal(state, &choice.chip).as_deref()),
+    };
     let summary_options = choice.options.clone();
 
     view! {

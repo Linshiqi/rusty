@@ -47,6 +47,12 @@ pub(crate) fn build(path: &Path) -> Result<()> {
     let root = project::firmware_root(path);
     let detected =
         project::detect(&root).with_context(|| format!("inspecting {}", root.display()))?;
+    if let Some(file) = rusty_embed::buildsys::ensure_toolchain_file(&detected, &root)? {
+        eprintln!(
+            "wrote {file}: this CMake project names no compiler, so the part's cross compiler \
+             and core flags go in a toolchain file the project now keeps"
+        );
+    }
     for plan in rusty_embed::buildsys::build_plans(&detected, &root)? {
         eprintln!("$ {}", plan.display);
         let status = rusty_embed::process::command(&plan.program)

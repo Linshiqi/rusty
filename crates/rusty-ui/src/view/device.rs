@@ -111,6 +111,8 @@ pub fn DevicePicker() -> impl IntoView {
                 .or(identifier)
                 .unwrap_or_else(|| t!("device.probe"))
         }),
+        Some(Transport::Uf2 { drive }) => format!("{drive} · UF2"),
+        Some(Transport::Dfu { device, .. }) => format!("{device} · DFU"),
         None => t!("device.choose"),
     };
     // The chosen port's board cannot be the project's chip.
@@ -177,7 +179,8 @@ fn PickerList() -> impl IntoView {
         // for the board that enumerates as something unexpected.
         ports.sort_by_key(|port| !port.likely_board);
         let probes = state.device.probes.get();
-        if ports.is_empty() && probes.is_empty() {
+        let boot = state.device.boot.get();
+        if ports.is_empty() && probes.is_empty() && boot.is_empty() {
             return view! {
                 <div class="px-3 py-3">
                     <p class="text-callout text-label-2">{t!("device.none-found")}</p>
@@ -252,8 +255,48 @@ fn PickerList() -> impl IntoView {
                 }
             })
             .collect_view();
-        view! { <div class="max-h-[18rem] overflow-y-auto py-1">{serial_rows}{probe_rows}</div> }
-            .into_any()
+        // Boards waiting in a bootloader: a Pico held in BOOTSEL is a drive,
+        // an STM32 with BOOT0 high a DFU device.
+        let boot_rows = boot
+            .into_iter()
+            .map(|device| {
+                let transport = controller::boot_transport(&device);
+                let picked = match (&chosen, &transport) {
+                    (Some(Transport::Uf2 { drive: a }), Transport::Uf2 { drive: b }) => a == b,
+                    (Some(Transport::Dfu { device: a, .. }), Transport::Dfu { device: b, .. }) => {
+                        a == b
+                    }
+                    _ => false,
+                };
+                let badge = match device.kind {
+                    rusty_embed::BootKind::Uf2 => t!("device.uf2-drive"),
+                    rusty_embed::BootKind::Dfu => t!("device.dfu-device"),
+                };
+                let detail = match &device.serial {
+                    Some(serial) => format!("{} · {serial}", device.id),
+                    None => device.id.clone(),
+                };
+                view! {
+                    <Row
+                        picked=picked
+                        tone=Tone::Amber
+                        name=device.label
+                        detail=detail
+                        badge=Some(badge)
+                        note=None
+                        on_pick=Callback::new(move |_| {
+                            controller::choose_device(state, transport.clone())
+                        })
+                    />
+                }
+            })
+            .collect_view();
+        view! {
+            <div class="max-h-[18rem] overflow-y-auto py-1">
+                {serial_rows}{probe_rows}{boot_rows}
+            </div>
+        }
+        .into_any()
     };
 
     // The foot: what the chosen device would be sent.

@@ -1,0 +1,90 @@
+/* @PART@: where the code and the data go. The memory is the part's, from
+   rusty's catalogue; the rest is the usual shape for a Cortex-M. */
+
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = @FLASH@
+  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = @RAM@
+}
+
+/* The stack starts at the top of RAM and grows down towards .bss. */
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+_stack_size = 0x800;
+
+SECTIONS
+{
+  /* The vector table first: the core reads the stack pointer and the
+     reset handler from the start of flash. */
+  .vectors :
+  {
+    KEEP(*(.vectors))
+  } > FLASH
+
+  .text :
+  {
+    . = ALIGN(4);
+    *(.text .text.*)
+    *(.rodata .rodata.*)
+    KEEP(*(.init))
+    KEEP(*(.fini))
+    . = ALIGN(4);
+  } > FLASH
+
+  .ARM.extab : { *(.ARM.extab* .gnu.linkonce.armextab.*) } > FLASH
+  .ARM.exidx : { *(.ARM.exidx* .gnu.linkonce.armexidx.*) } > FLASH
+
+  .preinit_array :
+  {
+    PROVIDE_HIDDEN(__preinit_array_start = .);
+    KEEP(*(.preinit_array*))
+    PROVIDE_HIDDEN(__preinit_array_end = .);
+  } > FLASH
+
+  .init_array :
+  {
+    PROVIDE_HIDDEN(__init_array_start = .);
+    KEEP(*(SORT(.init_array.*)))
+    KEEP(*(.init_array*))
+    PROVIDE_HIDDEN(__init_array_end = .);
+  } > FLASH
+
+  .fini_array :
+  {
+    PROVIDE_HIDDEN(__fini_array_start = .);
+    KEEP(*(SORT(.fini_array.*)))
+    KEEP(*(.fini_array*))
+    PROVIDE_HIDDEN(__fini_array_end = .);
+  } > FLASH
+
+  /* Initialised data lives in RAM and is copied there from flash at
+     reset, by startup.c. */
+  _sidata = LOADADDR(.data);
+
+  .data :
+  {
+    . = ALIGN(4);
+    _sdata = .;
+    *(.data .data.*)
+    . = ALIGN(4);
+    _edata = .;
+  } > RAM AT > FLASH
+
+  .bss (NOLOAD) :
+  {
+    . = ALIGN(4);
+    _sbss = .;
+    __bss_start__ = _sbss;
+    *(.bss .bss.*)
+    *(COMMON)
+    . = ALIGN(4);
+    _ebss = .;
+    __bss_end__ = _ebss;
+  } > RAM
+
+  PROVIDE(end = _ebss);
+  PROVIDE(_end = _ebss);
+
+  ASSERT(_ebss + _stack_size <= _estack, "RAM is too full to leave the stack its room")
+}

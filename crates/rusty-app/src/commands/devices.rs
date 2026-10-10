@@ -33,6 +33,14 @@ pub async fn debug_probes() -> Answer<Vec<Probe>> {
     blocking("listing the probes", device::list_probes).await
 }
 
+/// Boards waiting in a USB bootloader — an RP2040 or RP2350 held in
+/// BOOTSEL, mounted as a drive, and an STM32 in its DFU bootloader — which
+/// take an image with no probe.
+#[tauri::command]
+pub async fn boot_devices() -> Answer<Vec<rusty_embed::BootDevice>> {
+    blocking("listing the bootloaders", device::list_boot_devices).await
+}
+
 /// Work out the command without running it.
 ///
 /// The UI shows this before the user commits, and the assistant can quote it.
@@ -75,7 +83,7 @@ pub async fn plan_flash(
         // serial ports.
         let ports = match &transport {
             Transport::Serial { .. } => device::list_serial_ports(&catalog),
-            Transport::Probe { .. } => Vec::new(),
+            _ => Vec::new(),
         };
         let warning = flash::port_warning(&chip_id, &transport, &ports, &catalog);
 
@@ -96,12 +104,15 @@ pub async fn plan_flash(
 
 /// The commands that build the open project, in order: its build system's
 /// — `cargo build --release`, `pio run`, or CMake's configure and build.
-/// The title bar's Build and Flash run them one after another.
+/// The title bar's Build and Flash run them one after another. A CMake
+/// project that names no compiler is given rusty's toolchain file for its
+/// part first, which the configure step then names.
 #[tauri::command]
 pub async fn build_plan(state: State<'_, AppState>) -> Answer<Vec<CommandPlan>> {
     let root = state.require_firmware_root().await?;
     blocking("planning the build", move || {
         let detected = project::detect(&root)?;
+        rusty_embed::buildsys::ensure_toolchain_file(&detected, &root)?;
         Ok(rusty_embed::buildsys::build_plans(&detected, &root)?)
     })
     .await?

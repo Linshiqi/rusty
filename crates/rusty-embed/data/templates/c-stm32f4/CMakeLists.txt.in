@@ -1,0 +1,27 @@
+# @NAME@: C firmware for the @PART@, with no vendor SDK.
+#
+# The compiler and the core's flags are in cmake/rusty-toolchain.cmake,
+# which CMakePresets.json names, so `cmake --preset firmware` and then
+# `cmake --build build` build it here or anywhere else.
+cmake_minimum_required(VERSION 3.21)
+
+# The part this firmware is for. rusty reads it here to size the image
+# against the part's memory and to flash it.
+set(RUSTY_CHIP @CHIP@)
+
+project(@NAME@ C ASM)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+add_executable(@NAME@ src/main.c src/startup.c)
+set_target_properties(@NAME@ PROPERTIES SUFFIX .elf)
+target_compile_options(@NAME@ PRIVATE -Wall -Wextra)
+# src/startup.c is where the program starts, so newlib's own start-up files
+# stay out: -nostartfiles.
+target_link_options(@NAME@ PRIVATE
+    -nostartfiles
+    -T${CMAKE_SOURCE_DIR}/link.ld
+    -Wl,-Map=${CMAKE_BINARY_DIR}/@NAME@.map
+    -Wl,--print-memory-usage
+)

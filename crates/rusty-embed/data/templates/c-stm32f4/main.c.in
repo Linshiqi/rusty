@@ -1,0 +1,61 @@
+/* @NAME@ on the @PART@: the Black Pill's LED on PC13 blinks, faster while
+   the KEY button on PA0 is held. Register by register, from the part's
+   reference manual, so every line says what the part does. */
+
+#include <stdint.h>
+
+#define REG(address) (*(volatile uint32_t *)(address))
+
+/* Each GPIO port's clock is off at reset; RCC turns it on. */
+#define RCC_AHB1ENR REG(0x40023830u)
+#define GPIOA 0x40020000u
+#define GPIOC 0x40020800u
+#define MODER(port) REG((port) + 0x00u)
+#define PUPDR(port) REG((port) + 0x0Cu)
+#define IDR(port) REG((port) + 0x10u)
+#define ODR(port) REG((port) + 0x14u)
+
+/* The core's SysTick, counting the 16 MHz the part runs from at reset. */
+#define SYST_CSR REG(0xE000E010u)
+#define SYST_RVR REG(0xE000E014u)
+#define SYST_CVR REG(0xE000E018u)
+#define CORE_HZ 16000000u
+
+#define LED 13u
+#define KEY 0u
+
+static volatile uint32_t milliseconds;
+
+void SysTick_Handler(void)
+{
+    milliseconds++;
+}
+
+static void wait(uint32_t ms)
+{
+    uint32_t start = milliseconds;
+    while (milliseconds - start < ms) {
+    }
+}
+
+int main(void)
+{
+    RCC_AHB1ENR |= (1u << 0) | (1u << 2); /* GPIOA and GPIOC */
+    (void)RCC_AHB1ENR;                    /* two cycles for the clock to arrive */
+
+    /* PC13 an output: the LED lights while it is low. */
+    MODER(GPIOC) = (MODER(GPIOC) & ~(3u << (LED * 2))) | (1u << (LED * 2));
+    ODR(GPIOC) |= 1u << LED;
+    /* PA0 an input pulled up: KEY pulls it to ground. */
+    PUPDR(GPIOA) = (PUPDR(GPIOA) & ~(3u << (KEY * 2))) | (1u << (KEY * 2));
+
+    SYST_RVR = CORE_HZ / 1000u - 1u;
+    SYST_CVR = 0;
+    SYST_CSR = 7u; /* the core's clock, the interrupt, and on */
+
+    for (;;) {
+        ODR(GPIOC) ^= 1u << LED;
+        int held = (IDR(GPIOA) & (1u << KEY)) == 0;
+        wait(held ? 100u : 500u);
+    }
+}

@@ -401,3 +401,124 @@ fn a_cargo_project_without_c_gets_no_compile_database() {
     write(dir.path(), "include/only.h", "int f(void);\n");
     assert_eq!(write_cargo_compile_commands(dir.path(), None), None);
 }
+
+/// A part's toolchain file names its cross compiler and its core's flags,
+/// from the catalogue — and a part with no flags on file gets none.
+#[test]
+fn a_toolchain_file_carries_the_parts_compiler_and_core() {
+    let f411 = crate::chip::by_id("stm32f411ce").unwrap();
+    let text = toolchain_file(&f411).unwrap();
+    for line in [
+        "set(CMAKE_SYSTEM_NAME Generic)",
+        "set(CMAKE_SYSTEM_PROCESSOR arm)",
+        "set(CMAKE_C_COMPILER arm-none-eabi-gcc)",
+        "set(CMAKE_CXX_COMPILER arm-none-eabi-g++)",
+        "set(CMAKE_OBJCOPY arm-none-eabi-objcopy)",
+        "set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)",
+        "set(CORE_FLAGS \"-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16\")",
+    ] {
+        assert!(text.lines().any(|l| l == line), "{line} in\n{text}");
+    }
+    let m0 = toolchain_file(&crate::chip::by_id("rp2040").unwrap()).unwrap();
+    assert!(m0.contains("-mcpu=cortex-m0plus"), "{m0}");
+    assert!(!m0.contains("-mfpu"), "a Cortex-M0+ has no FPU: {m0}");
+    assert_eq!(toolchain_file(&crate::chip::by_id("esp32").unwrap()), None);
+}
+
+/// A plain CMake project names its part with `set(RUSTY_CHIP …)`; with a
+/// part rusty has flags for, the toolchain file is written once — never
+/// over one that is there — and the configure step names it.
+#[test]
+fn a_cmake_project_that_names_no_compiler_is_given_the_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        "CMakeLists.txt",
+        "cmake_minimum_required(VERSION 3.20)\n\
+         set(RUSTY_CHIP stm32f411ce)\n\
+         project(blink C ASM)\n\
+         add_executable(blink main.c)\n",
+    );
+    let project = crate::project::detect(root).unwrap();
+    assert_eq!(project.chip.as_deref(), Some("stm32f411ce"));
+    assert!(
+        project
+            .chip_source
+            .as_deref()
+            .is_some_and(|s| s.contains("RUSTY_CHIP")),
+        "{:?}",
+        project.chip_source
+    );
+    assert!(!names_its_toolchain(root, &project.build));
+
+    let plans = build_plans(&project, root).unwrap();
+    assert!(
+        args(&plans[0]).ends_with("-DCMAKE_TOOLCHAIN_FILE=cmake/rusty-toolchain.cmake"),
+        "{}",
+        args(&plans[0])
+    );
+
+    assert_eq!(
+        ensure_toolchain_file(&project, root).unwrap().as_deref(),
+        Some(TOOLCHAIN_FILE)
+    );
+    let written = std::fs::read_to_string(root.join(TOOLCHAIN_FILE)).unwrap();
+    assert!(written.contains("arm-none-eabi-gcc"), "{written}");
+
+    // The project's now: an edit stays, and nothing is written again.
+    write(root, TOOLCHAIN_FILE, "# mine\n");
+    assert_eq!(ensure_toolchain_file(&project, root).unwrap(), None);
+    assert_eq!(
+        std::fs::read_to_string(root.join(TOOLCHAIN_FILE)).unwrap(),
+        "# mine\n"
+    );
+}
+
+/// A project that names its own compiler — in CMakeLists.txt or a preset —
+/// is left alone, and one for a part rusty has no flags for is refused
+/// rather than configured for this machine.
+#[test]
+fn a_named_toolchain_is_left_alone_and_a_missing_one_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        "CMakeLists.txt",
+        "set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/arm.cmake)\n\
+         set(RUSTY_CHIP stm32f411ce)\n\
+         project(blink C)\n",
+    );
+    let project = crate::project::detect(root).unwrap();
+    assert!(names_its_toolchain(root, &project.build));
+    assert_eq!(ensure_toolchain_file(&project, root).unwrap(), None);
+    assert!(!root.join(TOOLCHAIN_FILE).exists());
+    let plans = build_plans(&project, root).unwrap();
+    assert!(!args(&plans[0]).contains("CMAKE_TOOLCHAIN_FILE"));
+
+    let other = tempfile::tempdir().unwrap();
+    write(
+        other.path(),
+        "CMakeLists.txt",
+        "set(RUSTY_CHIP stm32f411ce)\nproject(blink C)\n",
+    );
+    write(
+        other.path(),
+        "CMakePresets.json",
+        r#"{"version": 3, "configurePresets": [{"name": "arm", "toolchainFile": "arm.cmake"}]}"#,
+    );
+    let project = crate::project::detect(other.path()).unwrap();
+    assert!(names_its_toolchain(other.path(), &project.build));
+
+    let esp = tempfile::tempdir().unwrap();
+    write(
+        esp.path(),
+        "CMakeLists.txt",
+        "set(RUSTY_CHIP esp32)\nproject(blink C)\n",
+    );
+    let project = crate::project::detect(esp.path()).unwrap();
+    assert_eq!(project.chip.as_deref(), Some("esp32"));
+    assert_eq!(ensure_toolchain_file(&project, esp.path()).unwrap(), None);
+    let refused = build_plans(&project, esp.path()).unwrap_err().to_string();
+    assert!(refused.contains("names no compiler"), "{refused}");
+}

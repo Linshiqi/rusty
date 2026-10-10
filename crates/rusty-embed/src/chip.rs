@@ -145,11 +145,25 @@ mod tests {
     fn every_part_has_a_way_to_be_flashed() {
         for c in catalogue() {
             assert!(!c.flashers.is_empty(), "{} cannot be flashed", c.id);
-            // ST parts have no serial bootloader, so offering espflash would
-            // send the user down a path that cannot work.
+            // ST parts have no bootloader espflash speaks, so offering it
+            // would send the user down a path that cannot work.
             if c.vendor == "st" {
-                assert_eq!(c.flashers, vec![Flasher::ProbeRs], "{}", c.id);
+                assert!(!c.flashers.contains(&Flasher::Espflash), "{}", c.id);
             }
+            // A bootloader offered is a bootloader described: the family a
+            // UF2 carries, where DFU writes.
+            assert_eq!(
+                c.flashers.contains(&Flasher::Uf2),
+                c.uf2.is_some(),
+                "{}: uf2 offered and described together",
+                c.id
+            );
+            assert_eq!(
+                c.flashers.contains(&Flasher::Dfu),
+                c.dfu.is_some(),
+                "{}: dfu offered and described together",
+                c.id
+            );
         }
     }
 
@@ -171,6 +185,22 @@ mod tests {
                     });
                     assert!(by_id(from).is_some(), "{}: template chip `{from}`", c.id);
                 }
+            }
+            // A C template, and what writing it needs: the flags its
+            // toolchain file is made of, and the flash its linker script is.
+            if let Some(name) = &c.c_template {
+                let template = crate::playground::template(name)
+                    .unwrap_or_else(|| panic!("{}: no C template `{name}`", c.id));
+                assert!(
+                    template.chip.is_some_and(|t| by_id(t).is_some()),
+                    "{}",
+                    c.id
+                );
+                assert!(
+                    crate::buildsys::toolchain_file(&c).is_some() && c.flash_bytes.is_some(),
+                    "{}: a C template with no toolchain file or no flash size to fill in",
+                    c.id
+                );
             }
             if let Some(emulation) = &c.emulation {
                 assert_eq!(

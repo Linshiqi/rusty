@@ -250,7 +250,7 @@ cd examples/draw-vectors && cargo run --example cross
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification. `disk/` is the build directory measured and judged (`tree.rs` counts one build tree, `judge.rs` decides what is stale and why, `sweep.rs` removes it, `fs.rs` the filesystem it reads) — the Crates panel's Disk section, `rusty-cli disk` / `sweep` and the `disk_report` tool are its three readers |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `signal` is what a generator produces, as one line of text rendered sample for sample, `dsp` the spectrum, the single tone and the filter designs a firmware runs (each held to its closed form, and exported as `no_std` Rust), `generator` the tables a run plays — through the circuit to a converter, or into a sensor's registers — and `wave` the lines that put a table on the emulator and read its account of playing it (`docs/signals.md`); `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json`. `spatial` is the math toolbox's arithmetic — vectors, Hamilton quaternions, Z-Y-X Euler angles, matrices, the two frames flight code is written in, and `check`, which names the convention a wrong attitude crossed — with `spatial::sheet` its worksheet language (lexer, parser, evaluator, and every operation's working as steps), `spatial::instrument` what an attitude indicator reads off an attitude, and `sheet_file` its `.rusty/math.toml`. `draw` reads what a program drew with `rusty-draw` into sketches and measures the angles between what it drew |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `signal` is what a generator produces, as one line of text rendered sample for sample, `dsp` the spectrum, the single tone and the filter designs a firmware runs (each held to its closed form, and exported as `no_std` Rust), `generator` the tables a run plays — through the circuit to a converter, or into a sensor's registers — and `wave` the lines that put a table on the emulator and read its account of playing it (`docs/signals.md`); `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json`. `spatial` is the math toolbox's arithmetic — vectors, Hamilton quaternions, Z-Y-X Euler angles, matrices, the two frames flight code is written in, and `check`, which names the convention a wrong attitude crossed — with `spatial::sheet` its worksheet language (lexer, parser, evaluator, and every operation's working as steps), `spatial::instrument` what an attitude indicator reads off an attitude, and `sheet_file` its `.rusty/math.toml`. `draw` reads what a program drew with `rusty-draw` into sketches and measures the angles between what it drew. `image` turns an ELF's loaded segments into the UF2 blocks or the flat binary a USB bootloader takes |
 | `rusty-ai` | Bring-your-own-LLM providers (both dialects authorise, send and read a line through `provider/mod.rs`), the tool registry, the agent loop (`agent.rs`: open a turn, read it, run its tools), and `mcp` — the registry served over the Model Context Protocol |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend; the built-in shell (`builtin.rs`), and `rusty-shell`, the same as a console program of its own for Windows |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -2753,7 +2753,11 @@ tooltip, it was refused in silence: the user clicked, nothing happened, and
 the previous build's output still in the dock read as "Test ran a build".
 Run and Debug are still disabled when blocked, and get away with it because
 the Simulate panel lists what is missing; a refusal with no panel behind it
-has to say so where the click landed. The **debugger's transport** floats over the working area while a
+has to say so where the click landed. **A disabled button keeps the
+pointer, so its tooltip can say why** (`disabled:cursor-default`, never
+`disabled:pointer-events-none`, which silenced every tooltip on a grey
+icon): while something runs, each verb waiting for it says what is running
+and the key that stops it (`toolbar.busy`). The **debugger's transport** floats over the working area while a
 session is live (`view/transport.rs`) — VS Code's debug toolbar, an overlay so
 its arrival moves nothing, and one copy where there were two. A **panel's own
 actions** sit at the right of the row that names the panel — the Files
@@ -5410,11 +5414,34 @@ the plan says so by name.
   so memory.x places `.start_block` straight after the vector table
   (0x10000114). Check where a boot-critical section *landed*
   (`llvm-objdump -h`), not that the link succeeded.
-- **The UF2 drive is not a flashing path yet.** A Pico with no probe is
-  flashed by holding BOOTSEL and copying a UF2, which is neither of the two
-  transports `flash::plan` knows (`Serial`, `Probe`); the catalogue says
-  probe-rs, and a Pico user without a Debug Probe is told so rather than
-  sent somewhere that cannot work.
+- **A board in its USB bootloader is a device like a port or a probe**
+  (`Transport::Uf2`, `Transport::Dfu`; `device::list_boot_devices`). A Pico
+  held in BOOTSEL mounts a drive whose `INFO_UF2.TXT` says `Board-ID:
+  RPI-RP2` or `RP2350`; an STM32 with BOOT0 high answers USB DFU as
+  `0483:df11`, which `dfu-util -l` lists. The catalogue says which part has
+  which (`uf2 = { family, flash, board_id }`, `dfu = { device, alt, address
+  }`) and puts `uf2` or `dfu` among its `flashers`, so the title bar's
+  picker lists only the bootloaders the open project's part can be written
+  through, and one plugged in alone is the one board. Debug and Monitor
+  never pick one: nothing runs in a bootloader.
+- **UF2 is written by rusty, not by a tool** (`rusty_embed::image`):
+  `rusty-uf2` is an in-process program like `rusty-mcu`, run through
+  `flash::launch` — it reads the ELF's `PT_LOAD` segments by their physical
+  address, cuts them into 256-byte pages padded out to each 4 KB sector, as
+  picotool's `elf2uf2` does, stamps the part's family ID (pico-sdk's
+  `boot/uf2.h`: RP2040 `0xe48bff56`, RP2350 Arm secure `0xe48bff59`), and
+  copies the file onto the drive. picotool's RP2350-E10 absolute block is
+  added only by its `--abs-block`, which is off by default, so it is not
+  added here either. Checked against the two templates' real images: every
+  byte of every loaded segment in a block at its address, and a segment
+  outside flash refused by its address rather than written.
+- **DFU is dfu-util, handed a binary rusty cuts** (`rusty-dfu`: the
+  segments laid out from the part's flash base, `0xFF` between them, then
+  `dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D <bin>`, with `-S`
+  when the device has a serial). On Windows the system bootloader needs
+  WinUSB first (Zadig), which the Environment page's dfu-util row says.
+  **Neither path has met a board here** — no Pico, no Black Pill — so
+  what is proven is the conversion and the plan, not the bootloaders.
 - **Debug on the board is probe-rs's own debug adapter, not gdb.** For a
   release the title bar's Debug meant the simulator and nothing else: a
   `Target::Probe` branch sat in `debug_start` with no caller, so an STM32,
@@ -5509,12 +5536,29 @@ the workbench knows about C without becoming a C IDE.
 - **`.h` is C here.** syntect gives the extension to Objective-C, whose
   grammar colours a firmware header wrongly in ways that read as a broken
   highlighter.
-- **A C or C++ project is opened, built and flashed; it is not authored
-  here.** It was out of scope — ESP-IDF's and STM32CubeIDE's job — and a
-  folder without a `Cargo.toml` could not even be opened. It can now (*Build
-  systems*, below): rusty builds it with the project's own tool, finds its
-  image, sizes and flashes it, and clangd reads its C and C++ in the
-  editor (*C and C++ in the editor*, below).
+- **A C or C++ project is opened, built and flashed** (*Build systems*,
+  below): rusty builds it with the project's own tool, finds its image,
+  sizes and flashes it, and clangd reads its C and C++ in the editor (*C
+  and C++ in the editor*, below).
+- **And the wizard starts one, for a part with a C template**
+  (`WizardChoice.language`, the catalogue's `c_template`; `c-stm32f4` for
+  both Black Pills, `c-nrf52840`): one CMake project, no vendor SDK — a
+  `startup.c` with the vector table, `.data` copied and `.bss` cleared, a
+  `link.ld` with the part's own memory filled in from the catalogue, and a
+  blinky written register by register — plus `CMakePresets.json` naming
+  the `cmake/rusty-toolchain.cmake` written beside it, so `cmake --preset
+  firmware` builds it outside rusty too. `RUSTY_CHIP` in the CMakeLists is
+  how rusty knows the part. It is the runtime step's third row, shown only
+  where the part has a template; a workspace, an option or another runtime
+  with C is refused by name. **Linked with `-nostartfiles`**, and
+  `startup.c` runs the constructors itself: newlib's crt0 brings `exit()`,
+  stdio's clean-up and the four "is not implemented and will always fail"
+  syscall warnings with it, and its `.init_array` put a writable section in
+  flash's segment — `LOAD segment with RWX permissions`. Built here, all
+  three parts, through `rusty-cli build` with xPack GCC 14.2.1, CMake 3.31
+  and Ninja, with no warning; the vector tables read back with the stack at
+  the top of each part's RAM. `RUSTY_C_PROJECTS=<dir>` makes the wizard's
+  test keep a copy of each for exactly that. Not run on a board.
 
 ## Build systems: Cargo, PlatformIO, CMake
 
@@ -5533,7 +5577,9 @@ same.
   the catalogue's `platformio` board ids, else the board's JSON in an installed
   PlatformIO; the Pico SDK's `PICO_BOARD` / `PICO_PLATFORM` (its own default,
   the Pico, when neither is set); ESP-IDF's `CONFIG_IDF_TARGET` in `sdkconfig`
-  (its own default, the ESP32); STM32CubeMX's `.ioc`. Every name goes through
+  (its own default, the ESP32); STM32CubeMX's `.ioc`; and in a CMake project
+  with none of those, a `set(RUSTY_CHIP <part>)` line, which the C projects
+  rusty writes carry. Every name goes through
   the catalogue — an ordering code like `STM32F411CEU6` is a chip's
   `aliases` entry, matched whole, never by prefix: `esp32` is a prefix of a
   dozen parts it is not. No chip is a warning that says where the chip would
@@ -5553,6 +5599,20 @@ same.
   `CMakePresets.json` has one, its `binaryDir` followed through `inherits`;
   every build after is `cmake --build <dir>`. ESP-IDF is `idf.py build`.
   `compile_commands.json` is what clangd will read.
+- **A CMake project that names no compiler is given the part's**
+  (`buildsys::ensure_toolchain_file`, run by the app's `build_plan` and
+  `rusty-cli build` before planning). Configured as it stands, it would
+  build a host program with the machine's own compiler and say nothing.
+  So where nothing names one — no SDK, no `CMAKE_TOOLCHAIN_FILE`,
+  `toolchainFile`, `CMAKE_C_COMPILER` or `CMAKE_SYSTEM_NAME` anywhere in
+  the CMakeLists or a preset (`names_its_toolchain`, read loosely: a mention
+  counts, because a project that does name one must not have rusty's put
+  over it) — `cmake/rusty-toolchain.cmake` is written for the part from the
+  catalogue (`c_compiler.flags`, the core's `-mcpu`/`-mfpu`), once, never
+  over a file that is there, and the configure step names it. The file is
+  the project's: in its tree, readable, committable, and used by a build
+  without rusty. A part with no flags on file is refused rather than
+  configured for the host.
 - **A build directory's firmware is an Arm, RISC-V or Xtensa ELF
   executable** (`embedded_elf`: the header's type and machine), not any ELF:
   a CMake tree is full of ELF object files and, on Linux, of host tools the

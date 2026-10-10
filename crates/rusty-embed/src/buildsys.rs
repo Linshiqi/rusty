@@ -433,7 +433,14 @@ fn detect_cmake(root: &Path, catalog: &Catalog) -> Result<EmbeddedProject> {
                 })
                 .map(|part| (part.to_string(), name))
         }),
-        None => None,
+        // A project with no SDK says which part it is for in a line of its
+        // own, `set(RUSTY_CHIP stm32f411ce)` — the C projects rusty writes
+        // carry one — or rusty cannot tell, and does not guess from a
+        // compiler flag.
+        None => cmake_set(&text, "RUSTY_CHIP").map(|chip| {
+            let source = format!("CMakeLists.txt `set(RUSTY_CHIP {chip})`");
+            (chip, source)
+        }),
     }
     .and_then(|(name, source)| {
         // Every answer goes through the catalogue: a part it does not know
@@ -454,7 +461,8 @@ fn detect_cmake(root: &Path, catalog: &Catalog) -> Result<EmbeddedProject> {
                 "The chip could not be read from the CMake project",
                 format!(
                     "rusty reads the chip where the project's SDK writes it — the Pico SDK's \
-                     PICO_BOARD, ESP-IDF's sdkconfig, STM32CubeMX's .ioc — and found none it \
+                     PICO_BOARD, ESP-IDF's sdkconfig, STM32CubeMX's .ioc — or, with no SDK, \
+                     in a `set(RUSTY_CHIP <part>)` line in CMakeLists.txt, and found none it \
                      knows here{}. CMake still builds it; rusty cannot size it against the \
                      part, flash it or simulate it until it can tell which part it is.",
                     sdk.map(|s| format!(" (a {} project)", s.label()))
@@ -589,6 +597,34 @@ pub fn build_plans(project: &EmbeddedProject, root: &Path) -> Result<Vec<Command
                 .unwrap_or_else(|| "build".to_string());
             let mut plans = Vec::new();
             if !root.join(&dir).join("CMakeCache.txt").is_file() {
+                // A project that names no compiler is configured for this
+                // machine, builds a host program and says nothing: the
+                // toolchain file rusty writes for the part goes in, and
+                // with none to write the build is refused rather than run.
+                // The file is written by `ensure_toolchain_file`, which
+                // every caller runs before it plans a build.
+                let writable = || {
+                    project
+                        .chip
+                        .as_deref()
+                        .and_then(crate::chip::by_id)
+                        .is_some_and(|chip| toolchain_file(&chip).is_some())
+                };
+                let toolchain = if names_its_toolchain(root, build) {
+                    None
+                } else if root.join(TOOLCHAIN_FILE).is_file() || writable() {
+                    Some(format!("-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}"))
+                } else if let Some(chip) = &project.chip {
+                    return Err(Error::refused(format!(
+                        "This CMake project names no compiler — no toolchain file, no \
+                         CMAKE_C_COMPILER — so CMake would configure it for this machine \
+                         and build a program the {chip} cannot run, and rusty has no \
+                         compiler and core flags on file for the {chip} to write one. Set \
+                         CMAKE_TOOLCHAIN_FILE in CMakeLists.txt or a preset."
+                    )));
+                } else {
+                    None
+                };
                 let mut args = match &build.preset {
                     Some(preset) => vec!["--preset".to_string(), preset.clone()],
                     None => vec![
@@ -604,11 +640,14 @@ pub fn build_plans(project: &EmbeddedProject, root: &Path) -> Result<Vec<Command
                     ],
                 };
                 args.push("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON".into());
-                plans.push(CommandPlan::new(
-                    "cmake",
-                    args,
-                    "configures the build directory once; later builds reuse it",
-                ));
+                let rationale = if toolchain.is_some() {
+                    "configures the build directory once, with the toolchain file rusty \
+                     wrote for the part; later builds reuse it"
+                } else {
+                    "configures the build directory once; later builds reuse it"
+                };
+                args.extend(toolchain);
+                plans.push(CommandPlan::new("cmake", args, rationale));
             }
             plans.push(CommandPlan::new(
                 "cmake",
@@ -618,6 +657,120 @@ pub fn build_plans(project: &EmbeddedProject, root: &Path) -> Result<Vec<Command
             Ok(plans)
         }
     }
+}
+
+// ─── a toolchain file for a CMake project that names none ───────────────────
+
+/// Where rusty writes a CMake toolchain file, inside the project: a file the
+/// user can read, change and commit, and that `cmake -DCMAKE_TOOLCHAIN_FILE=…`
+/// uses outside rusty as well — never hidden in the build directory, where a
+/// build without rusty would not find it.
+pub const TOOLCHAIN_FILE: &str = "cmake/rusty-toolchain.cmake";
+
+/// A CMake toolchain file for `chip`: its cross compiler by name — CMake
+/// finds it on PATH — and its core's flags, from the catalogue. `None` for a
+/// part with no compiler or flags on file.
+pub fn toolchain_file(chip: &crate::model::Chip) -> Option<String> {
+    let compiler = chip.c_compiler.as_ref()?;
+    let flags = compiler.flags.as_deref()?;
+    let prefix = compiler.binary.strip_suffix("gcc")?;
+    let processor = match chip.arch {
+        crate::model::Arch::CortexM => "arm",
+        crate::model::Arch::RiscV => "riscv32",
+        crate::model::Arch::Xtensa => "xtensa",
+    };
+    Some(format!(
+        "# rusty wrote this for the {name}: its cross compiler, and the flags its core is \n\
+         # compiled with. CMake reads it once, when it configures a build directory —\n\
+         #   cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}\n\
+         # It is the project's now: change it as you like; rusty never writes over it.\n\
+         \n\
+         set(CMAKE_SYSTEM_NAME Generic)\n\
+         set(CMAKE_SYSTEM_PROCESSOR {processor})\n\
+         \n\
+         set(CMAKE_C_COMPILER {prefix}gcc)\n\
+         set(CMAKE_CXX_COMPILER {prefix}g++)\n\
+         set(CMAKE_ASM_COMPILER {prefix}gcc)\n\
+         set(CMAKE_OBJCOPY {prefix}objcopy)\n\
+         set(CMAKE_SIZE {prefix}size)\n\
+         \n\
+         # A test program cannot link without a startup file and a linker script,\n\
+         # so CMake's compiler check builds a library instead.\n\
+         set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\n\
+         \n\
+         set(CORE_FLAGS \"{flags}\")\n\
+         set(CMAKE_C_FLAGS_INIT \"${{CORE_FLAGS}} -ffunction-sections -fdata-sections\")\n\
+         set(CMAKE_CXX_FLAGS_INIT \"${{CORE_FLAGS}} -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti\")\n\
+         set(CMAKE_ASM_FLAGS_INIT \"${{CORE_FLAGS}}\")\n\
+         set(CMAKE_EXE_LINKER_FLAGS_INIT \"${{CORE_FLAGS}} -Wl,--gc-sections --specs=nano.specs --specs=nosys.specs\")\n\
+         \n\
+         # Look for programs on this machine, and for libraries and headers only\n\
+         # in the cross toolchain.\n\
+         set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)\n\
+         set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)\n\
+         set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)\n",
+        name = chip.name,
+    ))
+}
+
+/// Whether a CMake project says which compiler builds it: an SDK that brings
+/// its own (the Pico SDK's import, ESP-IDF, STM32CubeMX's generated
+/// presets), a preset naming a toolchain file or a compiler, or a
+/// CMakeLists.txt that sets one itself. Read off the files, loosely — a
+/// mention counts — because a project that does name one must not have
+/// rusty's file put over it.
+pub fn names_its_toolchain(root: &Path, build: &BuildSetup) -> bool {
+    if build.sdk.is_some() {
+        return true;
+    }
+    let mentions = |file: &str| {
+        std::fs::read_to_string(root.join(file)).is_ok_and(|text| {
+            [
+                "CMAKE_TOOLCHAIN_FILE",
+                "toolchainFile",
+                "CMAKE_C_COMPILER",
+                "CMAKE_SYSTEM_NAME",
+            ]
+            .iter()
+            .any(|key| text.contains(key))
+        })
+    };
+    mentions("CMakeLists.txt") || mentions("CMakePresets.json") || mentions("CMakeUserPresets.json")
+}
+
+/// Write [`TOOLCHAIN_FILE`] into a CMake project that names no toolchain,
+/// for its part, before the build that would otherwise configure it for
+/// this machine. Never over a file that is there. Answers with the path
+/// when it wrote one.
+pub fn ensure_toolchain_file(project: &EmbeddedProject, root: &Path) -> Result<Option<String>> {
+    let build = &project.build;
+    if build.system != BuildSystem::Cmake
+        || names_its_toolchain(root, build)
+        || root.join(TOOLCHAIN_FILE).exists()
+    {
+        return Ok(None);
+    }
+    let dir = build
+        .build_dir
+        .clone()
+        .unwrap_or_else(|| "build".to_string());
+    if root.join(&dir).join("CMakeCache.txt").is_file() {
+        return Ok(None);
+    }
+    let Some(text) = project
+        .chip
+        .as_deref()
+        .and_then(crate::chip::by_id)
+        .and_then(|chip| toolchain_file(&chip))
+    else {
+        return Ok(None);
+    };
+    let path = root.join(TOOLCHAIN_FILE);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(Error::writing(&path))?;
+    }
+    std::fs::write(&path, text).map_err(Error::writing(&path))?;
+    Ok(Some(TOOLCHAIN_FILE.to_string()))
 }
 
 /// Flashing and monitoring a PlatformIO project: PlatformIO's own upload,
@@ -632,7 +785,9 @@ pub fn platformio_flash(
 ) -> CommandPlan {
     let port = match transport {
         Transport::Serial { port } => Some(port.clone()),
-        Transport::Probe { .. } => None,
+        // PlatformIO copies a UF2 onto a drive named as its upload port.
+        Transport::Uf2 { drive } => Some(drive.clone()),
+        Transport::Probe { .. } | Transport::Dfu { .. } => None,
     };
     let mut args: Vec<String> = Vec::new();
     let rationale = match action {

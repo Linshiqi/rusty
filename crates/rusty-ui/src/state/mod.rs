@@ -147,6 +147,7 @@ impl AppState {
             device: Device {
                 ports: RwSignal::new(Vec::new()),
                 probes: RwSignal::new(Vec::new()),
+                boot: RwSignal::new(Vec::new()),
                 transport: RwSignal::new(None),
                 plan: RwSignal::new(None),
                 picker: RwSignal::new(false),

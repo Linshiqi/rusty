@@ -23,8 +23,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::model::{
-    Arch, Board, CCompiler, CatalogProblem, CatalogSource, Chip, Emulation, EmulatorKind, Flasher,
-    Generator, Kit, KitUsb, PinAssignment, Ports, ToolchainRequirement, UsbMatch, Vendor,
+    Arch, Board, CCompiler, CatalogProblem, CatalogSource, Chip, DfuBoot, Emulation, EmulatorKind,
+    Flasher, Generator, Kit, KitUsb, PinAssignment, Ports, ToolchainRequirement, Uf2Boot, UsbMatch,
+    Vendor,
 };
 
 const BUILTIN_CHIPS: &str = include_str!("../data/chips.toml");
@@ -365,6 +366,10 @@ struct ChipEntry {
     #[serde(default)]
     ports: Option<PortsEntry>,
     #[serde(default)]
+    uf2: Option<Uf2Entry>,
+    #[serde(default)]
+    dfu: Option<DfuEntry>,
+    #[serde(default)]
     header: Vec<String>,
     #[serde(default)]
     kit: Option<KitEntry>,
@@ -378,6 +383,8 @@ struct ChipEntry {
     gdb: Option<String>,
     #[serde(default)]
     c_compiler: Option<CCompilerEntry>,
+    #[serde(default)]
+    c_template: Option<String>,
     #[serde(default)]
     svd: Option<String>,
     #[serde(default)]
@@ -409,6 +416,16 @@ impl ChipEntry {
                 width: p.width,
                 numbered: p.numbered,
             }),
+            uf2: self.uf2.map(|u| Uf2Boot {
+                family: u.family,
+                flash: u.flash,
+                board_id: u.board_id,
+            }),
+            dfu: self.dfu.map(|d| DfuBoot {
+                device: d.device,
+                alt: d.alt,
+                address: d.address,
+            }),
             header: self.header,
             kit: self.kit.map(KitEntry::build),
             emulation: self.emulator.map(EmulatorEntry::build),
@@ -418,11 +435,30 @@ impl ChipEntry {
             c_compiler: self.c_compiler.map(|c| CCompiler {
                 binary: c.binary,
                 install: c.install,
+                flags: c.flags,
             }),
+            c_template: self.c_template,
             svd: self.svd,
             aliases: self.aliases.iter().map(|a| normalize(a)).collect(),
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Uf2Entry {
+    family: u32,
+    flash: u32,
+    board_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DfuEntry {
+    device: String,
+    #[serde(default)]
+    alt: u8,
+    address: u32,
 }
 
 #[derive(Deserialize)]
@@ -541,6 +577,8 @@ impl From<GeneratorSpec> for Generator {
 struct CCompilerEntry {
     binary: String,
     install: String,
+    #[serde(default)]
+    flags: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -655,6 +693,8 @@ enum FlasherSpec {
     Espflash,
     ProbeRs,
     Wlink,
+    Uf2,
+    Dfu,
 }
 
 impl From<FlasherSpec> for Flasher {
@@ -663,6 +703,8 @@ impl From<FlasherSpec> for Flasher {
             FlasherSpec::Espflash => Flasher::Espflash,
             FlasherSpec::ProbeRs => Flasher::ProbeRs,
             FlasherSpec::Wlink => Flasher::Wlink,
+            FlasherSpec::Uf2 => Flasher::Uf2,
+            FlasherSpec::Dfu => Flasher::Dfu,
         }
     }
 }

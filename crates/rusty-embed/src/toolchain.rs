@@ -126,6 +126,17 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "dfu-util",
+        purpose: "Flashes an STM32 over USB DFU, with BOOT0 held high — no probe needed",
+        required: false,
+        recipe: Recipe::Manual {
+            url: "https://dfu-util.sourceforge.net/releases/",
+            because: "dfu-util writes a board in its USB DFU bootloader. Download the release \
+                      for this platform and put it on PATH; on Windows the STM32 bootloader \
+                      also needs the WinUSB driver, which Zadig installs",
+        },
+    },
+    Tool {
         name: "esp-generate",
         purpose: "Generates bare-metal project templates",
         required: false,
@@ -327,6 +338,7 @@ fn relevant(tool: &str, chip: Option<&crate::model::Chip>, cargo: bool, project:
         "espflash" => chip.flashers.contains(&Flasher::Espflash),
         "probe-rs" => chip.flashers.contains(&Flasher::ProbeRs) || chip.probe_rs_target.is_some(),
         "wlink" => chip.flashers.contains(&Flasher::Wlink),
+        "dfu-util" => chip.flashers.contains(&Flasher::Dfu),
         "espup" => chip.needs_esp_toolchain(),
         "esp-generate" => matches!(chip.generator, Some(Generator::EspGenerate)),
         "ldproxy" => chip.std_target.is_some(),
@@ -682,11 +694,19 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         .as_ref()
         .filter(|_| build.system != crate::model::BuildSystem::PlatformIo)
     {
-        let tools: Vec<&str> = part.flashers.iter().map(|f| f.tool()).collect();
-        let has_flasher = status
-            .tools
+        // A UF2 drive needs no tool — rusty writes it — so a part that has
+        // one can always be flashed, with nothing to install.
+        let tools: Vec<&str> = part
+            .flashers
             .iter()
-            .any(|t| tools.contains(&t.name.as_str()) && t.is_installed());
+            .map(|f| f.tool())
+            .filter(|tool| !tool.is_empty())
+            .collect();
+        let has_flasher = part.flashers.contains(&crate::model::Flasher::Uf2)
+            || status
+                .tools
+                .iter()
+                .any(|t| tools.contains(&t.name.as_str()) && t.is_installed());
         if let Some(&preferred) = tools.first()
             && !has_flasher
         {

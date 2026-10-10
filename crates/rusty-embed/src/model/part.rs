@@ -107,6 +107,12 @@ pub enum Flasher {
     /// the one-wire debug pin and relays SDI print to its serial port. What
     /// ch32-hal's examples run.
     Wlink,
+    /// A UF2 bootloader's USB drive — a Raspberry Pi RP2040 or RP2350 held
+    /// in BOOTSEL. rusty writes the UF2 itself: no tool, no probe.
+    Uf2,
+    /// USB DFU through `dfu-util` — an STM32's system bootloader, reached
+    /// with BOOT0 held high.
+    Dfu,
 }
 
 impl Flasher {
@@ -116,6 +122,9 @@ impl Flasher {
             Flasher::Espflash => "espflash",
             Flasher::ProbeRs => "probe-rs",
             Flasher::Wlink => "wlink",
+            // Nothing to install: rusty writes the drive itself.
+            Flasher::Uf2 => "",
+            Flasher::Dfu => "dfu-util",
         }
     }
 }
@@ -280,6 +289,33 @@ impl Ports {
     }
 }
 
+/// A UF2 bootloader, as the part's boot ROM defines it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Uf2Boot {
+    /// The family ID every block carries, which the ROM checks
+    /// (`RP2040_FAMILY_ID`, `RP2350_ARM_S_FAMILY_ID` in the Pico SDK's
+    /// `boot/uf2.h`).
+    pub family: u32,
+    /// Where flash starts; the bootloader writes the 16 MB after it.
+    pub flash: u32,
+    /// What the drive's `INFO_UF2.TXT` says its `Board-ID` is, which is how
+    /// a drive is told to be this part's.
+    pub board_id: String,
+}
+
+/// A USB DFU bootloader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DfuBoot {
+    /// The bootloader's USB identity, `vid:pid`.
+    pub device: String,
+    /// The alternate setting that is internal flash.
+    pub alt: u8,
+    /// Where the binary is written.
+    pub address: u32,
+}
+
 /// A cross C compiler for a part, and how to get it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -288,6 +324,11 @@ pub struct CCompiler {
     pub binary: String,
     /// One line saying how to install it.
     pub install: String,
+    /// What the part's core is compiled with — `-mcpu=cortex-m4 -mthumb
+    /// -mfloat-abi=hard -mfpu=fpv4-sp-d16` — for a CMake toolchain file rusty
+    /// writes. Absent where a framework brings its own (ESP-IDF).
+    #[serde(default)]
+    pub flags: Option<String>,
 }
 
 /// A supported microcontroller.
@@ -367,6 +408,12 @@ pub struct Chip {
     /// number (`GPIO4`); [`Ports`] names them by port, so many to a port.
     #[serde(default)]
     pub ports: Option<Ports>,
+    /// How the part's UF2 bootloader takes an image, where it has one.
+    #[serde(default)]
+    pub uf2: Option<Uf2Boot>,
+    /// How the part's USB DFU bootloader takes an image, where it has one.
+    #[serde(default)]
+    pub dfu: Option<DfuBoot>,
     /// The header of the one module whose row order rusty knows, top to
     /// bottom, left then right: a number is that GPIO, `RX:3` is GPIO3
     /// printed `RX`, anything else a rail or a plain row. Empty draws the
@@ -395,6 +442,11 @@ pub struct Chip {
     /// The cross C compiler a `cc` build script reaches for on this part.
     #[serde(default)]
     pub c_compiler: Option<CCompiler>,
+    /// The template a C project for the part is written from (`File > New
+    /// project`, C), where rusty has one: CMake, a startup file and a linker
+    /// script, proven to build with the part's cross compiler.
+    #[serde(default)]
+    pub c_template: Option<String>,
     /// Where the vendor publishes the part's SVD, when they do.
     #[serde(default)]
     pub svd: Option<String>,

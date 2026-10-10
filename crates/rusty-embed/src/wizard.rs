@@ -16,8 +16,8 @@ use crate::{
     chip,
     error::{Error, Result},
     model::{
-        Chip, CommandPlan, Explanation, Flasher, Generator, Runtime, ToolchainRequirement,
-        WizardChoice, WizardLayout,
+        Chip, CommandPlan, Explanation, Flasher, Generator, Language, Runtime,
+        ToolchainRequirement, WizardChoice, WizardLayout,
     },
 };
 
@@ -139,6 +139,10 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
         chip: choice.chip.clone(),
     })?;
 
+    if choice.language == Language::C {
+        return c_plan(&chip, choice);
+    }
+
     if chip.target_for(choice.runtime).is_none() {
         return Err(Error::UnsupportedRuntime {
             chip: chip.name.clone(),
@@ -251,6 +255,52 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
     Ok(CommandPlan::new(program, args, rationale))
 }
 
+/// The plan for a C project: rusty writes it from the part's C template,
+/// one CMake project, so there is no runtime, layout or option to choose —
+/// each is refused by name rather than ignored.
+fn c_plan(chip: &Chip, choice: &WizardChoice) -> Result<CommandPlan> {
+    let Some(template) = &chip.c_template else {
+        return Err(Error::refused(format!(
+            "rusty has no C project to start for the {}: its catalogue entry names no C \
+             template, so it is started in Rust.",
+            chip.name
+        )));
+    };
+    if choice.runtime != Runtime::BareMetal {
+        return Err(Error::refused(
+            "A C project rusty writes runs on bare metal, with no framework under it.",
+        ));
+    }
+    if choice.layout == WizardLayout::Workspace {
+        return Err(Error::refused(
+            "The two-crate workspace is a Rust layout; a C project is one CMake project.",
+        ));
+    }
+    if let Some(option) = choice.options.first() {
+        return Err(Error::refused(format!(
+            "`{option}` is one of esp-generate's options, and a C project has none to choose."
+        )));
+    }
+    let name = valid_name(&choice.name)?;
+    Ok(CommandPlan::new(
+        "rusty",
+        vec![
+            "new".to_string(),
+            "--chip".into(),
+            chip.id.clone(),
+            "--lang".into(),
+            "c".into(),
+            name.to_string(),
+        ],
+        format!(
+            "rusty writes the project itself, from its `{template}` template: CMake, a \
+             toolchain file, a startup file, a linker script and a blinky written register \
+             by register for the {} — no vendor SDK.",
+            chip.name
+        ),
+    ))
+}
+
 /// What this set of choices commits the user to.
 ///
 /// Ordered so the expensive, hard-to-reverse commitments come first: which
@@ -263,6 +313,10 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
             consequence: None,
         }];
     };
+
+    if choice.language == Language::C {
+        return explain_c(&chip, choice);
+    }
 
     let mut out = Vec::new();
 
@@ -356,24 +410,7 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
         });
     }
 
-    // A probe is the only way onto a part with no ROM serial bootloader
-    // espflash speaks, and the board a beginner buys does not always have
-    // one: said before the project exists, not at the first Flash.
-    if !chip.flashers.is_empty() && !chip.flashers.contains(&Flasher::Espflash) {
-        let probe = if chip.flashers.contains(&Flasher::Wlink) {
-            "a WCH-LinkE"
-        } else {
-            "a debug probe — an ST-Link, a J-Link, a Raspberry Pi Debug Probe"
-        };
-        out.push(Explanation {
-            topic: "Flashed through a probe".into(),
-            detail: format!(
-                "{} is written and debugged through {probe}, wired to its debug pins.                  A USB cable alone lets rusty watch what the board prints over serial,                  not flash it.",
-                chip.name
-            ),
-            consequence: None,
-        });
-    }
+    out.extend(flashing(&chip));
 
     // Only where the generator offers the radio as an option: rusty's own
     // templates have none, and "a feature flag later" is esp-hal's story,
@@ -397,13 +434,86 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
     out
 }
 
+/// How a part with no serial bootloader espflash speaks is written, said
+/// before the project exists rather than at the first Flash: through a
+/// probe, and — where its boot ROM allows — with a USB cable alone.
+fn flashing(chip: &Chip) -> Option<Explanation> {
+    // A probe is the only way onto a part with no ROM serial bootloader
+    // espflash speaks, and the board a beginner buys does not always have
+    // one: said before the project exists, not at the first Flash.
+    if chip.flashers.is_empty() || chip.flashers.contains(&Flasher::Espflash) {
+        return None;
+    }
+    let probe = if chip.flashers.contains(&Flasher::Wlink) {
+        "a WCH-LinkE"
+    } else {
+        "a debug probe — an ST-Link, a J-Link, a Raspberry Pi Debug Probe"
+    };
+    // What a USB cable alone does, which depends on the part's boot ROM.
+    let without = if chip.flashers.contains(&Flasher::Uf2) {
+        "Without one, hold BOOTSEL while plugging the board in: it mounts as a drive, and \
+         Flash copies the image onto it — no debugging that way."
+    } else if chip.flashers.contains(&Flasher::Dfu) {
+        "Without one, hold BOOT0 high while resetting it: it answers USB DFU, and Flash \
+         writes the image through dfu-util — no debugging that way."
+    } else {
+        "A USB cable alone lets rusty watch what the board prints over serial, not flash it."
+    };
+    Some(Explanation {
+        topic: "Flashed through a probe".into(),
+        detail: format!(
+            "{} is written and debugged through {probe}, wired to its debug pins. {without}",
+            chip.name
+        ),
+        consequence: None,
+    })
+}
+
+/// What a C project commits the user to: CMake and the part's cross
+/// compiler where Rust would need its toolchain, and no SDK.
+fn explain_c(chip: &Chip, choice: &WizardChoice) -> Vec<Explanation> {
+    let compiler = chip.c_compiler.as_ref();
+    let mut out = vec![Explanation {
+        topic: "C, built with CMake".into(),
+        detail: format!(
+            "CMake configures the build once, with Ninja and {}, named in \
+             cmake/rusty-toolchain.cmake with the {}'s core flags. CMakePresets.json names \
+             that file, so the project builds the same way outside rusty, and clangd reads \
+             the compile database the build writes.",
+            compiler.map_or("the part's cross compiler".to_string(), |c| format!(
+                "`{}`",
+                c.binary
+            )),
+            chip.name
+        ),
+        consequence: compiler
+            .map(|c| format!("Needs CMake, Ninja and {}: {}.", c.binary, c.install)),
+    }];
+    out.push(Explanation {
+        topic: "No vendor SDK".into(),
+        detail: "The startup file, the linker script and main.c are the whole program: the \
+                 vector table, .data copied and .bss cleared, then the part's registers by \
+                 their addresses. A vendor's HAL can be added when it is needed; nothing here \
+                 is in its way."
+            .into(),
+        consequence: Some(format!(
+            "Creates `{name}/CMakeLists.txt`, `CMakePresets.json`, `cmake/`, `link.ld` and \
+             `src/`.",
+            name = valid_name(&choice.name).unwrap_or("<name>")
+        )),
+    });
+    out.extend(flashing(chip));
+    out
+}
+
 // ─── the projects rusty writes itself ─────────────────────────────────────────
 
 /// Whether rusty writes the project for this choice itself rather than
 /// running a generator: a part whose catalogue entry names one of rusty's
 /// templates as its generator — a WCH part, whose HAL has none.
 pub fn writes_itself(choice: &WizardChoice) -> bool {
-    chip::by_id(&choice.chip).is_some_and(|c| c.writes_itself(choice.runtime))
+    choice.language == Language::C
+        || chip::by_id(&choice.chip).is_some_and(|c| c.writes_itself(choice.runtime))
 }
 
 /// Write the project such a choice makes, into `parent` under the crate's
@@ -419,6 +529,22 @@ pub fn write_itself(parent: &Path, choice: &WizardChoice) -> Result<Vec<String>>
         chip: choice.chip.clone(),
     })?;
     let name = valid_name(&choice.name)?;
+    if choice.language == Language::C {
+        c_plan(&chip, choice)?;
+        let files = c_template_files(&chip, name).ok_or_else(|| {
+            Error::refused(format!(
+                "rusty has no C project for the {} to write: no template, or no compiler \
+                 and core flags on file for its toolchain file",
+                chip.name
+            ))
+        })?;
+        let mut written = Vec::new();
+        for (relative, text) in &files {
+            write_new(&parent.join(name).join(relative), text)?;
+            written.push(format!("{name}/{relative}"));
+        }
+        return Ok(written);
+    }
     let crate_name = match choice.layout {
         WizardLayout::Single => name,
         WizardLayout::Workspace => "firmware",
@@ -474,6 +600,8 @@ fn template_files(
         Some(Flasher::Wlink) => "Flash writes it through a WCH-LinkE.",
         Some(Flasher::ProbeRs) => "Flash writes it through a debug probe.",
         Some(Flasher::Espflash) => "Flash writes it over the USB cable.",
+        Some(Flasher::Uf2) => "Flash copies it onto the board's drive, held in BOOTSEL.",
+        Some(Flasher::Dfu) => "Flash writes it over USB DFU, with BOOT0 held high.",
         None => "",
     };
     let run = if chip.emulation.is_some() {
@@ -520,6 +648,34 @@ fn template_files(
         files.push((path, text));
     }
     files.push((".gitignore", "/target\n".to_string()));
+    Some(files)
+}
+
+/// The files of a C project called `name` for `chip`, from the template its
+/// catalogue entry names (`c_template`): the name, the part and its memory
+/// filled in, and the toolchain file written from the catalogue — the one
+/// a CMake project that names no compiler would be given at its first build.
+fn c_template_files(chip: &Chip, name: &str) -> Option<Vec<(&'static str, String)>> {
+    let template = crate::playground::template(chip.c_template.as_deref()?)?;
+    let toolchain = crate::buildsys::toolchain_file(chip)?;
+    let kib = |bytes: u32| format!("{}K", bytes / 1024);
+    let flash = kib(chip.flash_bytes?);
+    let ram = kib(chip.sram_bytes);
+    let mut files: Vec<(&'static str, String)> = template
+        .files
+        .iter()
+        .map(|&(path, text)| {
+            let text = text
+                .replace("@NAME@", name)
+                .replace("@CHIP@", &chip.id)
+                .replace("@PART@", &chip.name)
+                .replace("@FLASH@", &flash)
+                .replace("@RAM@", &ram);
+            (path, text)
+        })
+        .collect();
+    files.push((crate::buildsys::TOOLCHAIN_FILE, toolchain));
+    files.push((".gitignore", "/build/\n".to_string()));
     Some(files)
 }
 
@@ -729,6 +885,7 @@ mod tests {
             name: "blinky".to_string(),
             options: options.iter().map(|o| o.to_string()).collect(),
             layout: WizardLayout::Single,
+            language: Language::Rust,
         }
     }
 
@@ -1044,6 +1201,7 @@ mod tests {
             name: "firmware".into(),
             options: vec!["wifi".into()],
             layout: WizardLayout::Single,
+            language: Language::Rust,
         };
 
         let error = plan(&choice).unwrap_err().to_string();
@@ -1062,6 +1220,7 @@ mod tests {
             name: "firmware".into(),
             options: vec!["wifi".into(), "alloc".into(), "unstable-hal".into()],
             layout: WizardLayout::Single,
+            language: Language::Rust,
         };
 
         let plan = plan(&choice).expect("a valid combination must plan");
@@ -1207,6 +1366,124 @@ mod tests {
                 lock.contains("name = \"blinky\""),
                 "{chip}: the lock is renamed"
             );
+        }
+    }
+
+    fn c(chip: &str) -> WizardChoice {
+        WizardChoice {
+            language: Language::C,
+            ..choice(chip, Runtime::BareMetal, &[])
+        }
+    }
+
+    /// A C project is written from the part's C template, one CMake
+    /// project; a workspace, an option or a part with no C template is
+    /// refused by name rather than ignored.
+    #[test]
+    fn a_c_project_is_planned_only_where_there_is_one_to_write() {
+        let planned = plan(&c("stm32f411ce")).unwrap();
+        assert_eq!(
+            planned.display,
+            "rusty new --chip stm32f411ce --lang c blinky"
+        );
+        assert!(writes_itself(&c("stm32f411ce")));
+
+        let refused = |choice: WizardChoice| plan(&choice).unwrap_err().to_string();
+        assert!(refused(c("esp32c3")).contains("no C template"));
+        assert!(
+            refused(WizardChoice {
+                layout: WizardLayout::Workspace,
+                ..c("stm32f411ce")
+            })
+            .contains("one CMake project")
+        );
+        assert!(
+            refused(WizardChoice {
+                options: vec!["defmt".into()],
+                ..c("stm32f411ce")
+            })
+            .contains("defmt")
+        );
+
+        let said = explain(&c("nrf52840"));
+        assert_eq!(said[0].topic, "C, built with CMake");
+        assert!(said.iter().any(|e| e.topic == "Flashed through a probe"));
+        assert!(
+            !said.iter().any(|e| e.detail.contains("Stock Rust")),
+            "a C project needs no Rust toolchain"
+        );
+    }
+
+    /// What is written is a CMake project rusty reads as its part, whose
+    /// preset names the toolchain file written beside it — so the build is
+    /// the preset's, with nothing for rusty to add — and whose linker script
+    /// carries the part's own memory: an F401CC from the F411CE's template
+    /// gets 256K of flash, not 512K.
+    #[test]
+    fn a_c_project_is_a_cmake_project_for_its_part() {
+        for (chip, flash, ram) in [
+            ("stm32f411ce", "512K", "128K"),
+            ("stm32f401cc", "256K", "64K"),
+            ("nrf52840", "1024K", "256K"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let written = write_itself(dir.path(), &c(chip)).unwrap();
+            assert!(written.contains(&"blinky/cmake/rusty-toolchain.cmake".to_string()));
+            let root = dir.path().join("blinky");
+            let read = |file: &str| std::fs::read_to_string(root.join(file)).unwrap();
+            for file in [
+                "CMakeLists.txt",
+                "CMakePresets.json",
+                "link.ld",
+                "src/main.c",
+                "src/startup.c",
+            ] {
+                assert!(
+                    !read(file).contains('@'),
+                    "{chip}: {file} has a placeholder left"
+                );
+            }
+            assert!(
+                read("link.ld").contains(&format!("LENGTH = {flash}")),
+                "{chip}"
+            );
+            assert!(
+                read("link.ld").contains(&format!("LENGTH = {ram}")),
+                "{chip}"
+            );
+            assert!(read("CMakeLists.txt").contains("project(blinky C ASM)"));
+
+            let project = crate::project::detect(&root).unwrap();
+            assert_eq!(project.build.system, crate::model::BuildSystem::Cmake);
+            assert_eq!(project.chip.as_deref(), Some(chip));
+            assert_eq!(project.build.preset.as_deref(), Some("firmware"));
+            assert_eq!(project.build.build_dir.as_deref(), Some("build"));
+            assert_eq!(
+                crate::buildsys::ensure_toolchain_file(&project, &root).unwrap(),
+                None
+            );
+            let plans = crate::buildsys::build_plans(&project, &root).unwrap();
+            assert_eq!(plans[0].args[..2], ["--preset", "firmware"]);
+            assert!(
+                !plans[0]
+                    .args
+                    .iter()
+                    .any(|a| a.contains("CMAKE_TOOLCHAIN_FILE")),
+                "the preset names it: {:?}",
+                plans[0].args
+            );
+
+            // Written once: a second time is refused, not written over.
+            assert!(write_itself(dir.path(), &c(chip)).is_err());
+
+            // `RUSTY_C_PROJECTS=<dir>` keeps a copy of each, under the part's
+            // id, for building with a real cross compiler — the proof a
+            // unit test cannot be.
+            if let Some(out) = std::env::var_os("RUSTY_C_PROJECTS") {
+                let into = std::path::Path::new(&out).join(chip);
+                std::fs::create_dir_all(&into).unwrap();
+                write_itself(&into, &c(chip)).unwrap();
+            }
         }
     }
 }

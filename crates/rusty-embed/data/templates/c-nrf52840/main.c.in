@@ -1,0 +1,57 @@
+/* @NAME@ on the @PART@: the DK's LED1 on P0.13 blinks, faster while
+   Button 1 on P0.11 is held. Register by register, from the part's product
+   specification, so every line says what the part does. */
+
+#include <stdint.h>
+
+#define REG(address) (*(volatile uint32_t *)(address))
+
+/* Port 0. A pin is configured in its own PIN_CNF register. */
+#define P0 0x50000000u
+#define OUT REG(P0 + 0x504u)
+#define OUTSET REG(P0 + 0x508u)
+#define IN REG(P0 + 0x510u)
+#define PIN_CNF(pin) REG(P0 + 0x700u + 4u * (pin))
+
+/* The core's SysTick, counting the 64 MHz the part runs from. */
+#define SYST_CSR REG(0xE000E010u)
+#define SYST_RVR REG(0xE000E014u)
+#define SYST_CVR REG(0xE000E018u)
+#define CORE_HZ 64000000u
+
+#define LED 13u
+#define BUTTON 11u
+
+static volatile uint32_t milliseconds;
+
+void SysTick_Handler(void)
+{
+    milliseconds++;
+}
+
+static void wait(uint32_t ms)
+{
+    uint32_t start = milliseconds;
+    while (milliseconds - start < ms) {
+    }
+}
+
+int main(void)
+{
+    /* The DK's LEDs light while their pin is low: start high, dark. */
+    OUTSET = 1u << LED;
+    PIN_CNF(LED) = 1u; /* an output */
+    /* An input, its buffer connected, pulled up: the button pulls it to
+       ground. */
+    PIN_CNF(BUTTON) = 3u << 2;
+
+    SYST_RVR = CORE_HZ / 1000u - 1u;
+    SYST_CVR = 0;
+    SYST_CSR = 7u; /* the core's clock, the interrupt, and on */
+
+    for (;;) {
+        OUT ^= 1u << LED;
+        int held = (IN & (1u << BUTTON)) == 0;
+        wait(held ? 100u : 500u);
+    }
+}

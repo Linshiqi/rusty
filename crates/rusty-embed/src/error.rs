@@ -25,7 +25,8 @@ pub enum Error {
     },
 
     #[error(
-        "no Cargo.toml, platformio.ini or CMakeLists.txt at `{0}` — open the folder that          contains one"
+        "no Cargo.toml, platformio.ini or CMakeLists.txt at `{0}` — open the folder that \
+         contains one"
     )]
     NotAProject(String),
 

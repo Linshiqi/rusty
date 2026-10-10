@@ -72,6 +72,8 @@ pub struct Device {
     /// the two cannot disagree about what is plugged in.
     pub ports: RwSignal<Vec<SerialPort>>,
     pub probes: RwSignal<Vec<Probe>>,
+    /// Boards waiting in a USB bootloader: UF2 drives and DFU devices.
+    pub boot: RwSignal<Vec<rusty_embed::BootDevice>>,
     /// How to reach the board, once a device has been chosen.
     pub transport: RwSignal<Option<Transport>>,
     /// The command Flash would run, shown in the picker before it does.

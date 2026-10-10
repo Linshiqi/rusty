@@ -25,3 +25,11 @@ the package is renamed in `Cargo.toml` and `Cargo.lock` (the lock's package
 is called `playground`), the template's chip id becomes the chosen part's in
 `Cargo.toml` and `.rusty/sim.toml`, and the board's ground wires move to the
 chosen package's first GND row. Everything else is written as it is.
+
+A C template (`c-stm32f4`, `c-nrf52840`) is named by a part's `c_template`
+rather than its `generator`, and is filled in rather than renamed: `@NAME@`
+is the project, `@CHIP@` the part's id (the `set(RUSTY_CHIP …)` line rusty
+reads the part from), `@PART@` its name, and `@FLASH@` and `@RAM@` its
+memory from the catalogue, as `512K`. `cmake/rusty-toolchain.cmake` is not
+in the template: it is written from the part's `c_compiler.flags`, the same
+file a CMake project that names no compiler is given at its first build.

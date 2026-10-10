@@ -96,6 +96,8 @@ pub mod generator;
 #[cfg(feature = "backend")]
 pub mod host_debug;
 #[cfg(feature = "backend")]
+pub mod image;
+#[cfg(feature = "backend")]
 pub mod install;
 #[cfg(feature = "backend")]
 mod layers;

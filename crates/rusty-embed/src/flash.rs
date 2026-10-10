@@ -10,7 +10,11 @@
 //!
 //! rusty does not reimplement flashing. espflash and probe-rs are the tools the
 //! ecosystem actually maintains, and wrapping them means a user's existing
-//! knowledge — and their existing bug reports — still apply.
+//! knowledge — and their existing bug reports — still apply. The one
+//! exception is a UF2 bootloader's drive, where there is no tool to wrap:
+//! the image is a file copied onto it, and [`launch`] writes it (`rusty-uf2`).
+//! A DFU bootloader is `dfu-util`'s, handed a raw binary [`launch`] writes
+//! from the ELF first (`rusty-dfu`).
 
 use crate::{
     catalog::Catalog,
@@ -108,9 +112,144 @@ pub fn port_warning(
                 .unwrap_or_default();
             chips_behind(catalog, &names)
         }
-        Transport::Probe { .. } => Vec::new(),
+        Transport::Probe { .. } | Transport::Dfu { .. } => Vec::new(),
+        // A UF2 drive says which boot ROM it is (`Board-ID`), and the part's
+        // catalogue entry says which one it expects.
+        Transport::Uf2 { drive } => {
+            let expected = chip::by_id(chip_id).and_then(|c| c.uf2).map(|u| u.board_id);
+            let found = crate::device::uf2_drive_at(std::path::Path::new(drive)).map(|d| d.label);
+            return match (expected, found) {
+                (Some(expected), Some(found)) if expected != found => Some(format!(
+                    "This project builds for {chip_id}, whose bootloader drive calls itself \
+                     {expected}, and the drive at {drive} is {found}. The boot ROM ignores \
+                     an image for another part: nothing would be written."
+                )),
+                _ => None,
+            };
+        }
     };
     chip_mismatch(chip_id, &candidates)
+}
+
+/// The in-process program that writes a UF2 file onto a bootloader's drive.
+pub const UF2_PROGRAM: &str = "rusty-uf2";
+/// The in-process step that writes the raw binary `dfu-util` is then given.
+pub const DFU_PROGRAM: &str = "rusty-dfu";
+
+/// Run a flash plan: a tool's process, or — for a UF2 drive and a DFU
+/// binary — the work rusty does itself first.
+pub fn launch(
+    plan: &CommandPlan,
+    dir: Option<&std::path::Path>,
+) -> Result<crate::process::Session> {
+    match plan.program.as_str() {
+        UF2_PROGRAM => uf2_session(&plan.args),
+        DFU_PROGRAM => {
+            let [elf, bin, from, to, rest @ ..] = plan.args.as_slice() else {
+                return Err(Error::refused("a DFU plan without its image"));
+            };
+            write_bin(Path::new(elf), Path::new(bin), hex(from)?..hex(to)?)?;
+            crate::process::spawn(
+                &CommandPlan::new("dfu-util", rest.to_vec(), plan.rationale.clone()),
+                dir,
+            )
+        }
+        _ => crate::process::spawn(plan, dir),
+    }
+}
+
+use std::path::Path;
+
+fn hex(text: &str) -> Result<u32> {
+    u32::from_str_radix(text.trim_start_matches("0x"), 16)
+        .map_err(|_| Error::refused(format!("`{text}` is not an address")))
+}
+
+fn read_image(elf: &Path) -> Result<Vec<crate::image::Segment>> {
+    let bytes = std::fs::read(elf).map_err(|e| {
+        Error::refused(format!(
+            "could not read the firmware at {}: {e}",
+            elf.display()
+        ))
+    })?;
+    crate::image::loaded(&bytes).map_err(Error::refused)
+}
+
+fn write_bin(elf: &Path, bin: &Path, window: std::ops::Range<u32>) -> Result<()> {
+    let out = crate::image::bin(&read_image(elf)?, window).map_err(Error::refused)?;
+    std::fs::write(bin, out)
+        .map_err(|e| Error::refused(format!("could not write {}: {e}", bin.display())))
+}
+
+/// Convert the ELF and copy it onto the drive, as a session: what it did in
+/// lines, and an exit code. The copy is the whole flash — the boot ROM writes
+/// the blocks as they arrive and restarts into the image when the last one
+/// lands, which also unmounts the drive.
+fn uf2_session(args: &[String]) -> Result<crate::process::Session> {
+    use crate::model::{LogLine, LogStream};
+    let [elf, drive, family, flash] = args else {
+        return Err(Error::refused("a UF2 plan without its image and drive"));
+    };
+    let segments = read_image(Path::new(elf))?;
+    let flash = hex(flash)?;
+    let file = crate::image::uf2(
+        &segments,
+        hex(family)?,
+        flash..flash.saturating_add(0x0100_0000),
+    )
+    .map_err(Error::refused)?;
+    let name = Path::new(elf)
+        .file_stem()
+        .map_or("firmware".into(), |s| s.to_string_lossy().into_owned());
+    let target = Path::new(drive).join(format!("{name}.uf2"));
+
+    let (tx, lines) = std::sync::mpsc::channel();
+    let code = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let say = |tx: &std::sync::mpsc::Sender<LogLine>, stream, text: String| {
+        let _ = tx.send(LogLine {
+            stream,
+            text,
+            level: None,
+        });
+    };
+    say(
+        &tx,
+        LogStream::Stdout,
+        format!(
+            "{} blocks ({} KB) to {}",
+            file.len() / 512,
+            file.len() / 1024,
+            target.display()
+        ),
+    );
+    let outcome = std::fs::write(&target, &file);
+    match outcome {
+        Ok(()) => {
+            say(
+                &tx,
+                LogStream::Stdout,
+                "written — the board restarts into the image".to_string(),
+            );
+            *code.lock().expect("uf2 code") = Some(0);
+        }
+        Err(e) => {
+            say(
+                &tx,
+                LogStream::Stderr,
+                format!("could not write {}: {e}", target.display()),
+            );
+            *code.lock().expect("uf2 code") = Some(1);
+        }
+    }
+    drop(tx);
+    let waited = std::sync::Arc::clone(&code);
+    Ok(crate::process::Session::from_parts(
+        lines,
+        crate::process::Input::new(None),
+        // Finished before the session is handed over: nothing to stop.
+        crate::process::Stopper::new(|| {}),
+        move || *waited.lock().expect("uf2 code"),
+    ))
 }
 
 /// Decide what to run. Pure — no process is started.
@@ -128,7 +267,96 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
     };
     let chip = chip::by_id(&request.chip_id);
 
+    let mut display = None;
     let (program, args, rationale) = match &request.transport {
+        // Nothing runs on a board waiting in its bootloader, so there is
+        // nothing to watch through it; its firmware's own serial port, or a
+        // probe, is where it says things once it is running.
+        Transport::Uf2 { .. } | Transport::Dfu { .. } if request.action == FlashAction::Monitor => {
+            return Err(Error::refused(
+                "A board waiting in its bootloader runs no firmware to watch. Pick its \
+                 serial port or a debug probe to monitor it.",
+            ));
+        }
+        Transport::Uf2 { drive } => {
+            let boot = chip.as_ref().and_then(|c| c.uf2.clone()).ok_or_else(|| {
+                Error::refused(format!(
+                    "{} has no UF2 bootloader rusty knows of, so there is no image to copy \
+                     onto a drive.",
+                    request.chip_id
+                ))
+            })?;
+            let elf = built()?;
+            let name = std::path::Path::new(&elf)
+                .file_stem()
+                .map_or("firmware".into(), |s| s.to_string_lossy().into_owned());
+            display = Some(format!(
+                "copy {name}.uf2 to {drive} (UF2, family 0x{:08x})",
+                boot.family
+            ));
+            (
+                UF2_PROGRAM,
+                vec![
+                    elf,
+                    drive.clone(),
+                    format!("0x{:08x}", boot.family),
+                    format!("0x{:08x}", boot.flash),
+                ],
+                "The board is in its UF2 bootloader (held in BOOTSEL): rusty writes the image \
+                 as a UF2 file onto its drive, and the board restarts into it. Nothing to \
+                 monitor through the drive — a probe or the firmware's own serial port does \
+                 that.",
+            )
+        }
+        Transport::Dfu { device, serial } => {
+            let part = chip.as_ref().ok_or_else(|| {
+                Error::refused(format!("{} is not in the catalogue", request.chip_id))
+            })?;
+            let boot = part.dfu.clone().ok_or_else(|| {
+                Error::refused(format!(
+                    "{} has no USB DFU bootloader rusty knows of.",
+                    part.name
+                ))
+            })?;
+            let elf = built()?;
+            let bin = format!("{elf}.bin");
+            let end = boot
+                .address
+                .saturating_add(part.flash_bytes.unwrap_or(0x0100_0000));
+            let mut dfu = vec![
+                "-d".to_string(),
+                device.clone(),
+                "-a".into(),
+                boot.alt.to_string(),
+                "-s".into(),
+                format!("0x{:08x}:leave", boot.address),
+                "-D".into(),
+                bin.clone(),
+            ];
+            if let Some(serial) = serial {
+                dfu.extend(["-S".to_string(), serial.clone()]);
+            }
+            display = Some(
+                std::iter::once("dfu-util".to_string())
+                    .chain(dfu.iter().map(|a| quote_if_needed(a)))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            let mut args = vec![
+                elf,
+                bin,
+                format!("0x{:08x}", boot.address),
+                format!("0x{:08x}", end),
+            ];
+            args.extend(dfu);
+            (
+                DFU_PROGRAM,
+                args,
+                "The board is in its USB DFU bootloader (BOOT0 held high at reset): rusty \
+                 writes the image as a raw binary beside the ELF, and dfu-util writes it to \
+                 flash and starts it (`:leave`).",
+            )
+        }
         Transport::Serial { port } => {
             // espflash speaks only Espressif's ROM bootloader. Other parts
             // have bootloaders of their own — an STM32's UART one, WCH's ISP
@@ -277,10 +505,12 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
         }
     };
 
-    let display = std::iter::once(program.to_string())
-        .chain(args.iter().map(|a| quote_if_needed(a)))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let display = display.unwrap_or_else(|| {
+        std::iter::once(program.to_string())
+            .chain(args.iter().map(|a| quote_if_needed(a)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
 
     Ok(CommandPlan {
         program: program.to_string(),
@@ -661,5 +891,172 @@ mod tests {
         );
         assert_eq!(firmware_line("espflash", line), line);
         assert_eq!(firmware_line("wlink", "Flash done"), "Flash done");
+    }
+
+    // ── boards waiting in a bootloader ──────────────────────────────────
+
+    fn boot_request(chip: &str, transport: Transport, action: FlashAction) -> FlashRequest {
+        FlashRequest {
+            chip_id: chip.to_string(),
+            probe_chip: None,
+            transport,
+            action,
+            firmware: Some(std::path::PathBuf::from(
+                "target/thumbv6m-none-eabi/release/blinky",
+            )),
+            defmt: false,
+            baud: None,
+        }
+    }
+
+    /// An RP2040 in BOOTSEL: the image goes onto the drive as a UF2 with the
+    /// RP2040's family, written by rusty itself — no program to find.
+    #[test]
+    fn a_uf2_drive_is_written_by_rusty_with_the_parts_family() {
+        let plan = plan(&boot_request(
+            "rp2040",
+            Transport::Uf2 {
+                drive: "E:\\".into(),
+            },
+            FlashAction::FlashAndMonitor,
+        ))
+        .unwrap();
+        assert_eq!(plan.program, UF2_PROGRAM);
+        assert_eq!(plan.args[2], "0xe48bff56");
+        assert_eq!(plan.args[3], "0x10000000");
+        assert!(plan.display.contains("blinky.uf2"), "{}", plan.display);
+        // The RP2350 carries its own family.
+        let rp2350 = plan_for("rp235xa");
+        assert_eq!(rp2350.args[2], "0xe48bff59");
+    }
+
+    fn plan_for(chip: &str) -> CommandPlan {
+        plan(&boot_request(
+            chip,
+            Transport::Uf2 {
+                drive: "E:\\".into(),
+            },
+            FlashAction::Flash,
+        ))
+        .unwrap()
+    }
+
+    /// An STM32 with BOOT0 high: dfu-util writes a binary rusty makes from
+    /// the ELF, at the start of flash, and leaves the bootloader for it. The
+    /// line shown is the dfu-util line that runs.
+    #[test]
+    fn a_dfu_board_is_written_by_dfu_util_from_a_binary_rusty_makes() {
+        let plan = plan(&boot_request(
+            "stm32f411ce",
+            Transport::Dfu {
+                device: "0483:df11".into(),
+                serial: Some("3276395A3438".into()),
+            },
+            FlashAction::Flash,
+        ))
+        .unwrap();
+        assert_eq!(plan.program, DFU_PROGRAM);
+        assert!(plan.args[1].ends_with("blinky.bin"));
+        assert_eq!(&plan.args[2..4], ["0x08000000", "0x08080000"]);
+        assert!(
+            plan.display
+                .starts_with("dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D "),
+            "{}",
+            plan.display
+        );
+        assert!(
+            plan.display.ends_with("-S 3276395A3438"),
+            "{}",
+            plan.display
+        );
+    }
+
+    /// A board waiting in its bootloader runs nothing to watch, and a part
+    /// with no such bootloader is not offered one.
+    #[test]
+    fn a_bootloader_is_refused_where_it_cannot_do_the_job() {
+        let monitor = plan(&boot_request(
+            "rp2040",
+            Transport::Uf2 {
+                drive: "E:\\".into(),
+            },
+            FlashAction::Monitor,
+        ));
+        assert!(monitor.unwrap_err().to_string().contains("bootloader"));
+        let stm32_uf2 = plan(&boot_request(
+            "stm32f411ce",
+            Transport::Uf2 {
+                drive: "E:\\".into(),
+            },
+            FlashAction::Flash,
+        ));
+        assert!(stm32_uf2.unwrap_err().to_string().contains("UF2"));
+    }
+
+    /// The whole of a UF2 flash, run: the ELF converted, the file on the
+    /// drive, the family in every block, exit 0.
+    #[test]
+    fn a_uf2_flash_puts_the_image_on_the_drive() {
+        let dir = tempfile::tempdir().unwrap();
+        let elf = dir.path().join("blinky");
+        std::fs::write(
+            &elf,
+            crate::image::test_elf(&[(0x1000_0000, 0x1000_0000, &[7; 600], 600)]),
+        )
+        .unwrap();
+        let drive = dir.path().join("drive");
+        std::fs::create_dir_all(&drive).unwrap();
+        let mut request = boot_request(
+            "rp2040",
+            Transport::Uf2 {
+                drive: drive.display().to_string(),
+            },
+            FlashAction::Flash,
+        );
+        request.firmware = Some(elf.clone());
+        let session = launch(&plan(&request).unwrap(), None).unwrap();
+        let mut said = Vec::new();
+        while let Some(line) = session.recv() {
+            said.push(line.text);
+        }
+        assert_eq!(session.wait(), Some(0), "{said:?}");
+        let written = std::fs::read(drive.join("blinky.uf2")).unwrap();
+        let (family, pages) = crate::image::read_uf2(&written).unwrap();
+        assert_eq!(family, 0xe48b_ff56);
+        assert_eq!(pages.len(), 3);
+    }
+
+    /// The binary dfu-util is handed: the ELF's flash from its first byte.
+    #[test]
+    fn the_dfu_binary_is_written_from_the_elf() {
+        let dir = tempfile::tempdir().unwrap();
+        let elf = dir.path().join("blinky");
+        std::fs::write(
+            &elf,
+            crate::image::test_elf(&[(0x0800_0000, 0x0800_0000, &[1, 2, 3], 3)]),
+        )
+        .unwrap();
+        let bin = dir.path().join("blinky.bin");
+        write_bin(&elf, &bin, 0x0800_0000..0x0808_0000).unwrap();
+        assert_eq!(std::fs::read(&bin).unwrap(), [1, 2, 3]);
+    }
+
+    /// A drive that says it is another part's bootloader is named before
+    /// the copy: the ROM would ignore every block.
+    #[test]
+    fn a_uf2_drive_for_another_part_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("INFO_UF2.TXT"),
+            "UF2 Bootloader v1.0\nModel: Raspberry Pi RP2350\nBoard-ID: RP2350\n",
+        )
+        .unwrap();
+        let transport = Transport::Uf2 {
+            drive: dir.path().display().to_string(),
+        };
+        let catalog = Catalog::load(None);
+        let warning = port_warning("rp2040", &transport, &[], &catalog).unwrap();
+        assert!(warning.contains("RP2350"), "{warning}");
+        assert!(port_warning("rp235xa", &transport, &[], &catalog).is_none());
     }
 }

@@ -34,13 +34,30 @@ use crate::{
     },
 };
 
+// A disabled button keeps the pointer, so its tooltip can say why it is
+// disabled; `disabled` alone already stops the click. With
+// `pointer-events-none` it said nothing at all — a grey icon and no reason.
 const BUTTON: &str = "grid size-7 place-items-center rounded-[6px] transition-colors \
-                      hover:bg-sunken disabled:pointer-events-none disabled:opacity-40";
+                      hover:bg-sunken disabled:cursor-default disabled:opacity-40 \
+                      disabled:hover:bg-transparent";
 
 #[component]
 pub fn RunControls() -> impl IntoView {
     let state = AppState::expect();
     let running = state.app.session_running;
+    // While something runs, what it is and how to stop it — the tooltip of
+    // every verb that waits for it, which used to be the verb's own words
+    // over a grey icon.
+    let busy = Signal::derive(move || {
+        running.get().then(|| {
+            let what = state
+                .app
+                .activity
+                .with(|activity| activity.as_ref().map(crate::view::activity::running))
+                .unwrap_or_else(|| t!("toolbar.something-running"));
+            with_chord(state, Action::Stop, t!("toolbar.busy", what = what))
+        })
+    });
 
     // Why Run cannot start, or `None` when it can. The plan is the one
     // derivation of that — the Simulate panel's tools card reads the same
@@ -137,7 +154,10 @@ pub fn RunControls() -> impl IntoView {
                     <span class="mx-1.5 h-4 w-px bg-line" />
                     <button
                         type="button"
-                        title=move || with_chord(state, Action::Build, t!("toolbar.build"))
+                        title=move || {
+                            busy.get()
+                                .unwrap_or_else(|| with_chord(state, Action::Build, t!("toolbar.build")))
+                        }
                         disabled=move || running.get()
                         on:click=move |_| controller::build_project(state)
                         class=format!("{BUTTON} text-label-2 hover:text-label")
@@ -147,8 +167,9 @@ pub fn RunControls() -> impl IntoView {
                     // Test, beside Build: the suite is what stands between a
                     // build that passed and a run worth watching.
                     {move || {
-                        let title = test_block
+                        let title = busy
                             .get()
+                            .or_else(|| test_block.get())
                             .unwrap_or_else(|| with_chord(state, Action::Test, t!("toolbar.test")));
                         view! {
                             <button
@@ -221,7 +242,10 @@ pub fn RunControls() -> impl IntoView {
                         } else {
                             t!("toolbar.debug")
                         };
-                        let title = block.unwrap_or_else(|| with_chord(state, Action::Debug, words));
+                        let title = busy
+                            .get()
+                            .or(block)
+                            .unwrap_or_else(|| with_chord(state, Action::Debug, words));
                         view! {
                             <button
                                 type="button"
@@ -240,7 +264,11 @@ pub fn RunControls() -> impl IntoView {
                     // monitor holds the port — it is let go first.
                     <button
                         type="button"
-                        title=move || with_chord(state, Action::Flash, t!("toolbar.flash"))
+                        title=move || {
+                            busy.get()
+                                .filter(|_| !holds_port.get())
+                                .unwrap_or_else(|| with_chord(state, Action::Flash, t!("toolbar.flash")))
+                        }
                         disabled=move || running.get() && !holds_port.get()
                         on:click=move |_| controller::device_action(state, DeviceAction::Flash)
                         class=format!("{BUTTON} text-label-2 hover:text-label")
@@ -266,7 +294,11 @@ pub fn RunControls() -> impl IntoView {
                             view! {
                                 <button
                                     type="button"
-                                    title=with_chord(state, Action::Monitor, t!("toolbar.monitor"))
+                                    title=move || {
+                                        busy.get().unwrap_or_else(|| {
+                                            with_chord(state, Action::Monitor, t!("toolbar.monitor"))
+                                        })
+                                    }
                                     disabled=move || running.get()
                                     on:click=move |_| {
                                         controller::device_action(state, DeviceAction::Monitor)

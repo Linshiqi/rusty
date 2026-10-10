@@ -35,12 +35,13 @@ mod wizard;
 mod workbench;
 
 pub use command::{CommandPlan, LogLevel, LogLine, LogStream};
-pub use device::{FlashAction, Probe, SerialPort, Transport, UsbIdentity};
+pub use device::{BootDevice, BootKind, FlashAction, Probe, SerialPort, Transport, UsbIdentity};
 pub use firmware::Firmware;
 pub use memory::{CrateSize, MemoryReport, MemoryTotals, SectionKind, SectionSize};
 pub use part::{
-    Arch, Board, CCompiler, CatalogProblem, CatalogSource, Chip, Emulation, EmulatorKind, Flasher,
-    Generator, Kit, KitUsb, PinAssignment, Ports, Runtime, ToolchainRequirement, UsbMatch, Vendor,
+    Arch, Board, CCompiler, CatalogProblem, CatalogSource, Chip, DfuBoot, Emulation, EmulatorKind,
+    Flasher, Generator, Kit, KitUsb, PinAssignment, Ports, Runtime, ToolchainRequirement, Uf2Boot,
+    UsbMatch, Vendor,
 };
 pub use playground::{
     PLAYGROUND_DRAW, PLAYGROUND_MAIN, PLAYGROUNDS, playground_has_board, playground_main,
@@ -62,7 +63,8 @@ pub use toolchain::{
     ToolStatus, Toolchain, ToolchainReport, ToolchainStatus, cargo_loses_dependencies,
 };
 pub use wizard::{
-    CrateNameProblem, Explanation, WizardChoice, WizardLayout, WizardOption, crate_name_problem,
+    CrateNameProblem, Explanation, Language, WizardChoice, WizardLayout, WizardOption,
+    crate_name_problem,
 };
 pub use workbench::{
     AssistantChoice, EditorView, ProjectTabs, RelocateReport, StorageLocation, UpdateProgress,

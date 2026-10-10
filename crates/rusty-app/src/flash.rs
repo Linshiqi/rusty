@@ -32,8 +32,9 @@ pub async fn run_flash(
 ) -> Result<Option<i32>, CommandError> {
     let working_dir = state.firmware_root().await;
 
-    // Spawning is quick and non-blocking; only the reading blocks.
-    let session = process::spawn(&plan, working_dir.as_deref())?;
+    // Spawning is quick and non-blocking; only the reading blocks. A UF2
+    // drive and a DFU binary are rusty's own work before any tool runs.
+    let session = rusty_embed::flash::launch(&plan, working_dir.as_deref())?;
     let ours = state.start_session(session.stopper()).await;
 
     // The reader loop is synchronous by nature — it sits on a pipe — so it
