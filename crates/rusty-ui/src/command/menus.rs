@@ -245,7 +245,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 // wants the answer now, and it says it either way.
                 entry(Action::CheckUpdates, &t!("menu.help.check-updates"), None),
                 Item::Separator,
-                entry(Action::OpenSettings, &t!("menu.help.shortcuts"), None),
+                entry(Action::ShowShortcuts, &t!("menu.help.shortcuts"), None),
                 entry(
                     Action::ShowPanel("assistant"),
                     &t!("menu.help.assistant"),

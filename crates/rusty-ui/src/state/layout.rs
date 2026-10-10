@@ -55,8 +55,8 @@ impl DockTab {
     ];
 
     /// The three every IDE's panel opens with, and the only ones that cannot
-    /// be hidden: what is wrong, what the tools said, and a shell. The other
-    /// six are on the strip only while something has put them there.
+    /// be hidden: what is wrong, what the tools said, and a shell. The rest
+    /// are on the strip only while something has put them there.
     pub const PINNED: [DockTab; 3] = [DockTab::Problems, DockTab::Output, DockTab::Terminal];
 
     pub fn pinned(self) -> bool {
@@ -316,8 +316,8 @@ pub struct Layout {
     /// Which tabs the strip carries, in [`DockTab::ALL`]'s order. The pinned
     /// three from the first paint; the rest appear when something puts them
     /// there — a debug run, a serial link, the firmware's first telemetry
-    /// sample — and go when the user hides them. Nine tabs on a window with
-    /// no project open was nine names for things that were not happening.
+    /// sample — and go when the user hides them. Every tab on a window with
+    /// no project open was a name for something that was not happening.
     ///
     /// Session state, not persisted: nothing is running at boot, so the strip
     /// starts with what is true at boot, and the View menu lists them all for

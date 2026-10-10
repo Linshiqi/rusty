@@ -115,6 +115,8 @@ pub enum Action {
     /// the same document.
     SplitEditor,
     OpenSettings,
+    /// Settings, open on the Keyboard page — Help ▸ Keyboard shortcuts.
+    ShowShortcuts,
     /// The environment check, on purpose rather than because it interrupted.
     CheckEnvironment,
     /// Ask the release feed for a newer rusty, and show what it answered.
@@ -154,6 +156,8 @@ pub enum Action {
 pub struct Chrome {
     pub settings_open: RwSignal<bool>,
     pub palette_open: RwSignal<bool>,
+    /// The next Settings opens on the Keyboard page rather than the first.
+    pub settings_keyboard: RwSignal<bool>,
 }
 
 /// One row in the palette.
@@ -406,6 +410,10 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::ToggleTree => controller::toggle_tree(state),
         Action::SplitEditor => controller::split_active(state),
         Action::OpenSettings => chrome.settings_open.set(true),
+        Action::ShowShortcuts => {
+            chrome.settings_keyboard.set(true);
+            chrome.settings_open.set(true);
+        }
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
         Action::ToggleComment => editor_key(state, "/", false),

@@ -61,7 +61,10 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # exercised here at all — and the chips carried no `gpio`, which draws a
 # devkit with rails and no header and makes every wire to a pin a finding.
 # It is a divider on a C3 now: two resistors, both rails, a tap on GPIO4,
-# and 1.10 V at the middle for anyone to check. A fifth: **a Rust map
+# and 1.10 V at the middle for anyone to check. The chip catalogue in it is
+# `rusty-cli catalog --json` pasted whole, never typed: a hand-kept copy of
+# three ESP parts fell behind the catalogue, and once the wizard listed only
+# parts with a generator, it listed none here. A fifth: **a Rust map
 # crosses as a JS `Map`, not an object** — serde_wasm_bindgen writes one — so
 # a stub reading a part's `props.signal` reads nothing and plays its own
 # default while the frontend is right; read props with `.get()`. The
@@ -2786,7 +2789,20 @@ heads both popovers, where it is read when it matters.
 menu and the palette iterate `DockTab::ALL` and the panel registry; five of
 the nine dock tabs were once spelled out by hand and the other four were
 reachable from nowhere but a click on the strip. `Divider::ALL` and
-`Divider::default_size` play the same role for Reset layout.
+`Divider::default_size` play the same role for Reset layout. **And the
+palette reaches what the menus reach**: Check environment, Check for
+updates, Keyboard shortcuts, Rename and the C-interop scaffolds were
+menu-only.
+
+**A thing has one name wherever it is named.** The Environment page was
+"Environment" on the rail and "Re-scan toolchain" in the Project menu;
+Memory was "内存占用" on the rail and "内存报告" in the Device menu; Reset
+layout was "Reset panel sizes" while it also reset the dock's strip. And a
+Chinese name is the word a Chinese user would look for: the Flight tab is
+飞控 (it was 飞行, "flying"), Draw is 图形 beside Plot's 曲线, the chip
+catalogue is 芯片库 (目录 reads as a folder). Help ▸ Keyboard shortcuts
+opens Settings on the Keyboard page (`Chrome::settings_keyboard`), where
+it opened on Appearance.
 
 **A menu is read at a glance, so what it holds is folded into flyouts.**
 The View menu grew to thirty-seven rows, and the user's word for it was

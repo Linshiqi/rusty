@@ -121,8 +121,8 @@ pub fn all(state: AppState) -> Vec<Command> {
         chord(Action::ToggleDock),
     ));
     // Every dock tab, from the one list the dock itself renders. Five of
-    // the nine were spelled out here once; the other four were reachable
-    // from nowhere but a click on the strip, which this module's header
+    // the nine there were then were spelled out here once; the other four
+    // were reachable from nowhere but a click on the strip, which this module's header
     // says is exactly the drift it exists to prevent.
     for tab in DockTab::ALL {
         out.push(view(
@@ -207,6 +207,36 @@ pub fn all(state: AppState) -> Vec<Command> {
         group: t!("palette.group-settings"),
         shortcut: chord(Action::OpenSettings),
     });
+
+    // What the menus reached and the palette did not: somebody who knows
+    // the palette types for "environment" or "C interop" and should find it.
+    let settings = |action, title: String| Command {
+        action,
+        title,
+        group: t!("palette.group-settings"),
+        shortcut: chord(action),
+    };
+    out.push(settings(Action::ShowShortcuts, t!("menu.help.shortcuts")));
+    out.push(settings(
+        Action::CheckEnvironment,
+        t!("menu.help.check-environment"),
+    ));
+    out.push(settings(
+        Action::CheckUpdates,
+        t!("menu.help.check-updates"),
+    ));
+    out.push(action(
+        Action::Rename,
+        &t!("menu.edit.rename"),
+        chord(Action::Rename),
+    ));
+    for (direction, title) in [
+        ("rust-calls-c", t!("menu.project.rust-calls-c")),
+        ("rust-calls-cpp", t!("menu.project.rust-calls-cpp")),
+        ("c-calls-rust", t!("menu.project.c-calls-rust")),
+    ] {
+        out.push(action(Action::ScaffoldC(direction), &title, None));
+    }
 
     out
 }

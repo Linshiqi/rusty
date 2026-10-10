@@ -332,6 +332,7 @@ pub fn install(state: AppState, chrome: Chrome) {
     let Chrome {
         palette_open,
         settings_open,
+        ..
     } = chrome;
 
     let handle = window_event_listener(ev::keydown, move |event| {

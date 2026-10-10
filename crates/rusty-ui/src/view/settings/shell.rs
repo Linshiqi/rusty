@@ -14,9 +14,18 @@ use rusty_i18n::t;
 
 use super::*;
 
+/// `keyboard` set opens on the Keyboard page, once — what Help ▸ Keyboard
+/// shortcuts asks for. It opened on Appearance, a page with no shortcut on
+/// it.
 #[component]
-pub fn Settings() -> impl IntoView {
-    let selected = RwSignal::new(Category::Appearance);
+pub fn Settings(keyboard: RwSignal<bool>) -> impl IntoView {
+    let start = if keyboard.get_untracked() {
+        keyboard.set(false);
+        Category::Keyboard
+    } else {
+        Category::Appearance
+    };
+    let selected = RwSignal::new(start);
 
     view! {
         <div class="flex min-h-0 flex-1 flex-col bg-content">

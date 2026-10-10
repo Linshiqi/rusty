@@ -188,6 +188,7 @@ pub fn App() -> impl IntoView {
     let chrome = crate::command::Chrome {
         settings_open,
         palette_open,
+        settings_keyboard: RwSignal::new(false),
     };
     palette::install(state, chrome);
     switcher::install(state, chrome);
@@ -271,7 +272,8 @@ pub fn App() -> impl IntoView {
                     <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                         {move || {
                             if settings_open.get() {
-                                view! { <settings::Settings /> }.into_any()
+                                view! { <settings::Settings keyboard=chrome.settings_keyboard /> }
+                                    .into_any()
                             } else {
                                 view! { <Stage /> }.into_any()
                             }
