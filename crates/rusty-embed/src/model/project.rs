@@ -53,6 +53,80 @@ pub struct EmbeddedProject {
     pub evidence: Vec<String>,
     /// Things that will stop a build, in the order worth fixing them.
     pub problems: Vec<Problem>,
+    /// Which build system the project is in, and what it says about how it
+    /// builds. Cargo for every project rusty knew before CMake and
+    /// PlatformIO, which is what an answer without the field means.
+    #[serde(default)]
+    pub build: BuildSetup,
+}
+
+/// The tool that builds a project, decided by the file at its root:
+/// `Cargo.toml`, then `platformio.ini`, then `CMakeLists.txt`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BuildSystem {
+    #[default]
+    Cargo,
+    PlatformIo,
+    Cmake,
+}
+
+impl BuildSystem {
+    pub fn label(self) -> &'static str {
+        match self {
+            BuildSystem::Cargo => "Cargo",
+            BuildSystem::PlatformIo => "PlatformIO",
+            BuildSystem::Cmake => "CMake",
+        }
+    }
+}
+
+/// The SDK a CMake project builds on, read off its `CMakeLists.txt` — which
+/// decides where its chip is written down and how it is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CmakeSdk {
+    /// The Raspberry Pi Pico SDK (`pico_sdk_init()`).
+    PicoSdk,
+    /// ESP-IDF, built by `idf.py` (`tools/cmake/project.cmake`).
+    EspIdf,
+    /// What STM32CubeMX generates: a `.ioc` beside it naming the part.
+    Stm32Cube,
+}
+
+impl CmakeSdk {
+    pub fn label(self) -> &'static str {
+        match self {
+            CmakeSdk::PicoSdk => "Pico SDK",
+            CmakeSdk::EspIdf => "ESP-IDF",
+            CmakeSdk::Stm32Cube => "STM32CubeMX",
+        }
+    }
+}
+
+/// How a project builds, beyond which tool builds it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSetup {
+    pub system: BuildSystem,
+    /// CMake: the SDK, when the `CMakeLists.txt` names one.
+    #[serde(default)]
+    pub sdk: Option<CmakeSdk>,
+    /// CMake: the configure preset built with, when `CMakePresets.json` has
+    /// one.
+    #[serde(default)]
+    pub preset: Option<String>,
+    /// CMake: where it builds, relative to the root — `build`, or the
+    /// preset's binary directory.
+    #[serde(default)]
+    pub build_dir: Option<String>,
+    /// PlatformIO: the environment built, flashed and monitored — the first
+    /// of `default_envs`, or the file's first.
+    #[serde(default)]
+    pub environment: Option<String>,
+    /// PlatformIO: every environment the file declares, in its order.
+    #[serde(default)]
+    pub environments: Vec<String>,
 }
 
 impl EmbeddedProject {
@@ -88,6 +162,7 @@ mod root_is_firmware_tests {
             c_interop: Default::default(),
             evidence: Vec::new(),
             problems: Vec::new(),
+            build: Default::default(),
         }
     }
 

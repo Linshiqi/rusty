@@ -369,6 +369,13 @@ pub struct Chip {
     /// Where the vendor publishes the part's SVD, when they do.
     #[serde(default)]
     pub svd: Option<String>,
+    /// Other names the part goes by where a project writes it down — the
+    /// full ordering code PlatformIO's `board_build.mcu` and STM32CubeMX's
+    /// `.ioc` carry (`stm32f411ceu6`), normalised as ids are. A name is
+    /// matched whole, never by prefix: `esp32` is a prefix of a dozen parts
+    /// it is not.
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 impl Chip {
@@ -442,6 +449,10 @@ pub struct Board {
     /// Which layer this definition came from, so the UI can distinguish a
     /// built-in entry from one the user or their team wrote.
     pub source: CatalogSource,
+    /// The board's id in PlatformIO (`esp32dev`), which is how a
+    /// `platformio.ini` names it and how rusty finds its chip.
+    #[serde(default)]
+    pub platformio: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

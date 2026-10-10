@@ -1061,6 +1061,15 @@
     }],
     // The planner's shape for the device and action asked about, and its
     // warning when the port's board is not the project's chip.
+    // The project's build, as its build system's steps; the mock's project
+    // is a Cargo one.
+    build_plan: () => [{
+      program: "cargo",
+      args: ["build", "--release"],
+      display: "cargo build --release",
+      rationale: "",
+      warning: null,
+    }],
     plan_flash: (a) => {
       const port = a.transport.port;
       const elf = a.firmware ? ` ${a.firmware}` : "";

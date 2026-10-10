@@ -16,6 +16,10 @@
 # or `[board.pins]` header. Once a sub-table is opened, later keys belong to it,
 # and a stray `flash_baud` after the usb block is read as a usb field.
 #
+# `platformio` is the board's id in PlatformIO, which is how a
+# `platformio.ini` names it (`board = esp32dev`) and how rusty finds the chip
+# of a PlatformIO project without PlatformIO installed.
+#
 # `[[board.usb]]` is a list because some boards enumerate differently depending
 # on which socket you plug into — the S3 devkits expose both a UART bridge and
 # the chip's native USB, and those are different devices to the OS.
@@ -25,6 +29,7 @@ id = "esp32c3-devkitm-1"
 name = "ESP32-C3-DevKitM-1"
 chip = "esp32c3"
 flash_bytes = 4_194_304
+platformio = "esp32-c3-devkitm-1"
 [[board.usb]]
 vendor_id = 0x303A
 product_id = 0x1001
@@ -37,6 +42,7 @@ id = "esp32c6-devkitc-1"
 name = "ESP32-C6-DevKitC-1"
 chip = "esp32c6"
 flash_bytes = 8_388_608
+platformio = "esp32-c6-devkitc-1"
 [[board.usb]]
 vendor_id = 0x303A
 product_id = 0x1001
@@ -50,6 +56,7 @@ name = "ESP32-S3-DevKitC-1"
 chip = "esp32s3"
 flash_bytes = 8_388_608
 psram_bytes = 8_388_608
+platformio = "esp32-s3-devkitc-1"
 [[board.usb]]
 vendor_id = 0x303A
 product_id = 0x1001
@@ -66,6 +73,7 @@ id = "esp32-devkitc-v4"
 name = "ESP32-DevKitC V4"
 chip = "esp32"
 flash_bytes = 4_194_304
+platformio = "esp32dev"
 [[board.usb]]
 vendor_id = 0x10C4
 product_id = 0xEA60
@@ -78,6 +86,7 @@ id = "seeed-xiao-esp32c3"
 name = "Seeed XIAO ESP32C3"
 chip = "esp32c3"
 flash_bytes = 4_194_304
+platformio = "seeed_xiao_esp32c3"
 [[board.usb]]
 vendor_id = 0x303A
 product_id = 0x1001
@@ -95,3 +104,50 @@ product_id = 0x7523
 note = "CH340 bridge"
 [board.pins]
 led = 2
+
+# ── Cortex-M boards ──────────────────────────────────────────────────────────
+#
+# No USB identities: a Pico, a Black Pill and a DK all enumerate as a probe
+# or a mass-storage bootloader rather than as a serial bridge rusty can name.
+
+[[board]]
+id = "rpi-pico"
+name = "Raspberry Pi Pico"
+chip = "rp2040"
+flash_bytes = 2_097_152
+platformio = "pico"
+[board.pins]
+led = 25
+
+[[board]]
+id = "rpi-pico2"
+name = "Raspberry Pi Pico 2"
+chip = "rp235xa"
+flash_bytes = 4_194_304
+platformio = "rpipico2"
+[board.pins]
+led = 25
+
+[[board]]
+id = "weact-blackpill-f411ce"
+name = "WeAct Black Pill (STM32F411CE)"
+chip = "stm32f411ce"
+platformio = "blackpill_f411ce"
+[board.pins]
+led = 45
+
+[[board]]
+id = "weact-blackpill-f401cc"
+name = "WeAct Black Pill (STM32F401CC)"
+chip = "stm32f401cc"
+platformio = "blackpill_f401cc"
+[board.pins]
+led = 45
+
+[[board]]
+id = "nrf52840-dk"
+name = "nRF52840 DK"
+chip = "nrf52840"
+platformio = "nrf52840_dk"
+[board.pins]
+led = 13

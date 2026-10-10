@@ -154,6 +154,9 @@ cargo run -p rusty-embed --example filter_probe -- examples/filter-lab
 
 # The workbench without the window
 cargo run -p rusty-cli -- check .
+# The project's own build, as the window's Build runs it: cargo, `pio run`,
+# or CMake's configure-once-then-build — whichever file is at the root.
+cargo run -p rusty-cli -- build .
 cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
@@ -5377,9 +5380,68 @@ the workbench knows about C without becoming a C IDE.
 - **`.h` is C here.** syntect gives the extension to Objective-C, whose
   grammar colours a firmware header wrongly in ways that read as a broken
   highlighter.
-- **C/C++ project types are out of scope.** That is ESP-IDF's and
-  STM32CubeIDE's job, and doing it badly would cost the thing this workbench
-  is actually good at.
+- **A C or C++ project is opened, built and flashed; it is not authored
+  here.** It was out of scope — ESP-IDF's and STM32CubeIDE's job — and a
+  folder without a `Cargo.toml` could not even be opened. It can now (*Build
+  systems*, below): rusty builds it with the project's own tool, finds its
+  image, sizes and flashes it. Writing the C — completion, diagnostics — is
+  clangd's job, and the next thing to wire in.
+
+## Build systems: Cargo, PlatformIO, CMake
+
+`EmbeddedProject.build` says which tool builds a project, decided by the file
+at its root: `Cargo.toml`, then `platformio.ini`, then `CMakeLists.txt`
+(`buildsys::system_at`), and a folder with none is refused naming all three.
+`rusty_embed::buildsys` answers for the two that are not Cargo the questions
+`project` answers for Cargo: what the chip is, the commands that build it
+(`build_plans`), how it is flashed, where its images are (`images`) and what
+it needs installed (`tools_for`). The window's Build asks the backend for the
+plan (`build_plan`) and runs its steps in order; `rusty-cli build` runs the
+same.
+
+- **The chip is read where the project's own tool reads it, or not at
+  all**: a PlatformIO environment's `board_build.mcu`, else its board through
+  the catalogue's `platformio` board ids, else the board's JSON in an installed
+  PlatformIO; the Pico SDK's `PICO_BOARD` / `PICO_PLATFORM` (its own default,
+  the Pico, when neither is set); ESP-IDF's `CONFIG_IDF_TARGET` in `sdkconfig`
+  (its own default, the ESP32); STM32CubeMX's `.ioc`. Every name goes through
+  the catalogue — an ordering code like `STM32F411CEU6` is a chip's
+  `aliases` entry, matched whole, never by prefix: `esp32` is a prefix of a
+  dozen parts it is not. No chip is a warning that says where the chip would
+  be written, not a guess off a compiler flag.
+- **PlatformIO is read as PlatformIO reads it** (`parse_ini`): `default_envs`'
+  first, else the file's first environment; `[env]`, then what `extends`
+  names, then the environment's own keys; indented continuation lines; an
+  inline `;` comment after whitespace. Flashing and monitoring are
+  PlatformIO's own (`pio run -t upload`, `pio device monitor`), handed the
+  port the title bar chose and nothing about a probe, which the environment's
+  `upload_protocol` decides.
+- **CMake configures once, with Ninja and compile commands.** The first build
+  of a directory with no `CMakeCache.txt` is `cmake -S . -B build -G Ninja
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (Ninja,
+  because the host's default generator — Visual Studio's on Windows — cannot
+  cross-compile), or `cmake --preset <first visible preset>` where
+  `CMakePresets.json` has one, its `binaryDir` followed through `inherits`;
+  every build after is `cmake --build <dir>`. ESP-IDF is `idf.py build`.
+  `compile_commands.json` is what clangd will read.
+- **A build directory's firmware is an Arm, RISC-V or Xtensa ELF
+  executable** (`embedded_elf`: the header's type and machine), not any ELF:
+  a CMake tree is full of ELF object files and, on Linux, of host tools the
+  Pico SDK builds for itself. ESP-IDF's bootloader and CMake's own
+  bookkeeping directories are not looked in.
+- **What only Cargo has is refused by name for the others**: the simulator
+  ("rusty simulates firmware built with cargo"), Test, the Crates panel's
+  analysis, and rust-analyzer — whose status reads *off*, not *missing*,
+  because "rust-analyzer missing" over a C project sends somebody to
+  install a server it would not use. The Environment page asks for the build
+  system's tools instead of rustup's targets, and for the part's cross C
+  compiler on a CMake project (PlatformIO and ESP-IDF install their own).
+- **Proven against a real build, not only the tests**: a bare-metal
+  STM32F411CE CMake project with a `.ioc`, built by Arm GNU Toolchain 15.2
+  and Ninja through `rusty-cli build` — configured once, built, a second
+  build finding nothing to do — then `rusty-cli size` finding `build/
+  blinky.elf`. PlatformIO is proven by its tests alone: nobody here has it
+  installed.
 
 ## After every feature: review before moving on
 

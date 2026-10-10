@@ -43,6 +43,18 @@ pub fn start_lsp(state: AppState) {
     // its events are told apart from the live one.
     let session = state.lsp.session.get_untracked() + 1;
     state.lsp.session.set(session);
+    // rust-analyzer analyses a Cargo project. A PlatformIO or CMake one has
+    // no server to start, which is not the server missing: "rust-analyzer
+    // missing" over a C project sends somebody to install what it would
+    // not use.
+    let cargo = state.project.detected.with_untracked(|p| {
+        p.as_ref()
+            .is_none_or(|p| p.build.system == rusty_embed::BuildSystem::Cargo)
+    });
+    if !cargo {
+        state.lsp.status.set(LspStatus::Off);
+        return;
+    }
     state.lsp.status.set(LspStatus::Starting);
     state.lsp.progress.set(None);
 

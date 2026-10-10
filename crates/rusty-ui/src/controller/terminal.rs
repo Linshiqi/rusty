@@ -389,12 +389,22 @@ pub fn test_project(state: AppState) {
     if state.app.session_running.get_untracked() {
         return;
     }
+    // `cargo test` is the one test runner rusty drives; a PlatformIO or
+    // CMake project is refused by name, out loud like the rest.
+    let other = state.project.detected.with_untracked(|p| {
+        p.as_ref()
+            .map(|p| p.build.system)
+            .filter(|system| *system != rusty_embed::BuildSystem::Cargo)
+    });
     let refused = state
         .project
         .detected
         .with_untracked(|p| p.as_ref().is_some_and(|p| p.root_is_firmware()));
-    if refused {
-        let message = t!("toolbar.test-blocked");
+    if refused || other.is_some() {
+        let message = match other {
+            Some(system) => t!("toolbar.test-not-cargo", system = system.label()),
+            None => t!("toolbar.test-blocked"),
+        };
         state.push_log(LogLine {
             stream: LogStream::Stderr,
             text: message.clone(),

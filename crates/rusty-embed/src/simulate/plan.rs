@@ -34,6 +34,16 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         );
     };
 
+    // The simulator boots what cargo built, from where cargo put it; a
+    // PlatformIO or CMake image is built by another tool into another
+    // layout, and is refused by name rather than looked for in `target/`.
+    if project.build.system != crate::model::BuildSystem::Cargo {
+        return SimPlan::refused(format!(
+            "rusty simulates firmware built with cargo, and this is a {} project",
+            project.build.system.label()
+        ));
+    }
+
     // Which emulator runs a part is the catalogue's to say (`emulator`),
     // the project's own overlay included, so a part added there that names
     // one is simulated and every other is refused by name.

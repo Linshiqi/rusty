@@ -34,6 +34,19 @@ pub async fn lsp_start(
 ) -> Result<(), CommandError> {
     let root = state.require_root().await?;
 
+    // rust-analyzer analyses a Cargo workspace; at the root of a PlatformIO
+    // or CMake project it finds none, and would say so as an error on every
+    // file. Said once instead, as the server being unavailable here.
+    if !root.join("Cargo.toml").is_file() {
+        let _ = on_event.send(LspEvent::Unavailable {
+            message: "rust-analyzer analyses Cargo projects, and this folder has no \
+                      Cargo.toml"
+                .to_string(),
+            install: None,
+        });
+        return Ok(());
+    }
+
     // What the firmware builds for, so cfg resolution matches the chip rather
     // than the host. Detection already worked this out; not passing it along
     // would have rust-analyzer analysing a `no_std` project as if it were a

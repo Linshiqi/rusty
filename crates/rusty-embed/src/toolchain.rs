@@ -318,13 +318,54 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         .and_then(|p| p.chip.as_deref())
         .and_then(chip::by_id);
 
-    let needs_esp_toolchain = chip.as_ref().is_some_and(|c| c.needs_esp_toolchain());
+    // A PlatformIO or CMake project builds no Rust for its part: no target
+    // to add, no forked toolchain, no nightly. What it needs instead is its
+    // own build system's tools and — for CMake — the part's C compiler.
+    let build = project.map(|p| p.build.clone()).unwrap_or_default();
+    let cargo = build.system == crate::model::BuildSystem::Cargo;
+
+    let needs_esp_toolchain = cargo && chip.as_ref().is_some_and(|c| c.needs_esp_toolchain());
     // A part whose target is a description the project carries: there is no
     // target to add, and what the build needs instead is a nightly cargo
     // that builds `core` itself, with the source to build it from.
-    let builds_std = chip
-        .as_ref()
-        .is_some_and(|c| c.toolchain == crate::model::ToolchainRequirement::NightlyBuildStd);
+    let builds_std = cargo
+        && chip
+            .as_ref()
+            .is_some_and(|c| c.toolchain == crate::model::ToolchainRequirement::NightlyBuildStd);
+
+    for (name, purpose, install) in crate::buildsys::tools_for(&build) {
+        let path = tools::find(name);
+        if path.is_none() {
+            problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "build-tool-missing",
+                    format!("{name} is not installed"),
+                    format!(
+                        "This is a {} project, and building it runs `{name}`, which is not on \
+                         PATH.",
+                        build.system.label()
+                    ),
+                )
+                .arg("tool", name)
+                .arg("system", build.system.label())
+                .fix(install),
+            );
+        }
+        status.tools.push(ToolStatus {
+            name: name.to_string(),
+            purpose: purpose.to_string(),
+            version: path.as_ref().and_then(|found| probe_version(found)),
+            path: path.map(|found| found.display().to_string()),
+            install_command: install.to_string(),
+            installable: false,
+            required: true,
+        });
+    }
+    // A CMake project compiles its C with the part's cross compiler, which
+    // nothing else installs; PlatformIO and ESP-IDF install their own.
+    let needs_c_compiler = build.system == crate::model::BuildSystem::Cmake
+        && build.sdk != Some(crate::model::CmakeSdk::EspIdf);
 
     // The C compiler, listed only once a chip says which one (the
     // catalogue's `c_compiler`). Not in [`TOOLS`] because it is the one
@@ -337,6 +378,23 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     if let Some(compiler) = chip.as_ref().and_then(|c| c.c_compiler.clone()) {
         let (binary, install) = (compiler.binary.as_str(), compiler.install.as_str());
         let path = tools::find(binary);
+        if needs_c_compiler && path.is_none() {
+            problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "c-compiler-missing",
+                    format!("{binary} is not installed"),
+                    format!(
+                        "This CMake project is compiled for the {} by `{binary}`, which is not \
+                         on PATH.",
+                        chip.as_ref().map_or("part", |c| c.name.as_str())
+                    ),
+                )
+                .arg("tool", binary)
+                .arg("chip", chip.as_ref().map_or("", |c| c.name.as_str()))
+                .fix(install),
+            );
+        }
         status.tools.push(ToolStatus {
             name: binary.to_string(),
             purpose: format!(
@@ -352,9 +410,10 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             // espup's to install, and clicking Install on *this* row could
             // not say so — its own row can.
             installable: binary == "riscv32-esp-elf-gcc" && cfg!(windows),
-            // Only projects that actually speak C need it, and the detection
-            // that knows whether this one does lives in `project::detect`.
-            required: false,
+            // A CMake project cannot build without it; for a Cargo one only
+            // projects that actually speak C need it, and the detection that
+            // knows whether this one does lives in `project::detect`.
+            required: needs_c_compiler,
         });
     }
 
@@ -416,6 +475,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     // The required target follows from chip + runtime; either being unknown
     // means there is nothing to check rather than something to complain about.
     let required_target = match (&chip, project.and_then(|p| p.runtime)) {
+        _ if !cargo => None,
         (Some(chip), Some(runtime)) => chip.target_for(runtime).map(str::to_string),
         _ => project.and_then(|p| p.configured_target.clone()),
     };
@@ -549,7 +609,11 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     // nagged about espflash — and only about the tools that flash *its*
     // part: a CH32 with espflash installed still cannot be flashed, and an
     // STM32 offered espflash would be sent to a tool that cannot reach it.
-    if let Some(part) = chip.as_ref() {
+    // PlatformIO flashes with its own upload, which is the tool above.
+    if let Some(part) = chip
+        .as_ref()
+        .filter(|_| build.system != crate::model::BuildSystem::PlatformIo)
+    {
         let tools: Vec<&str> = part.flashers.iter().map(|f| f.tool()).collect();
         let has_flasher = status
             .tools
@@ -957,6 +1021,7 @@ mod tests {
             c_interop: Default::default(),
             evidence: Vec::new(),
             problems: Vec::new(),
+            build: Default::default(),
         };
         let context = RustupContext::for_project(Some(&project));
         assert_eq!(context.cwd, Some(Path::new("E:/work/blinky")));

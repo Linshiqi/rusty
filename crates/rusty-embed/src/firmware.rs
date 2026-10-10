@@ -104,6 +104,16 @@ pub fn newest(root: &Path, configured_target: Option<&str>) -> Option<Firmware> 
         .or_else(|| all.into_iter().next())
 }
 
+/// Every image `project` (detected at `root`) has built, where its build
+/// system puts them: `target/<triple>/<profile>/` for Cargo, `.pio/build/
+/// <env>/` for PlatformIO, the build directory for CMake.
+pub fn list_project(root: &Path, project: &crate::model::EmbeddedProject) -> Vec<Firmware> {
+    match project.build.system {
+        crate::model::BuildSystem::Cargo => list(root, project.configured_target.as_deref()),
+        _ => crate::buildsys::images(root, project),
+    }
+}
+
 /// [`newest`] for the project opened at `root`: looked for where its
 /// firmware is built ([`crate::project::firmware_root`]), preferring the
 /// target that directory is configured for. In the standard layout — host
@@ -111,10 +121,14 @@ pub fn newest(root: &Path, configured_target: Option<&str>) -> Option<Firmware> 
 /// down, and a search at the opened root finds nothing at all.
 pub fn newest_in_project(root: &Path) -> Option<Firmware> {
     let firmware_root = crate::project::firmware_root(root);
-    let configured = crate::project::detect(&firmware_root)
-        .ok()
-        .and_then(|project| project.configured_target);
-    newest(&firmware_root, configured.as_deref())
+    let all = match crate::project::detect(&firmware_root) {
+        Ok(project) => list_project(&firmware_root, &project),
+        Err(_) => list(&firmware_root, None),
+    };
+    all.iter()
+        .find(|f| f.matches_configured_target)
+        .cloned()
+        .or_else(|| all.into_iter().next())
 }
 
 fn epoch_secs(time: SystemTime) -> Option<u64> {

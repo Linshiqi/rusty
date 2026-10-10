@@ -70,6 +70,10 @@ pub use protocol::{
     strip_colours, to_vcd,
 };
 
+// The build systems beside Cargo: PlatformIO and CMake, recognised, built,
+// flashed and searched for images.
+#[cfg(feature = "backend")]
+pub mod buildsys;
 #[cfg(feature = "backend")]
 pub mod catalog;
 pub mod circuit;

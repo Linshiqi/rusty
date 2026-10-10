@@ -428,17 +428,28 @@ pub fn build_then(state: AppState, after: impl FnOnce(bool) + 'static) {
     });
 }
 
+/// The project's own build, asked of the backend because it is its build
+/// system's: `cargo build --release`, `pio run`, or CMake's configure and
+/// build — the steps run one after another, and a failed one ends the run.
 fn build_saved(state: AppState, after: impl FnOnce(bool) + 'static) {
-    let plan = CommandPlan {
-        program: "cargo".to_string(),
-        args: vec!["build".to_string(), "--release".to_string()],
-        display: "cargo build --release".to_string(),
-        // Shown nowhere: the dock echoes the command, and the command is the
-        // whole of what there is to say about it.
-        rationale: String::new(),
-        warning: None,
-    };
-    run_session_then(state, plan, "build", move |code| {
+    track(
+        state,
+        ipc::get::<Vec<CommandPlan>>(cmd::firmware::BUILD_PLAN),
+        move |plans| build_steps(state, plans, after),
+    );
+}
+
+fn build_steps(state: AppState, mut plans: Vec<CommandPlan>, after: impl FnOnce(bool) + 'static) {
+    if plans.is_empty() {
+        after(false);
+        return;
+    }
+    let step = plans.remove(0);
+    run_session_then(state, step, "build", move |code| {
+        if matches!(code, Some(0)) && !plans.is_empty() {
+            build_steps(state, plans, after);
+            return;
+        }
         let built = matches!(code, Some(0));
         // `target/` is not watched, so nothing else would notice the new
         // image: the Memory panel and the next flash would both be reading

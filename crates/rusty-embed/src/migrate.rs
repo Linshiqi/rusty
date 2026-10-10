@@ -575,6 +575,7 @@ mod tests {
             gdb: None,
             c_compiler: None,
             svd: None,
+            aliases: Vec::new(),
         }
     }
 

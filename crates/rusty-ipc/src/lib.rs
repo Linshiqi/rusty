@@ -109,6 +109,8 @@ pub mod memory {
 /// Binaries the project has already built.
 pub mod firmware {
     pub const LIST: &str = "firmware_list";
+    /// The commands that build the open project, by its build system.
+    pub const BUILD_PLAN: &str = "build_plan";
 }
 
 /// Devices, and getting a binary onto one.

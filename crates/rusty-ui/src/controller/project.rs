@@ -266,6 +266,17 @@ fn reload_project(state: AppState) {
 /// is *for* — and the panels that need it already say so in their own terms. A
 /// red banner on every restore would be crying wolf about the expected thing.
 fn refresh_workspace(state: AppState) {
+    // The Cargo analysis has nothing to read in a PlatformIO or CMake
+    // project, and "cargo metadata unavailable" in the dock at every open
+    // would be a warning about a tool the project does not use.
+    let cargo = state.project.detected.with_untracked(|p| {
+        p.as_ref()
+            .is_none_or(|p| p.build.system == rusty_embed::BuildSystem::Cargo)
+    });
+    if !cargo {
+        state.project.workspace.set(None);
+        return;
+    }
     spawn_local(async move {
         match ipc::get::<WorkspaceReport>(cmd::project::WORKSPACE_REPORT).await {
             Ok(report) => state.project.workspace.set(Some(report)),

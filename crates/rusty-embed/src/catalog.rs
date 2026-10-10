@@ -126,6 +126,23 @@ impl Catalog {
         self.chips.iter().find(|c| c.id == wanted)
     }
 
+    /// The part a project names by `name` — its id, or one of its aliases
+    /// (an ordering code like `STM32F411CEU6`). Whole names only.
+    pub fn chip_named(&self, name: &str) -> Option<&Chip> {
+        let wanted = normalize(name);
+        self.chips
+            .iter()
+            .find(|c| c.id == wanted)
+            .or_else(|| self.chips.iter().find(|c| c.aliases.contains(&wanted)))
+    }
+
+    /// The board PlatformIO calls `id`.
+    pub fn board_for_platformio(&self, id: &str) -> Option<&Board> {
+        self.boards
+            .iter()
+            .find(|b| b.platformio.as_deref() == Some(id))
+    }
+
     pub fn board(&self, id: &str) -> Option<&Board> {
         self.boards.iter().find(|b| b.id == id)
     }
@@ -363,6 +380,8 @@ struct ChipEntry {
     c_compiler: Option<CCompilerEntry>,
     #[serde(default)]
     svd: Option<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
 }
 
 impl ChipEntry {
@@ -401,6 +420,7 @@ impl ChipEntry {
                 install: c.install,
             }),
             svd: self.svd,
+            aliases: self.aliases.iter().map(|a| normalize(a)).collect(),
         }
     }
 }
@@ -548,6 +568,8 @@ struct BoardEntry {
     /// matter to it without the schema growing a field per peripheral.
     #[serde(default)]
     pins: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    platformio: Option<String>,
 }
 
 impl BoardEntry {
@@ -574,6 +596,7 @@ impl BoardEntry {
                 .map(|(name, gpio)| PinAssignment { name, gpio })
                 .collect(),
             source,
+            platformio: self.platformio,
         }
     }
 }

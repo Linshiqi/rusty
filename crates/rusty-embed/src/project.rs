@@ -39,12 +39,15 @@ const FRAMEWORK_CRATES: &[(&str, &str)] = &[
     ("esp-println", "println over UART/JTAG"),
 ];
 
-/// Inspect a project directory.
+/// Inspect a project directory: a Cargo project here, a PlatformIO or
+/// CMake one in [`crate::buildsys`], whichever file is at the root.
 pub fn detect(root: &Path) -> Result<EmbeddedProject> {
-    let manifest_path = root.join("Cargo.toml");
-    if !manifest_path.is_file() {
-        return Err(Error::NotACargoProject(root.display().to_string()));
+    match crate::buildsys::system_at(root) {
+        Some(crate::model::BuildSystem::Cargo) => {}
+        Some(other) => return crate::buildsys::detect(root, other),
+        None => return Err(Error::NotAProject(root.display().to_string())),
     }
+    let manifest_path = root.join("Cargo.toml");
 
     let manifest = read_toml(&manifest_path)?;
     let mut evidence = vec!["Cargo.toml".to_string()];
@@ -121,6 +124,7 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
         c_interop,
         evidence,
         problems: Vec::new(),
+        build: Default::default(),
     };
     project.problems = diagnose(&project);
     Ok(project)

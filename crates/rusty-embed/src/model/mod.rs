@@ -46,8 +46,8 @@ pub use playground::{
     PLAYGROUND_DRAW, PLAYGROUND_MAIN, PLAYGROUNDS, playground_has_board, playground_main,
 };
 pub use project::{
-    CInterop, Edit, EmbeddedProject, FileChange, Migration, PinClaim, PinInfo, PinReport, Problem,
-    ScaffoldReport, Severity,
+    BuildSetup, BuildSystem, CInterop, CmakeSdk, Edit, EmbeddedProject, FileChange, Migration,
+    PinClaim, PinInfo, PinReport, Problem, ScaffoldReport, Severity,
 };
 pub use registers::{Peripheral, Register, RegisterField, RegisterMap};
 pub use repo::{REPO, REPO_ISSUES, REPO_RELEASES};

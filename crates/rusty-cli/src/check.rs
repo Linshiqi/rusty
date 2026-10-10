@@ -41,6 +41,26 @@ pub(crate) fn check(path: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// `rusty build`: the open project's build plan, run step by step where
+/// the firmware is built, stopping at the first step that fails.
+pub(crate) fn build(path: &Path) -> Result<()> {
+    let root = project::firmware_root(path);
+    let detected =
+        project::detect(&root).with_context(|| format!("inspecting {}", root.display()))?;
+    for plan in rusty_embed::buildsys::build_plans(&detected, &root)? {
+        eprintln!("$ {}", plan.display);
+        let status = rusty_embed::process::command(&plan.program)
+            .args(&plan.args)
+            .current_dir(&root)
+            .status()
+            .with_context(|| format!("running {}", plan.program))?;
+        if !status.success() {
+            anyhow::bail!("`{}` failed ({status})", plan.display);
+        }
+    }
+    Ok(())
+}
+
 /// `rusty size`: where a built firmware's bytes went, by section and by
 /// crate.
 pub(crate) fn size(elf: PathBuf, path: PathBuf, json: bool) -> Result<()> {
@@ -62,8 +82,8 @@ pub(crate) fn size(elf: PathBuf, path: PathBuf, json: bool) -> Result<()> {
             .map(|firmware| PathBuf::from(firmware.path))
             .with_context(|| {
                 format!(
-                    "no built firmware found under {}: build first, or name the ELF",
-                    firmware_dir.join("target").display()
+                    "no built firmware found for {}: build first, or name the ELF",
+                    firmware_dir.display()
                 )
             })?,
     };
@@ -79,24 +99,41 @@ pub(crate) fn size(elf: PathBuf, path: PathBuf, json: bool) -> Result<()> {
 
 fn print_check(project: &EmbeddedProject, toolchain: &ToolchainReport) {
     println!("{}", project.root);
-    println!(
-        "chip {} | {} | target {} | toolchain {}",
-        project.chip.as_deref().unwrap_or("unknown"),
-        project
-            .runtime
-            .map(
-                |r| match project.chip.as_deref().and_then(rusty_embed::chip::by_id) {
-                    Some(chip) => chip.runtime_label(r),
-                    None => r.label().to_string(),
-                }
-            )
-            .unwrap_or_else(|| "runtime unknown".to_string()),
-        project.configured_target.as_deref().unwrap_or("unset"),
-        project
-            .configured_toolchain
+    // A PlatformIO or CMake project has no Rust target or toolchain to
+    // print; what it has is its build system, its SDK or environment.
+    let build = &project.build;
+    if build.system != rusty_embed::BuildSystem::Cargo {
+        let detail = build
+            .environment
             .as_deref()
-            .unwrap_or("unpinned"),
-    );
+            .map(|env| format!("env {env}"))
+            .or_else(|| build.sdk.map(|sdk| sdk.label().to_string()))
+            .unwrap_or_else(|| "no SDK named".to_string());
+        println!(
+            "chip {} | {} | {detail}",
+            project.chip.as_deref().unwrap_or("unknown"),
+            build.system.label(),
+        );
+    } else {
+        println!(
+            "chip {} | {} | target {} | toolchain {}",
+            project.chip.as_deref().unwrap_or("unknown"),
+            project
+                .runtime
+                .map(
+                    |r| match project.chip.as_deref().and_then(rusty_embed::chip::by_id) {
+                        Some(chip) => chip.runtime_label(r),
+                        None => r.label().to_string(),
+                    }
+                )
+                .unwrap_or_else(|| "runtime unknown".to_string()),
+            project.configured_target.as_deref().unwrap_or("unset"),
+            project
+                .configured_toolchain
+                .as_deref()
+                .unwrap_or("unpinned"),
+        );
+    }
     if let Some(source) = &project.chip_source {
         println!("  (chip from {source})");
     }

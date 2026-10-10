@@ -313,6 +313,8 @@ radios = ["none"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 45, 46, 47]
 ports = { width = 16 }
 generator = { template = "stm32f411ce" }
+# The ordering code a .ioc or a platformio.ini names the part by.
+aliases = ["stm32f411ceu6", "stm32f411ceux"]
 gdb = "arm-none-eabi-gdb"
 c_compiler = { binary = "arm-none-eabi-gcc", install = "download the Arm GNU Toolchain (AArch32 bare-metal, arm-none-eabi) from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads and put its bin/ on PATH" }
 svd = "https://raw.githubusercontent.com/modm-io/cmsis-svd-stm32/main/stm32f4/STM32F411.svd"
@@ -333,6 +335,8 @@ radios = ["none"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 45, 46, 47]
 ports = { width = 16 }
 generator = { template = "stm32f411ce" }
+# The ordering code a .ioc or a platformio.ini names the part by.
+aliases = ["stm32f401ccu6", "stm32f401ccux"]
 gdb = "arm-none-eabi-gdb"
 c_compiler = { binary = "arm-none-eabi-gcc", install = "download the Arm GNU Toolchain (AArch32 bare-metal, arm-none-eabi) from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads and put its bin/ on PATH" }
 svd = "https://raw.githubusercontent.com/modm-io/cmsis-svd-stm32/main/stm32f4/STM32F401.svd"

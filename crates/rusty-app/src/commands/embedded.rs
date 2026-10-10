@@ -140,10 +140,10 @@ pub async fn toolchain_report(state: State<'_, AppState>) -> Answer<ToolchainRep
 pub async fn firmware_list(state: State<'_, AppState>) -> Answer<Vec<Firmware>> {
     let root = state.require_firmware_root().await?;
     blocking("listing the firmware", move || {
-        let configured = project::detect(&root)
-            .ok()
-            .and_then(|p| p.configured_target);
-        firmware::list(&root, configured.as_deref())
+        match project::detect(&root) {
+            Ok(detected) => firmware::list_project(&root, &detected),
+            Err(_) => firmware::list(&root, None),
+        }
     })
     .await
 }

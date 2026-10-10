@@ -42,6 +42,14 @@ enum Command {
         json: bool,
     },
 
+    /// Build the project the way the window's Build does: its build
+    /// system's commands — `cargo build --release`, `pio run`, or CMake's
+    /// configure and build — one after another, each echoed first.
+    Build {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+
     /// Parts and boards rusty knows about, including any the project adds.
     Catalog {
         /// Show boards instead of chips.
@@ -196,6 +204,7 @@ enum Command {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Check { path, json } => check::check(&path, json),
+        Command::Build { path } => check::build(&path),
         Command::Catalog { boards, path, json } => hardware::catalog(&path, boards, json),
         Command::Devices { path, json } => hardware::devices(&path, json),
         Command::Size { elf, path, json } => check::size(elf, path, json),

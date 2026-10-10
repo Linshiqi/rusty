@@ -121,6 +121,7 @@ mod tests {
             evidence: Vec::new(),
             problems: Vec::new(),
             c_interop: Default::default(),
+            build: Default::default(),
         }
     }
 

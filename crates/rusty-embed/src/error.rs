@@ -24,8 +24,10 @@ pub enum Error {
         source: toml::de::Error,
     },
 
-    #[error("no Cargo.toml at `{0}` — open the folder that contains one")]
-    NotACargoProject(String),
+    #[error(
+        "no Cargo.toml, platformio.ini or CMakeLists.txt at `{0}` — open the folder that          contains one"
+    )]
+    NotAProject(String),
 
     #[error("`{path}` could not be written")]
     Write {

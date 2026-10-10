@@ -52,7 +52,20 @@ pub async fn plan_flash(
     let root = state.require_firmware_root().await?;
     let catalog = state.catalog().await;
     blocking("planning the flash", move || {
-        let chip_id = project::detect(&root)?.chip.ok_or_else(|| {
+        let detected = project::detect(&root)?;
+        // A PlatformIO project is flashed by PlatformIO, which reads the
+        // upload protocol and the probe from the environment.
+        if detected.build.system == rusty_embed::BuildSystem::PlatformIo {
+            let env = detected.build.environment.ok_or_else(|| {
+                CommandError::new(
+                    "platformio.ini declares no [env:…] section, so there is nothing to upload.",
+                )
+            })?;
+            return Ok(rusty_embed::buildsys::platformio_flash(
+                &env, &transport, action, baud,
+            ));
+        }
+        let chip_id = detected.chip.ok_or_else(|| {
             CommandError::new(
                 "The target chip is unknown, so rusty cannot choose a flashing command. \
                  Fix the problems listed in the Project panel first.",
@@ -76,6 +89,19 @@ pub async fn plan_flash(
         })?;
         plan.warning = warning;
         Ok(plan)
+    })
+    .await?
+}
+
+/// The commands that build the open project, in order: its build system's
+/// — `cargo build --release`, `pio run`, or CMake's configure and build.
+/// The title bar's Build and Flash run them one after another.
+#[tauri::command]
+pub async fn build_plan(state: State<'_, AppState>) -> Answer<Vec<CommandPlan>> {
+    let root = state.require_firmware_root().await?;
+    blocking("planning the build", move || {
+        let detected = project::detect(&root)?;
+        Ok(rusty_embed::buildsys::build_plans(&detected, &root)?)
     })
     .await?
 }
