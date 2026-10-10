@@ -456,10 +456,11 @@ pub async fn watch_project(
             } else {
                 rusty_lsp::watched::file_events(&known, &known, &batch.changed)
             };
-            if !events.is_empty()
-                && let Some(client) = tauri::async_runtime::block_on(app.state::<AppState>().lsp())
-            {
-                let _ = client.did_change_watched_files(&events);
+            if !events.is_empty() {
+                // Each server is told only if it asked to be (`watching`).
+                for client in tauri::async_runtime::block_on(app.state::<AppState>().servers()) {
+                    let _ = client.did_change_watched_files(&events);
+                }
             }
             if on_change.send(batch).is_err() {
                 // The WebView is gone — the one thing a failed send means.

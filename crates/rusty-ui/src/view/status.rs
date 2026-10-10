@@ -350,12 +350,18 @@ pub(super) fn StatusBar() -> impl IntoView {
                         // reason takes the tooltip's place, since a failure
                         // nobody can read is a colour and nothing more.
                         let health = state.lsp.health.get();
-                        let server = state
+                        let first = state
                             .lsp
                             .server
                             .get()
                             .unwrap_or(rusty_lsp::ServerKind::RustAnalyzer)
                             .label();
+                        // `rust-analyzer + clangd` in a Cargo project whose
+                        // C has a server of its own.
+                        let server = match state.lsp.companion.get() {
+                            Some(companion) => format!("{first} + {}", companion.label()),
+                            None => first.to_string(),
+                        };
                         let title = match &health {
                             Some((_, Some(why))) => why.clone(),
                             _ => t!("status.lsp-hint"),

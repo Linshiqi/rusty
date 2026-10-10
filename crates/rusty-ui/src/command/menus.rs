@@ -347,6 +347,11 @@ fn project_menu(chord: &dyn Fn(Action) -> Option<String>) -> Vec<Item> {
                     None,
                 ),
                 project_entry(
+                    Action::ScaffoldC("rust-calls-cpp"),
+                    &t!("menu.project.rust-calls-cpp"),
+                    None,
+                ),
+                project_entry(
                     Action::ScaffoldC("c-calls-rust"),
                     &t!("menu.project.c-calls-rust"),
                     None,

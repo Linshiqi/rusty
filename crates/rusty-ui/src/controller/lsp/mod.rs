@@ -55,6 +55,19 @@ pub fn start_lsp(state: AppState) {
     } else {
         rusty_lsp::ServerKind::Clangd
     }));
+    // clangd beside rust-analyzer when the project carries C, said before it
+    // is up: an editor drawn for a C file reads `served` once, and one drawn
+    // while clangd was starting would ask it nothing until reopened. Until
+    // clangd answers, the backend has no server for the file and every
+    // question about it comes back empty, as any server's do while it loads.
+    let has_c = state
+        .project
+        .detected
+        .with_untracked(|p| p.as_ref().is_some_and(|p| p.c_interop.sources > 0));
+    state
+        .lsp
+        .companion
+        .set((cargo && has_c).then_some(rusty_lsp::ServerKind::Clangd));
     state.lsp.status.set(LspStatus::Starting);
     state.lsp.progress.set(None);
 
@@ -164,6 +177,44 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
                 },
                 Duration::from_millis(300),
             );
+        }
+        // clangd beside rust-analyzer: the C files on screen are announced
+        // to it as the Rust ones were to the first, or why it is not there
+        // is said once in the dock. The project still works without it.
+        LspEvent::Companion {
+            server,
+            message: None,
+            ..
+        } => {
+            state.lsp.companion.set(Some(server));
+            for group in state.open_groups() {
+                if let Some(path) = group.active_path_now()
+                    && server.serves(&path)
+                {
+                    lsp_open_doc(state, path.clone(), group.editor.draft.get_untracked());
+                    request_semantic(group, path.clone());
+                    request_hints(group, path);
+                }
+            }
+        }
+        LspEvent::Companion {
+            server,
+            message: Some(message),
+            install,
+        } => {
+            state.lsp.companion.set(None);
+            state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: format!("{}: {message}", server.label()),
+                level: Some(LogLevel::Warn),
+            });
+            if let Some(install) = install {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: format!("$ {install}"),
+                    level: None,
+                });
+            }
         }
         LspEvent::Exited {} => {
             state.lsp.progress.set(None);

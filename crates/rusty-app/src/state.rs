@@ -95,6 +95,10 @@ pub struct AppState {
     /// project's target directory open, and a server answering questions about
     /// a workspace nobody is looking at is pure cost.
     lsp: Mutex<Option<Arc<rusty_lsp::LspClient>>>,
+    /// A second server beside it, for the files it serves: clangd for the C
+    /// a Cargo project compiles with `cc`, while rust-analyzer has the Rust.
+    /// Replaced, and so emptied, whenever the first is.
+    companion: Mutex<Option<Arc<rusty_lsp::LspClient>>>,
     /// The project watcher, if one is up, with the ticket its starter holds.
     ///
     /// Numbered rather than shared, because the reader loop must not keep the
@@ -350,6 +354,35 @@ impl AppState {
         self.lsp.lock().await.clone()
     }
 
+    /// The server a question about `path` goes to — whichever serves it,
+    /// or none. Never the other: rust-analyzer told about a `.c` file
+    /// answers with a syntax error per line, and the window asks about a C
+    /// file before clangd beside it has started.
+    pub async fn lsp_for(&self, path: &str) -> Option<Arc<rusty_lsp::LspClient>> {
+        if let Some(companion) = self.companion.lock().await.clone()
+            && companion.kind().serves(path)
+        {
+            return Some(companion);
+        }
+        self.lsp().await.filter(|client| client.kind().serves(path))
+    }
+
+    /// Every server running, the project's own first.
+    pub async fn servers(&self) -> Vec<Arc<rusty_lsp::LspClient>> {
+        let mut all: Vec<_> = self.lsp().await.into_iter().collect();
+        all.extend(self.companion.lock().await.clone());
+        all
+    }
+
+    /// Register the server beside the project's own, burying whatever it
+    /// replaces off this thread, as `set_lsp` does.
+    pub async fn set_companion(&self, client: Option<Arc<rusty_lsp::LspClient>>) {
+        let previous = std::mem::replace(&mut *self.companion.lock().await, client);
+        if let Some(previous) = previous {
+            tauri::async_runtime::spawn_blocking(move || drop(previous));
+        }
+    }
+
     /// Register the project's language server, dropping — and thereby killing —
     /// whatever it replaces.
     /// Register the language server, burying whatever it replaces — off this
@@ -373,6 +406,7 @@ impl AppState {
         if let Some(previous) = previous {
             tauri::async_runtime::spawn_blocking(move || drop(previous));
         }
+        self.set_companion(None).await;
     }
 
     pub fn files(&self) -> Arc<rusty_edit::Files> {

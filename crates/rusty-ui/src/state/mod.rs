@@ -245,6 +245,7 @@ impl AppState {
                 progress: RwSignal::new(None),
                 health: RwSignal::new(None),
                 server: RwSignal::new(None),
+                companion: RwSignal::new(None),
             },
             sim: Sim {
                 display: RwSignal::new(String::new()),
@@ -429,14 +430,15 @@ impl AppState {
         self.project.detected.with_untracked(Option::is_some)
     }
 
-    /// Whether the project's language server is told about `path` — a
-    /// `.rs` file for rust-analyzer, C or C++ for clangd. Every request the
-    /// editor makes of the server asks this first. Untracked.
+    /// Whether a language server is told about `path` — a `.rs` file for
+    /// rust-analyzer, C or C++ for clangd, and in a Cargo project with C
+    /// both, each for its own (the backend routes every request by the
+    /// same rule). Every request the editor makes of a server asks this
+    /// first. Untracked.
     pub fn served(&self, path: &str) -> bool {
-        self.lsp
-            .server
-            .get_untracked()
-            .is_some_and(|server| server.serves(path))
+        [self.lsp.server, self.lsp.companion]
+            .iter()
+            .any(|server| server.get_untracked().is_some_and(|s| s.serves(path)))
     }
 
     /// The chip whose playground is open, tracked — `None` for any other

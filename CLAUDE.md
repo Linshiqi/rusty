@@ -5372,11 +5372,37 @@ the workbench knows about C without becoming a C IDE.
   with what it found — `cc`, `bindgen`, `esp-idf-sys`, a `staticlib`
   crate-type, C sources in the project — and each claim carries the file
   that proves it.
-- **Scaffolding refuses before it writes.** `scaffold::c_interop` writes both
-  directions (Rust calls C, C calls Rust) and stops on the first path that
-  exists: half a scaffold over somebody's code cannot be undone by an error
-  message. It does not edit `Cargo.toml` either — `cargo add cc --build` is
-  the official path, visible in the dock like every other command.
+- **Scaffolding refuses before it writes.** `scaffold::c_interop` writes
+  three directions — Rust calls C, Rust calls C++, C calls Rust — and stops
+  on the first path that exists: half a scaffold over somebody's code cannot
+  be undone by an error message. It does not edit `Cargo.toml` either —
+  `cargo add cc --build` is the official path, visible in the dock like
+  every other command.
+- **An existing `build.rs` is joined, not refused.** The C build goes into
+  `build_c.rs` and the build script gains exactly two lines, `mod build_c;`
+  and `build_c::compile();` at the top of `main` (`merge_build_script`).
+  Every embedded template has a build script — the link scripts are passed
+  there — so refusing one refused C for every part but the Espressif ones.
+  A `main` that is not one `fn main() {` line is not guessed at: the refusal
+  names the two lines. The build script names the part's cross compiler
+  (`Chip::c_compiler`), since `cc`'s guess for a bare-metal triple is a
+  generic toolchain that may not be installed; for C++ it is the matching
+  `g++`, with no exceptions, no RTTI, no guarded statics and no libstdc++
+  linked — and the C++ sits behind an `extern "C"` function, because Rust
+  calls C, never C++. Both directions were built for a Black Pill with the
+  Arm toolchain and read back with `nm`.
+- **The memory report names a C file as it names a crate.** C has no crate,
+  and everything without one was "unattributed"; `vendor.cpp` is an entry
+  of its own now, found two ways: the image's DWARF, whose non-Rust compile
+  units say which addresses each source covers (`gimli`), and without debug
+  information — a CMake Release build — the `STT_FILE` symbol a file's own
+  `static`s are listed under. A global with neither stays unattributed.
+  **Most of that bucket was never C**: a v0 symbol for an impl's method
+  demangles to `<u64 as core::fmt::Display>::fmt` or `<Executor>::spawn`,
+  which begin with `<` and name no crate, so every method of every impl was
+  unattributed — 5.5 KB of a 13.8 KB image. `v0_crate` reads the defining
+  crate off the mangled name (the impl's own path is encoded first), and
+  the names lose the `[26b6afaf38d9ac34]` hash the plain form prints.
 - **`.h` is C here.** syntect gives the extension to Objective-C, whose
   grammar colours a firmware header wrongly in ways that read as a broken
   highlighter.
@@ -5476,6 +5502,22 @@ the editor Rust-only, and the client under them was already plain LSP.
   right column under a CJK comment, completion and hover through the same
   client — and skips aloud where none is installed, as `tests/analyzer.rs`
   does. Format-on-save stays Rust's (rustfmt); a C file is saved as typed.
+- **A Cargo project with C runs both servers**, each for its own files: the
+  C a `cc` build script compiles goes to a clangd beside rust-analyzer
+  (`AppState::companion`, `LspEvent::Companion`), and every request is
+  routed by its path (`AppState::lsp_for`) — to the server that serves it,
+  or to none, never the other. `cc` records no command line, so rusty
+  writes the compile database it would have used
+  (`buildsys::cargo_compile_commands`: the part's compiler by name, which
+  `--query-driver` asks for newlib's headers, freestanding, every header
+  directory included) under the data directory, never into the project.
+  The companion's diagnostics and refreshes share the first server's
+  stream; its progress, health and exit do not, since the status bar is
+  the first server's — which reads `rust-analyzer + clangd`. The window
+  marks the companion from detection (`c_interop.sources`) before clangd is
+  up, because an editor drawn for a C file reads `served` once, and the
+  backend's routing is what keeps rust-analyzer from hearing about it in
+  the meantime.
 
 ## After every feature: review before moving on
 

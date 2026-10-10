@@ -105,10 +105,12 @@ pub struct MemoryReport {
     /// Loaded sections, largest first.
     pub sections: Vec<SectionSize>,
     pub totals: MemoryTotals,
-    /// Per-crate attribution, largest first.
+    /// Per-crate attribution, largest first. A C or C++ source file is an
+    /// entry too, under its file name (`vendor.cpp`): it has no crate, and
+    /// the file is what somebody would go and shrink.
     pub crates: Vec<CrateSize>,
-    /// Bytes belonging to symbols with no identifiable crate — assembly, C from
-    /// ESP-IDF, ROM stubs. Reported separately rather than distributed, so the
-    /// per-crate figures stay honest.
+    /// Bytes belonging to symbols with neither a crate nor a source file —
+    /// assembly, linker fill, unnamed constants. Reported separately rather
+    /// than distributed, so the per-crate figures stay honest.
     pub unattributed_bytes: u64,
 }

@@ -837,6 +837,183 @@ pub fn query_driver_globs(catalog: &Catalog) -> Vec<String> {
     globs
 }
 
+// ─── C inside a Cargo project ────────────────────────────────────────────────
+
+/// The C and C++ sources a Cargo project carries — what a `cc` build script
+/// compiles — as paths relative to `root` with `/`, in a stable order.
+///
+/// The walk is the tree's: dot entries, `target/` and any directory cargo
+/// marked as a build directory (`CACHEDIR.TAG`) are left out, and it stops
+/// at a few thousand entries, since a vendored SDK under the root is no
+/// reason to read the whole of it before the editor can start.
+pub fn c_sources(root: &Path) -> Vec<String> {
+    const LIMIT: usize = 4000;
+    let mut found = Vec::new();
+    let mut seen = 0usize;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > LIMIT {
+                break;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                if name != "target" && !path.join("CACHEDIR.TAG").is_file() {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if c_language(&name).is_some()
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                found.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Whether a file is a C or C++ source or header, by its extension:
+/// `Some(false)` for C, `Some(true)` for C++. `.h` is C — what a firmware
+/// header nearly always is.
+fn c_language(name: &str) -> Option<bool> {
+    match name.rsplit_once('.')?.1 {
+        "c" | "h" => Some(false),
+        "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => Some(true),
+        _ => None,
+    }
+}
+
+/// `relative` (with `/`) under `root`, joined a segment at a time so the
+/// path is the host's own: `E:\proj\csrc\vendor.c`, not `E:\proj\csrc/vendor.c`,
+/// which clangd would hold as a second spelling of the file the editor
+/// opens.
+fn native(root: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(root.to_path_buf(), |path, segment| path.join(segment))
+}
+
+fn is_header(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, extension)| matches!(extension, "h" | "hh" | "hpp" | "hxx"))
+}
+
+/// The compile database clangd reads for the C in a Cargo project, as JSON:
+/// one entry per source in `sources` (relative to `root`, as `c_sources`
+/// names them), compiled by the part's cross compiler.
+///
+/// `cc` records no command line, so this is what it *would* run, said
+/// plainly: the part's compiler by name — which `--query-driver` then asks
+/// for its system headers and its target, so `<string.h>` and `<stdint.h>`
+/// are newlib's and not the host's — freestanding as firmware C is, every
+/// directory holding a header on the include path, and for C++ the three
+/// switches the scaffold's build script compiles with. The flags a project's
+/// own `build.rs` adds are not in it; a define it passes is one clangd does
+/// not know.
+pub fn cargo_compile_commands(
+    root: &Path,
+    sources: &[String],
+    compiler: Option<&str>,
+) -> serde_json::Value {
+    let directory = root.display().to_string();
+    let mut includes: Vec<String> = sources
+        .iter()
+        .filter(|path| is_header(path))
+        .map(|path| match path.rsplit_once('/') {
+            Some((dir, _)) => native(root, dir).display().to_string(),
+            None => directory.clone(),
+        })
+        .collect();
+    includes.sort();
+    includes.dedup();
+
+    let entries: Vec<serde_json::Value> = sources
+        .iter()
+        .filter_map(|path| {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            let cpp = c_language(name)?;
+            // Headers are not compiled; clangd takes their flags from a
+            // source beside them.
+            if is_header(name) {
+                return None;
+            }
+            let program = match (compiler, cpp) {
+                (Some(gcc), true) => gcc
+                    .strip_suffix("gcc")
+                    .map_or(gcc.to_string(), |stem| format!("{stem}g++")),
+                (Some(gcc), false) => gcc.to_string(),
+                (None, true) => "c++".to_string(),
+                (None, false) => "cc".to_string(),
+            };
+            let mut arguments = vec![program];
+            if cpp {
+                arguments.extend(
+                    [
+                        "-std=gnu++17",
+                        "-fno-exceptions",
+                        "-fno-rtti",
+                        "-fno-threadsafe-statics",
+                    ]
+                    .map(String::from),
+                );
+            } else {
+                arguments.push("-std=gnu11".to_string());
+            }
+            if compiler.is_some() {
+                arguments.push("-ffreestanding".to_string());
+            }
+            arguments.extend(includes.iter().map(|dir| format!("-I{dir}")));
+            let file = native(root, path).display().to_string();
+            arguments.extend(["-c".to_string(), file.clone()]);
+            Some(serde_json::json!({
+                "directory": directory,
+                "file": file,
+                "arguments": arguments,
+            }))
+        })
+        .collect();
+    serde_json::Value::Array(entries)
+}
+
+/// Write the compile database for a Cargo project's C, and answer with the
+/// directory it is in — `None` when the project has no C or C++ at all, so
+/// no clangd is started for it.
+///
+/// It goes under the data directory (`clangd/<hash of the root>/`), never
+/// into the project: a file rusty made up has no place in somebody's
+/// repository, and `target/` may not be where the build directory is.
+pub fn write_cargo_compile_commands(root: &Path, compiler: Option<&str>) -> Option<PathBuf> {
+    let sources = c_sources(root);
+    if sources.iter().all(|path| is_header(path)) {
+        return None;
+    }
+    let database = cargo_compile_commands(root, &sources, compiler);
+    let key = root
+        .display()
+        .to_string()
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    let dir = crate::config::data_dir()?
+        .join("clangd")
+        .join(format!("{key:016x}"));
+    std::fs::create_dir_all(&dir).ok()?;
+    let text = serde_json::to_string_pretty(&database).ok()?;
+    std::fs::write(dir.join("compile_commands.json"), text).ok()?;
+    Some(dir)
+}
+
 // ─── the tools each needs ────────────────────────────────────────────────────
 
 /// The programs a project's build system runs, beside what each is for and

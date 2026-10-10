@@ -118,6 +118,33 @@ pub async fn lsp_start(
     })
     .await?;
 
+    // The C a `cc` build script compiles is clangd's, beside rust-analyzer,
+    // read through a compile database rusty writes — cc records no command
+    // line — naming the part's cross compiler, which `--query-driver` asks
+    // for its system headers.
+    let companion = blocking("the language server task", {
+        let root = state.require_root().await?;
+        move || {
+            let compiler = rusty_embed::project::detect(&root)
+                .ok()
+                .and_then(|project| project.chip)
+                .and_then(|id| rusty_embed::chip::by_id(&id))
+                .and_then(|chip| chip.c_compiler)
+                .map(|compiler| compiler.binary);
+            let database =
+                rusty_embed::buildsys::write_cargo_compile_commands(&root, compiler.as_deref())?;
+            let catalog = rusty_embed::catalog::Catalog::load(Some(&root));
+            let globs = rusty_embed::buildsys::query_driver_globs(&catalog);
+            Some(LspClient::spawn_clangd(
+                &root,
+                Some(&database),
+                &globs,
+                None,
+            ))
+        }
+    })
+    .await?;
+
     let (client, events) = match spawned {
         Ok(pair) => pair,
         Err(e) => {
@@ -134,7 +161,7 @@ pub async fn lsp_start(
         }
     };
 
-    serve(&state, on_event, client, events).await
+    serve_with(&state, on_event, client, events, companion).await
 }
 
 /// Where clangd comes from: LLVM's own releases, or the system's package.
@@ -148,8 +175,52 @@ async fn serve(
     client: LspClient,
     events: rusty_lsp::Events,
 ) -> Result<(), CommandError> {
+    serve_with(state, on_event, client, events, None).await
+}
+
+/// `serve`, with a second server beside the first when one was asked for:
+/// its diagnostics and refreshes go down the same stream, and nothing else
+/// it says — its progress, its health, its exit — since the status bar is
+/// the first server's.
+async fn serve_with(
+    state: &AppState,
+    on_event: Channel<LspEvent>,
+    client: LspClient,
+    events: rusty_lsp::Events,
+    companion: Option<rusty_lsp::Result<(LspClient, rusty_lsp::Events)>>,
+) -> Result<(), CommandError> {
     state.set_lsp(Some(Arc::new(client))).await;
     let _ = on_event.send(LspEvent::Ready {});
+
+    match companion {
+        Some(Ok((companion, events))) => {
+            let server = companion.kind();
+            state.set_companion(Some(Arc::new(companion))).await;
+            let _ = on_event.send(LspEvent::Companion {
+                server,
+                message: None,
+                install: None,
+            });
+            let on_event = on_event.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                while let Some(event) = events.recv() {
+                    let passed =
+                        matches!(event, LspEvent::Diagnostics { .. } | LspEvent::Refresh {});
+                    if passed && on_event.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        Some(Err(e)) => {
+            let _ = on_event.send(LspEvent::Companion {
+                server: rusty_lsp::ServerKind::Clangd,
+                message: Some(e.to_string()),
+                install: Some(CLANGD_INSTALL.to_string()),
+            });
+        }
+        None => {}
+    }
 
     let _ = tokio::task::spawn_blocking(move || {
         while let Some(event) = events.recv() {
@@ -170,7 +241,10 @@ pub async fn lsp_open(
     text: String,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    ask(&state, move |client| client.did_open(&path, &text)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.did_open(&path, &text)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -179,17 +253,26 @@ pub async fn lsp_change(
     draft: Draft,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    ask(&state, move |client| client.sync_draft(&path, &draft)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.sync_draft(&path, &draft)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn lsp_saved(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    ask(&state, move |client| client.did_save(&path)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.did_save(&path)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn lsp_close(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    ask(&state, move |client| client.did_close(&path)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.did_close(&path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -200,7 +283,7 @@ pub async fn lsp_complete(
     draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<CompletionList, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         synced(client, &path, draft.as_ref())?;
         client.completion(&path, line, col)
     })
@@ -217,7 +300,7 @@ pub async fn lsp_resolve_completion(
     index: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::ActionEdit>, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         client.resolve_completion(&path, reply, index)
     })
     .await
@@ -230,7 +313,10 @@ pub async fn lsp_hover(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Option<HoverInfo>, CommandError> {
-    ask(&state, move |client| client.hover(&path, line, col)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.hover(&path, line, col)
+    })
+    .await
 }
 
 /// Quick fixes and refactorings at the caret, edits pre-resolved.
@@ -242,7 +328,7 @@ pub async fn lsp_code_actions(
     draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<rusty_lsp::CodeActions, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         synced(client, &path, draft.as_ref())?;
         client.code_actions(&path, line, col)
     })
@@ -258,7 +344,7 @@ pub async fn lsp_apply_action(
     index: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         client.apply_action_elsewhere(&path, reply, index)
     })
     .await
@@ -272,7 +358,10 @@ pub async fn lsp_semantic(
     lines: Option<(u32, u32)>,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::SemanticSpan>, CommandError> {
-    ask(&state, move |client| client.semantic_tokens(&path, lines)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.semantic_tokens(&path, lines)
+    })
+    .await
 }
 
 /// The pulse after an edit, in one command: the edit given to the server,
@@ -288,7 +377,7 @@ pub async fn lsp_painted(
     hints: Option<(u32, u32)>,
     state: State<'_, AppState>,
 ) -> Result<rusty_lsp::Painted, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         client.sync_draft(&path, &draft)?;
         Ok(rusty_lsp::Painted {
             semantic: client.semantic_tokens(&path, lines).ok(),
@@ -307,7 +396,7 @@ pub async fn lsp_signature(
     draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_lsp::SignatureInfo>, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         synced(client, &path, draft.as_ref())?;
         client.signature_help(&path, line, col)
     })
@@ -321,7 +410,10 @@ pub async fn lsp_definition(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Option<Location>, CommandError> {
-    ask(&state, move |client| client.definition(&path, line, col)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.definition(&path, line, col)
+    })
+    .await
 }
 
 /// Every use of the symbol at this position, its declaration included.
@@ -332,7 +424,10 @@ pub async fn lsp_references(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Place>, CommandError> {
-    ask(&state, move |client| client.references(&path, line, col)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.references(&path, line, col)
+    })
+    .await
 }
 
 /// What implements the trait or method at this position, or the impls of
@@ -344,7 +439,7 @@ pub async fn lsp_implementations(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Place>, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         client.implementations(&path, line, col)
     })
     .await
@@ -358,7 +453,7 @@ pub async fn lsp_type_definition(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Place>, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         client.type_definition(&path, line, col)
     })
     .await
@@ -372,7 +467,7 @@ pub async fn lsp_highlights(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::EditRange>, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         client.document_highlights(&path, line, col)
     })
     .await
@@ -384,7 +479,10 @@ pub async fn lsp_document_symbols(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Symbol>, CommandError> {
-    ask(&state, move |client| client.document_symbols(&path)).await
+    ask(state.lsp_for(&path).await, move |client| {
+        client.document_symbols(&path)
+    })
+    .await
 }
 
 /// Symbols across the workspace whose names match `query`.
@@ -393,7 +491,14 @@ pub async fn lsp_workspace_symbols(
     query: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Symbol>, CommandError> {
-    ask(&state, move |client| client.workspace_symbols(&query)).await
+    // Every server's, the project's own first: in a Cargo project with C,
+    // `#` finds a C function as well as a Rust one.
+    let mut found = Vec::new();
+    for client in state.servers().await {
+        let query = query.clone();
+        found.extend(on_blocking(client, move |client| client.workspace_symbols(&query)).await?);
+    }
+    Ok(found)
 }
 
 /// The function at this position, where a call hierarchy starts.
@@ -404,7 +509,7 @@ pub async fn lsp_call_hierarchy(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::CallItem>, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         client.call_hierarchy(&path, line, col)
     })
     .await
@@ -420,7 +525,7 @@ pub async fn lsp_inlay_hints(
     draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<rusty_lsp::InlayHints, CommandError> {
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         synced(client, &path, draft.as_ref())?;
         client.inlay_hints(&path, from, to)
     })
@@ -435,7 +540,13 @@ pub async fn lsp_calls(
     incoming: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Call>, CommandError> {
-    ask(&state, move |client| {
+    // The item is the server's own description, and it names its file: the
+    // server that described it is the one to ask.
+    let uri = serde_json::from_str::<serde_json::Value>(&item)
+        .ok()
+        .and_then(|item| item["uri"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    ask(state.lsp_for(&uri).await, move |client| {
         if incoming {
             client.incoming_calls(&item)
         } else {
@@ -460,7 +571,7 @@ pub async fn lsp_expand_macro(
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_edit::Document>, CommandError> {
     let files = state.files();
-    ask(&state, move |client| {
+    ask(state.lsp_for(&path).await, move |client| {
         let Some(expanded) = client.expand_macro(&path, line, col)? else {
             return Ok::<_, rusty_lsp::Error>(None);
         };
@@ -488,15 +599,16 @@ fn synced(client: &LspClient, path: &str, draft: Option<&Draft>) -> rusty_lsp::R
     }
 }
 
-/// Ask the server, on the blocking pool — the client waits on a pipe — and
-/// answer with nothing when there is no server. The editor works without
-/// one: a list that is empty while rust-analyzer starts is the warm-up
-/// talking, as a definition that finds nothing is.
+/// Ask `server` — the one `AppState::lsp_for` picked for the file — on the
+/// blocking pool, since the client waits on a pipe, and answer with nothing
+/// when there is no server. The editor works without one: a list that is
+/// empty while rust-analyzer starts is the warm-up talking, as a definition
+/// that finds nothing is.
 async fn ask<T: Default + Send + 'static>(
-    state: &AppState,
+    server: Option<Arc<LspClient>>,
     question: impl FnOnce(&LspClient) -> rusty_lsp::Result<T> + Send + 'static,
 ) -> Result<T, CommandError> {
-    match state.lsp().await {
+    match server {
         Some(client) => on_blocking(client, question).await,
         None => Ok(T::default()),
     }
@@ -523,9 +635,9 @@ pub async fn lsp_rename(
     new_name: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, CommandError> {
-    let Some(client) = state.lsp().await else {
+    let Some(client) = state.lsp_for(&path).await else {
         return Err(CommandError::new(
-            "rust-analyzer is not running, so nothing knows where this symbol is used",
+            "no language server is running, so nothing knows where this symbol is used",
         ));
     };
     on_blocking(client, move |client| {

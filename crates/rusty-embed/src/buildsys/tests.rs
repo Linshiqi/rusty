@@ -338,3 +338,66 @@ fn only_the_app_is_taken_from_a_build_directory() {
     assert_eq!(found[0].target, "c3");
     assert!(found[0].matches_configured_target);
 }
+
+/// The C in a Cargo project — what a `cc` build script compiles — is found
+/// past the build directory and the dot entries, and compiled in the
+/// database by the part's cross compiler: `g++` for C++, freestanding, the
+/// header directories on the include path, and no entry for a header.
+#[test]
+fn a_cargo_projects_c_is_given_a_compile_database_by_its_parts_compiler() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, "Cargo.toml", "[package]\nname = \"mixed\"\n");
+    write(root, "src/main.rs", "fn main() {}\n");
+    write(root, "csrc/vendor.c", "int x;\n");
+    write(root, "csrc/vendor.h", "int f(void);\n");
+    write(root, "csrc/filter.cpp", "int y;\n");
+    write(root, "target/debug/build/cc/out.c", "int stale;\n");
+    write(root, ".git/hooks/sample.c", "int hook;\n");
+
+    let sources = c_sources(root);
+    assert_eq!(
+        sources,
+        ["csrc/filter.cpp", "csrc/vendor.c", "csrc/vendor.h"]
+    );
+
+    let database = cargo_compile_commands(root, &sources, Some("arm-none-eabi-gcc"));
+    let entries = database.as_array().unwrap();
+    assert_eq!(entries.len(), 2, "a header is not compiled: {database:#}");
+    let arguments = |file: &str| -> Vec<String> {
+        let entry = entries
+            .iter()
+            .find(|e| e["file"].as_str().unwrap().ends_with(file))
+            .unwrap();
+        serde_json::from_value(entry["arguments"].clone()).unwrap()
+    };
+    let c = arguments("vendor.c");
+    assert_eq!(c[0], "arm-none-eabi-gcc");
+    assert!(c.contains(&"-ffreestanding".to_string()), "{c:?}");
+    let include = format!("-I{}", root.join("csrc").display());
+    assert!(c.contains(&include), "{c:?}");
+    let cpp = arguments("filter.cpp");
+    assert_eq!(cpp[0], "arm-none-eabi-g++");
+    assert!(cpp.contains(&"-fno-exceptions".to_string()), "{cpp:?}");
+
+    // A host crate with C has no part, and the host's compiler is named.
+    let host = cargo_compile_commands(root, &sources, None);
+    assert_eq!(host[0]["arguments"][0], "c++");
+    assert!(
+        !host[0]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a == "-ffreestanding")
+    );
+}
+
+/// A Cargo project with no C starts no clangd: nothing is written.
+#[test]
+fn a_cargo_project_without_c_gets_no_compile_database() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "Cargo.toml", "[package]\nname = \"plain\"\n");
+    write(dir.path(), "src/main.rs", "fn main() {}\n");
+    write(dir.path(), "include/only.h", "int f(void);\n");
+    assert_eq!(write_cargo_compile_commands(dir.path(), None), None);
+}

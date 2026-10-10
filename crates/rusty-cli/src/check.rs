@@ -202,9 +202,18 @@ fn print_size(report: &MemoryReport) {
     }
 
     println!("\nBY CRATE");
-    for krate in report.crates.iter().take(15) {
+    // C and C++ files are listed beside crates, and a crate's name can be
+    // longer than any fixed column.
+    let shown = &report.crates[..report.crates.len().min(15)];
+    let width = shown
+        .iter()
+        .map(|krate| krate.name.len())
+        .max()
+        .unwrap_or(0)
+        .max(24);
+    for krate in shown {
         println!(
-            "  {:<24} {:>10}   code {:>9}  bss {:>9}",
+            "  {:<width$} {:>10}   code {:>9}  bss {:>9}",
             krate.name,
             human(krate.total),
             human(krate.code),
@@ -213,7 +222,7 @@ fn print_size(report: &MemoryReport) {
     }
     if report.unattributed_bytes > 0 {
         println!(
-            "  {:<24} {:>10}   (C, assembly, ROM stubs)",
+            "  {:<width$} {:>10}   (assembly, linker fill, unnamed data)",
             "unattributed",
             human(report.unattributed_bytes)
         );

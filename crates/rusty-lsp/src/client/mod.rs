@@ -174,6 +174,11 @@ pub(crate) struct Shared {
 }
 
 impl LspClient {
+    /// Which server this client is talking to.
+    pub fn kind(&self) -> ServerKind {
+        self.shared.kind
+    }
+
     /// Start rust-analyzer for the project at `root`.
     ///
     /// `target` is the triple the firmware builds for, when the caller knows

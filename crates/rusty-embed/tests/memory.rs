@@ -187,6 +187,74 @@ fn bytes_are_attributed_to_the_crate_that_emitted_them() {
     assert!(!report.crates.iter().any(|c| c.name == "esp_rom_printf"));
 }
 
+/// C with no debug information, as a CMake Release build or a `cc` crate
+/// leaves it: a file symbol, the file's own `static`s after it, and its
+/// exported function among the globals.
+#[test]
+fn a_c_files_statics_are_counted_under_its_name() {
+    let mut obj = Object::new(BinaryFormat::Elf, Architecture::Arm, Endianness::Little);
+    let text = obj.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
+    obj.append_section_data(text, &[0u8; 1024], 4);
+    let bss = obj.add_section(Vec::new(), b".bss".to_vec(), SectionKind::UninitializedData);
+    obj.append_section_bss(bss, 256, 4);
+
+    let symbol = |obj: &mut Object, name: &[u8], size, value, section, scope| {
+        obj.add_symbol(Symbol {
+            name: name.to_vec(),
+            value,
+            size,
+            kind: SymbolKind::Data,
+            scope,
+            weak: false,
+            section: SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        });
+    };
+    // A Rust codegen unit's local, before any C file is named.
+    symbol(
+        &mut obj,
+        b"_ZN4core3fmt5write17h0000000000000003E",
+        512,
+        0,
+        text,
+        SymbolScope::Compilation,
+    );
+    obj.add_file_symbol(b"csrc/vendor.c".to_vec());
+    symbol(&mut obj, b"ticks", 4, 0, bss, SymbolScope::Compilation);
+    symbol(
+        &mut obj,
+        b"filter_taps",
+        64,
+        512,
+        text,
+        SymbolScope::Compilation,
+    );
+    // Global: no file symbol speaks for it, and without DWARF nothing else
+    // does either.
+    symbol(
+        &mut obj,
+        b"vendor_tick",
+        24,
+        576,
+        text,
+        SymbolScope::Linkage,
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("firmware.elf");
+    fs::write(&path, obj.write().unwrap()).unwrap();
+    let report = memory::analyze(&path, None).unwrap();
+
+    let vendor = report
+        .crates
+        .iter()
+        .find(|c| c.name == "vendor.c")
+        .unwrap_or_else(|| panic!("vendor.c missing from {:?}", report.crates));
+    assert_eq!(vendor.bss, 4);
+    assert_eq!(vendor.total, 4 + 64);
+    assert_eq!(report.unattributed_bytes, 24);
+}
+
 #[test]
 fn a_missing_or_unreadable_file_says_to_build_first() {
     let dir = tempfile::tempdir().unwrap();

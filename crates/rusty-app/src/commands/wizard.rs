@@ -45,6 +45,7 @@ pub async fn scaffold_c_interop(
 
     let direction = match direction.as_str() {
         "rust-calls-c" => Direction::RustCallsC,
+        "rust-calls-cpp" => Direction::RustCallsCpp,
         "c-calls-rust" => Direction::CCallsRust,
         other => {
             return Err(CommandError::new(format!(
@@ -62,7 +63,7 @@ pub async fn scaffold_c_interop(
         })
         .map_err(CommandError::new)?;
 
-        let scaffold = rusty_embed::scaffold::c_interop(&root, direction)
+        let scaffold = rusty_embed::scaffold::c_interop(&root, direction, chip.as_ref())
             .map_err(|e| CommandError::new(e.to_string()))?;
         Ok(rusty_embed::ScaffoldReport {
             written: scaffold.written,

@@ -28,6 +28,9 @@ use crate::{
 pub enum Direction {
     /// Rust calls C: `cc` compiles `csrc/`, an `extern "C"` block declares it.
     RustCallsC,
+    /// Rust calls C++: the same, with `cc` in C++ mode and the C++ behind
+    /// an `extern "C"` interface — the only one Rust can call.
+    RustCallsCpp,
     /// C calls Rust: a `staticlib` and a header for the C side to include.
     CCallsRust,
 }
@@ -85,46 +88,94 @@ pub fn c_compiler_gate(
 
 /// Write the scaffolding for one direction.
 ///
-/// Fails with [`Error::Exists`] before anything is written, or [`Error::Write`]
-/// for a file that would not land — the crate's one error type, since this
-/// module's own was two variants that said the same things.
-pub fn c_interop(root: &Path, direction: Direction) -> Result<Scaffold> {
-    let files: &[(&str, &str)] = match direction {
-        Direction::RustCallsC => &[
-            ("build.rs", BUILD_RS),
-            ("csrc/vendor.c", VENDOR_C),
-            ("csrc/vendor.h", VENDOR_H),
-            ("src/vendor.rs", VENDOR_RS),
+/// `chip` is the part the project builds for, when it has one: its C
+/// compiler (`Chip::c_compiler`) is named in the build script, since `cc`'s
+/// own guess for a bare-metal triple is a generic toolchain — for
+/// `riscv32imc-unknown-none-elf`, `riscv32-unknown-elf-gcc` — that may not
+/// be the one installed.
+///
+/// **An existing `build.rs` is joined, not refused.** The compiling goes
+/// into a file of its own, `build_c.rs`, and the build script gains exactly
+/// two lines: `mod build_c;` and a call to `build_c::compile()` at the top
+/// of its `main`. Every embedded template has a build script (the link
+/// scripts are passed there), so refusing one refused C for every part but
+/// the Espressif ones. A `main` that cannot be found on one line is not
+/// guessed at: the refusal names the two lines to add by hand.
+///
+/// Fails with [`Error::Exists`] before anything is written when a file it
+/// would create is there, or [`Error::Write`] for a file that would not land.
+pub fn c_interop(root: &Path, direction: Direction, chip: Option<&Chip>) -> Result<Scaffold> {
+    let compiler = chip
+        .and_then(|c| c.c_compiler.as_ref())
+        .map(|c| c.binary.clone());
+    let new_files: Vec<(&str, String)> = match direction {
+        Direction::RustCallsC => vec![
+            ("build_c.rs", build_c(false, compiler.as_deref())),
+            ("csrc/vendor.c", VENDOR_C.to_string()),
+            ("csrc/vendor.h", VENDOR_H.to_string()),
+            ("src/vendor.rs", VENDOR_RS.to_string()),
         ],
-        Direction::CCallsRust => &[
-            ("include/rusty_export.h", EXPORT_H),
-            ("src/exports.rs", EXPORTS_RS),
+        Direction::RustCallsCpp => vec![
+            ("build_c.rs", build_c(true, compiler.as_deref())),
+            ("csrc/vendor.cpp", VENDOR_CPP.to_string()),
+            ("csrc/vendor.h", VENDOR_H.to_string()),
+            ("src/vendor.rs", VENDOR_RS.to_string()),
+        ],
+        Direction::CCallsRust => vec![
+            ("include/rusty_export.h", EXPORT_H.to_string()),
+            ("src/exports.rs", EXPORTS_RS.to_string()),
         ],
     };
 
     // Refuse before writing anything: half a scaffold over somebody's code
     // is worse than none, and "it already existed" is only useful before
     // the first file lands.
-    for (path, _) in files {
+    for (path, _) in &new_files {
         if root.join(path).exists() {
             return Err(Error::Exists {
                 path: (*path).to_string(),
             });
         }
     }
+    // The build script, worked out before the first write too: a merge that
+    // cannot be made is a refusal, and it has to come while nothing changed.
+    let build_script = match direction {
+        Direction::CCallsRust => None,
+        _ => Some(match std::fs::read_to_string(root.join("build.rs")) {
+            Ok(text) => (merge_build_script(&text)?, true),
+            Err(_) => (BUILD_RS.to_string(), false),
+        }),
+    };
 
     let mut written = Vec::new();
-    for (path, contents) in files {
+    let mut write = |path: &str, contents: &str| -> Result<()> {
         let full = root.join(path);
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).map_err(Error::writing(Path::new(path)))?;
         }
         std::fs::write(&full, contents).map_err(Error::writing(Path::new(path)))?;
-        written.push((*path).to_string());
+        written.push(path.to_string());
+        Ok(())
+    };
+    for (path, contents) in &new_files {
+        write(path, contents)?;
     }
+    let joined = match &build_script {
+        Some((text, joined)) => {
+            write("build.rs", text)?;
+            *joined
+        }
+        None => false,
+    };
 
+    let script = if joined {
+        "Your build.rs now declares `mod build_c;` and calls `build_c::compile()` first; \
+         build_c.rs compiles everything in csrc/."
+    } else {
+        "build.rs calls build_c.rs, which compiles everything in csrc/."
+    };
     Ok(match direction {
-        Direction::RustCallsC => Scaffold {
+        Direction::RustCallsC | Direction::RustCallsCpp => Scaffold {
             written,
             command: Some(CommandPlan::new(
                 "cargo",
@@ -132,10 +183,9 @@ pub fn c_interop(root: &Path, direction: Direction) -> Result<Scaffold> {
                 "cc compiles the C sources into the crate; adding it through cargo keeps \
                  your Cargo.toml formatted the way you left it",
             )),
-            next: "`mod vendor;` in main.rs or lib.rs, then call \
-                   `vendor::tick()`. The C is in csrc/ and build.rs compiles \
-                   everything there."
-                .to_string(),
+            next: format!(
+                "`mod vendor;` in main.rs or lib.rs, then call `vendor::tick()`. {script}"
+            ),
         },
         Direction::CCallsRust => Scaffold {
             written,
@@ -148,25 +198,123 @@ pub fn c_interop(root: &Path, direction: Direction) -> Result<Scaffold> {
     })
 }
 
-const BUILD_RS: &str = r#"//! Compiles the C in csrc/ into this crate.
-//!
-//! Every .c file in csrc/ is built and linked; adding one needs no change
-//! here. The rerun line matters: without it cargo caches the object files
-//! and edits to the C are silently ignored until a clean build.
-
-fn main() {
-    println!("cargo:rerun-if-changed=csrc");
-
-    let mut build = cc::Build::new();
-    for entry in std::fs::read_dir("csrc").expect("csrc/ exists").flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "c") {
-            build.file(path);
+/// An existing build script with `mod build_c;` declared and
+/// `build_c::compile();` called at the top of `main`, or the refusal that
+/// names the two lines when its `main` cannot be found as `fn main() {` on
+/// one line — exactly once.
+pub(crate) fn merge_build_script(text: &str) -> Result<String> {
+    let by_hand = || {
+        Error::refused(
+            "build.rs is there and rusty could not find one `fn main() {` line in it to call \
+             the C build from. Nothing has been written. Add `mod build_c;` to build.rs and \
+             call `build_c::compile();` from its `main`, then scaffold again.",
+        )
+    };
+    if text.contains("build_c") {
+        return Err(Error::refused(
+            "build.rs already mentions build_c — the C build is there. Nothing has been written.",
+        ));
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mains: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            let line = line.trim();
+            line.starts_with("fn main()") && line.ends_with('{')
+        })
+        .map(|(at, _)| at)
+        .collect();
+    let [main] = mains[..] else {
+        return Err(by_hand());
+    };
+    // After the inner doc comments and attributes a crate root opens with:
+    // an item before `//!` is a compile error.
+    let module_at = lines
+        .iter()
+        .position(|line| {
+            let line = line.trim_start();
+            !(line.starts_with("//!") || line.starts_with("#![") || line.is_empty())
+        })
+        .unwrap_or(lines.len())
+        .min(main);
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 3);
+    for (at, line) in lines.iter().enumerate() {
+        if at == module_at {
+            out.push("mod build_c;".to_string());
+            out.push(String::new());
+        }
+        out.push((*line).to_string());
+        if at == main {
+            out.push("    build_c::compile();".to_string());
         }
     }
-    // Firmware C is freestanding: no libc, no host headers.
-    build.flag_if_supported("-ffreestanding");
-    build.compile("vendor");
+    Ok(out.join("\n"))
+}
+
+/// What the C or C++ build script says, for a part whose compiler is
+/// `compiler` (or the host's, with none).
+fn build_c(cpp: bool, compiler: Option<&str>) -> String {
+    let (extension, what) = if cpp { ("cpp", "C++") } else { ("c", "C") };
+    let mut out = format!(
+        "//! Compiles the {what} in csrc/ into this crate; build.rs calls it.\n\
+         //!\n\
+         //! Every .{extension} file in csrc/ is built and linked, so adding one needs\n\
+         //! no change here. The rerun line matters: without it cargo caches the\n\
+         //! object files and edits to the {what} are ignored until a clean build.\n\
+         \n\
+         pub fn compile() {{\n\
+         \x20   println!(\"cargo:rerun-if-changed=csrc\");\n\
+         \n\
+         \x20   let mut build = cc::Build::new();\n"
+    );
+    if let Some(compiler) = compiler {
+        let compiler = if cpp {
+            compiler
+                .strip_suffix("gcc")
+                .map_or(compiler.to_string(), |stem| format!("{stem}g++"))
+        } else {
+            compiler.to_string()
+        };
+        out.push_str(&format!(
+            "    // The part's cross compiler, by name: cc's own guess for a bare-metal\n\
+             \x20   // target is a generic toolchain that may not be the one installed.\n\
+             \x20   build.compiler(\"{compiler}\");\n"
+        ));
+    }
+    if cpp {
+        out.push_str(
+            "    // Firmware C++: no exceptions, no RTTI, no guarded statics, and no\n\
+             \x20   // libstdc++ linked in for a runtime the firmware does not have.\n\
+             \x20   build\n\
+             \x20       .cpp(true)\n\
+             \x20       .cpp_link_stdlib(None)\n\
+             \x20       .flag_if_supported(\"-fno-exceptions\")\n\
+             \x20       .flag_if_supported(\"-fno-rtti\")\n\
+             \x20       .flag_if_supported(\"-fno-threadsafe-statics\");\n",
+        );
+    }
+    out.push_str(&format!(
+        "    for entry in std::fs::read_dir(\"csrc\").expect(\"csrc/ exists\").flatten() {{\n\
+         \x20       let path = entry.path();\n\
+         \x20       if path.extension().is_some_and(|e| e == \"{extension}\") {{\n\
+         \x20           build.file(path);\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         \x20   // Firmware {what} is freestanding: no libc, no host headers.\n\
+         \x20   build.flag_if_supported(\"-ffreestanding\");\n\
+         \x20   build.compile(\"vendor\");\n\
+         }}\n"
+    ));
+    out
+}
+
+const BUILD_RS: &str = r#"//! The build script: the C in csrc/, compiled by build_c.rs.
+
+mod build_c;
+
+fn main() {
+    build_c::compile();
 }
 "#;
 
@@ -181,11 +329,44 @@ unsigned int vendor_tick(void) {
 }
 "#;
 
+const VENDOR_CPP: &str = r#"// Stand-in for the C++ you actually have, behind a C interface: Rust
+// calls C, never C++ directly, so every function it calls is `extern "C"`.
+#include "vendor.h"
+
+namespace vendor {
+
+class Counter {
+  public:
+    unsigned int next() { return ++value_; }
+
+  private:
+    unsigned int value_ = 0;
+};
+
+// Constant-initialised: no constructor runs before main, which firmware
+// with no C++ start-up code would never call.
+static Counter counter;
+
+}  // namespace vendor
+
+extern "C" unsigned int vendor_tick(void) {
+    return vendor::counter.next();
+}
+"#;
+
 const VENDOR_H: &str = r#"#ifndef VENDOR_H
 #define VENDOR_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Increments an internal counter and returns it. */
 unsigned int vendor_tick(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* VENDOR_H */
 "#;
@@ -291,9 +472,10 @@ mod tests {
     #[test]
     fn rust_calling_c_lands_a_build_script_and_a_declaration() {
         let dir = tempfile::tempdir().unwrap();
-        let scaffold = c_interop(dir.path(), Direction::RustCallsC).expect("scaffolded");
+        let scaffold = c_interop(dir.path(), Direction::RustCallsC, None).expect("scaffolded");
 
         assert!(scaffold.written.contains(&"build.rs".to_string()));
+        assert!(scaffold.written.contains(&"build_c.rs".to_string()));
         assert!(scaffold.written.contains(&"csrc/vendor.c".to_string()));
         assert!(dir.path().join("csrc/vendor.h").is_file());
 
@@ -313,7 +495,7 @@ mod tests {
     #[test]
     fn c_calling_rust_exports_behind_a_header() {
         let dir = tempfile::tempdir().unwrap();
-        let scaffold = c_interop(dir.path(), Direction::CCallsRust).expect("scaffolded");
+        let scaffold = c_interop(dir.path(), Direction::CCallsRust, None).expect("scaffolded");
 
         let exports = std::fs::read_to_string(dir.path().join("src/exports.rs")).unwrap();
         assert!(exports.contains("#[unsafe(no_mangle)]"));
@@ -336,19 +518,128 @@ mod tests {
     #[test]
     fn nothing_is_written_when_anything_would_be_overwritten() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("build.rs"), "fn main() {}\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("csrc")).unwrap();
+        std::fs::write(
+            dir.path().join("csrc/vendor.c"),
+            "/* mine */
+",
+        )
+        .unwrap();
 
-        let error = c_interop(dir.path(), Direction::RustCallsC).unwrap_err();
+        let error = c_interop(dir.path(), Direction::RustCallsC, None).unwrap_err();
         assert!(matches!(error, Error::Exists { .. }), "{error}");
-        assert!(error.to_string().contains("build.rs"), "{error}");
+        assert!(error.to_string().contains("csrc/vendor.c"), "{error}");
         assert!(
-            !dir.path().join("csrc").exists(),
+            !dir.path().join("build_c.rs").exists() && !dir.path().join("build.rs").exists(),
             "the refusal came before the first write, not after three",
         );
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("build.rs")).unwrap(),
-            "fn main() {}\n",
+            std::fs::read_to_string(dir.path().join("csrc/vendor.c")).unwrap(),
+            "/* mine */
+",
             "the existing file is untouched",
+        );
+    }
+
+    /// A template's build script — the link scripts are passed there — is
+    /// joined with two lines rather than refused: the module, and the call
+    /// at the top of `main`, after the inner docs a crate root opens with.
+    #[test]
+    fn an_existing_build_script_gains_two_lines_and_nothing_else() {
+        let template = crate::playground::template("rp2040")
+            .unwrap()
+            .files
+            .iter()
+            .find(|(path, _)| *path == "build.rs")
+            .unwrap()
+            .1;
+        let merged = merge_build_script(template).unwrap();
+        let added: Vec<&str> = merged
+            .lines()
+            .filter(|line| !template.lines().any(|t| t == *line))
+            .collect();
+        assert_eq!(
+            added,
+            ["mod build_c;", "    build_c::compile();"],
+            "{merged}"
+        );
+        let module = merged.find("mod build_c;").unwrap();
+        assert!(
+            merged[..module]
+                .lines()
+                .all(|l| l.starts_with("//!") || l.is_empty()),
+            "after the inner docs: {merged}"
+        );
+        let main = merged.find("fn main() {").unwrap();
+        assert!(
+            merged[main..]
+                .lines()
+                .nth(1)
+                .unwrap()
+                .contains("build_c::compile();")
+        );
+
+        // A `main` it cannot find on one line is not guessed at.
+        let refused = merge_build_script(
+            "fn main()
+{
+}
+",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("mod build_c;"), "{refused}");
+        assert!(
+            merge_build_script(
+                "mod build_c;
+fn main() {}
+"
+            )
+            .is_err()
+        );
+
+        // And through the scaffold: the build script is joined in place.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.rs"), template).unwrap();
+        c_interop(dir.path(), Direction::RustCallsC, None).unwrap();
+        let joined = std::fs::read_to_string(dir.path().join("build.rs")).unwrap();
+        assert!(joined.contains("build_c::compile();"), "{joined}");
+        assert!(
+            joined.contains("-Tlink.x"),
+            "the template's own lines stay: {joined}"
+        );
+    }
+
+    /// C++ goes through cc in C++ mode, behind an `extern "C"` interface, and
+    /// the part's compiler is named — its g++ for C++.
+    #[test]
+    fn cpp_is_compiled_as_firmware_cpp_by_the_parts_compiler() {
+        let chip = crate::chip::by_id("stm32f411ce").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        c_interop(dir.path(), Direction::RustCallsCpp, Some(&chip)).unwrap();
+        let build = std::fs::read_to_string(dir.path().join("build_c.rs")).unwrap();
+        assert!(
+            build.contains("build.compiler(\"arm-none-eabi-g++\")"),
+            "{build}"
+        );
+        assert!(build.contains(".cpp(true)"), "{build}");
+        assert!(build.contains("-fno-exceptions"), "{build}");
+        assert!(build.contains("cpp_link_stdlib(None)"), "{build}");
+        let source = std::fs::read_to_string(dir.path().join("csrc/vendor.cpp")).unwrap();
+        assert!(
+            source.contains("extern \"C\" unsigned int vendor_tick"),
+            "{source}"
+        );
+        let header = std::fs::read_to_string(dir.path().join("csrc/vendor.h")).unwrap();
+        assert!(header.contains("#ifdef __cplusplus"), "{header}");
+
+        let c3 = crate::chip::by_id("esp32c3").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        c_interop(dir.path(), Direction::RustCallsC, Some(&c3)).unwrap();
+        let build = std::fs::read_to_string(dir.path().join("build_c.rs")).unwrap();
+        assert!(
+            build.contains("build.compiler(\"riscv32-esp-elf-gcc\")"),
+            "{build}"
         );
     }
 }

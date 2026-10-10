@@ -131,6 +131,17 @@ pub enum LspEvent {
     /// came back thin or empty, and nothing else would have asked twice.
     Refresh {},
     Exited {},
+    /// A second server answering beside the first, for its own files —
+    /// clangd for the C a Cargo project compiles with `cc` — or why it could
+    /// not be started (`message`, with what to do about it). Its diagnostics
+    /// arrive as `Diagnostics` like the first's; nothing else it says is
+    /// passed on, since the status bar is the first server's.
+    #[serde(rename_all = "camelCase")]
+    Companion {
+        server: ServerKind,
+        message: Option<String>,
+        install: Option<String>,
+    },
 }
 
 /// How rust-analyzer describes its own state.

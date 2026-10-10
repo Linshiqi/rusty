@@ -65,6 +65,9 @@ pub struct Lsp {
     /// Which server the project has — rust-analyzer or clangd — and so
     /// which files are its: `None` before one was asked for.
     pub server: RwSignal<Option<rusty_lsp::ServerKind>>,
+    /// A second server answering beside it for its own files — clangd for
+    /// the C a Cargo project compiles with `cc` — once it has said it is up.
+    pub companion: RwSignal<Option<rusty_lsp::ServerKind>>,
 }
 
 /// The debug session, its breakpoints, and the chip's registers.

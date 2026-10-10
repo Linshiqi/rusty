@@ -26,6 +26,10 @@ quick-xml = { version = "0.41.0", optional = true }
 thiserror = { version = "2.0.20", optional = true }
 object = { version = "0.40.0", optional = true }
 rustc-demangle = { version = "0.1.28", optional = true }
+# The DWARF a firmware image carries, read for which C or C++ file each
+# address was compiled from: a symbol C wrote demangles to nothing, and the
+# memory report would otherwise call all of it unattributed.
+gimli = { version = "0.34.0", optional = true, default-features = false, features = ["read", "std"] }
 # `libudev` is what supplies USB vendor/product ids on Linux, which is how a
 # dev board is told apart from a modem. It costs a system library at build
 # time; the default feature set keeps it, and a packager who cannot have it can
@@ -56,6 +60,7 @@ backend = [
     "dep:ureq", "dep:thiserror", "dep:serde_json", "dep:quick-xml",
     "dep:object",
     "dep:rustc-demangle",
+    "dep:gimli",
     "dep:serialport",
     "dep:rusty-git",
     "dep:rusty-mcu",
