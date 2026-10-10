@@ -9,6 +9,75 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.77
+
+**PlatformIO and CMake projects open.** A folder with a `platformio.ini` or
+a `CMakeLists.txt` opens like a Cargo one. rusty reads the chip where the
+project's own tool writes it — a PlatformIO environment's board, the Pico
+SDK's `PICO_BOARD`, ESP-IDF's `sdkconfig`, STM32CubeMX's `.ioc`, or a
+`set(RUSTY_CHIP <part>)` line — and Build runs `pio run` or CMake
+(configured once with Ninja, or through your `CMakePresets.json`). Flash,
+Monitor and the memory panel then work on the image the build made.
+`rusty-cli build` does the same from a shell.
+
+**C and C++ in the editor.** C and C++ files get completion, hover and
+errors from clangd, which reads the compile database the build writes and
+your cross compiler's own headers. A Rust project with C in it runs clangd
+beside rust-analyzer, each for its own files.
+
+**Mix C and C++ into a Rust project.** The C scaffolds now join a
+`build.rs` you already have instead of refusing it, so they work for every
+part, not only Espressif's, and there is a third one: Rust calling C++. The
+memory panel names a C file as it names a crate — and stops putting most
+of a Rust image under "unattributed", where every method of every `impl`
+used to land.
+
+**New parts: STM32F4, RP2040 and RP2350, nRF52840.** The WeAct Black
+Pill's STM32F411CE and STM32F401CC, the RP2040, the RP2350A and RP2350B,
+and the nRF52840. New Project writes an embassy blinky with a button for
+each, built with stable Rust and flashed through probe-rs. Pins are named
+as each vendor prints them — PC13, GPIO25, P0.13.
+
+**Debug on the board.** For a part probe-rs knows, Debug now flashes the
+board through your probe and stops at your breakpoints, with no cross gdb
+to install. Monitor works over a serial port for parts espflash cannot
+talk to, and the pin map reads embassy's and ch32-hal's pin names.
+
+**Flash without a probe.** A Pico held in BOOTSEL shows up in the device
+picker as a drive, and Flash copies a UF2 onto it; rusty makes the UF2
+itself. An STM32 with BOOT0 held high shows up as a USB DFU device, and
+Flash writes it with dfu-util (on Windows the bootloader needs the WinUSB
+driver first — Zadig installs it).
+
+**Start a C project.** For the Black Pill and the nRF52840, New Project
+offers *C · CMake, no SDK* beside Rust: a CMake project with a startup
+file, a linker script sized for the part, and a blinky written register by
+register, which builds outside rusty too. And a CMake project that names no
+compiler is given one: rusty writes `cmake/rusty-toolchain.cmake` for its
+part before the first build, rather than letting CMake build a program for
+your PC.
+
+**None of this release's new parts has met a board here.** Everything above
+was built and checked against real images, but nobody here owns a Black
+Pill, a Pico or an nRF52840 DK. If you do, an issue saying what happened —
+working or not — helps more than anything else.
+
+**Smaller things.**
+- The Environment page lists only what your project uses: an STM32 user is
+  no longer told Espressif's tools are missing, nor a CMake user that Rust
+  is.
+- A greyed button in the title bar says why on hover — what is running,
+  and the key that stops it.
+- The welcome screen offers New project and Clone beside Open.
+- The update notice waits for the first-run setup to be put away instead
+  of drawing over it.
+- An RP2040's or RP2350's flash size is read from the project's
+  `memory.x`, so the memory panel no longer says "capacity unknown".
+- Each thing has one name everywhere, and the Chinese names are the words
+  you would look for: 飞控, 图形 beside 曲线, 芯片库.
+- Help ▸ Keyboard shortcuts opens the keyboard page, and the command
+  palette reaches everything the menus do.
+
 ## v0.6.76
 
 **The CH32X035F8U6 is here.** rusty now knows WCH's USB-PD part — 62 KB of
