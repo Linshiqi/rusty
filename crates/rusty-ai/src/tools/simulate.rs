@@ -32,6 +32,17 @@ const LONGEST: f64 = 60.0;
 const SERIAL_LINES: usize = 200;
 const BUS_LINES: usize = 40;
 
+/// The parts an emulator runs, by name, from the catalogue: a list typed
+/// into the description named three parts while five ran.
+fn simulated_parts() -> String {
+    let names: Vec<String> = rusty_embed::chip::catalogue()
+        .into_iter()
+        .filter(|chip| chip.emulation.is_some())
+        .map(|chip| chip.name)
+        .collect();
+    names.join(", ")
+}
+
 pub(super) struct Simulate;
 
 impl Tool for Simulate {
@@ -40,8 +51,8 @@ impl Tool for Simulate {
             name: "simulate".to_string(),
             description: "Build the open project's firmware, boot it in rusty's emulator \
                 (for Espressif parts, QEMU with rusty's pin, ADC, I2C, SPI, LEDC and RMT \
-                models; for a WCH CH32V003, rusty's own model of the part — its pins, \
-                TIM1/TIM2 PWM, SysTick, USART1 and SDI print, with pins named PA1..PD7), \
+                models; for a WCH CH32 part, rusty's own model of it — its pins, timer \
+                PWM, SysTick, USART and SDI print, with pins named by port), \
                 and report what it did: every line it printed, the level of every GPIO \
                 that moved, and everything that crossed a peripheral — I2C and SPI \
                 transactions, a duty with the frequency its timer sets, the bytes a LED \
@@ -62,9 +73,9 @@ impl Tool for Simulate {
                 noise). \
                 `expect` lists text the run must see to pass; `fail` text ends it as a \
                 failure. The first build can take minutes; the timeout counts from boot. \
-                Supported on ESP32-C3, ESP32 and the CH32V003's packages; the answer's \
-                limits say what the emulator cannot do on the part it ran."
-                .to_string(),
+                Supported on PARTS; the answer's limits say what the emulator cannot do \
+                on the part it ran."
+                .replace("PARTS", &simulated_parts()),
             input_schema: json!({
                 "type": "object",
                 "properties": {

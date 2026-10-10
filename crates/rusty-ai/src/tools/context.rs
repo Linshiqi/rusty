@@ -95,6 +95,20 @@ impl<'a> ToolContext<'a> {
         if let Some(workspace) = self.workspace {
             return Ok(workspace);
         }
+        // A PlatformIO or CMake project has no Cargo workspace to load, and
+        // `cargo metadata` failing on it said nothing a model could act on.
+        if let Some(root) = self.root
+            && !root.join("Cargo.toml").is_file()
+        {
+            return Err(Error::MissingContext {
+                needed: "a Cargo workspace".into(),
+                hint: "The open project is not built with Cargo — it is a PlatformIO or \
+                       CMake project — so the Cargo tools have nothing to read. \
+                       project_status, toolchain_status, memory_report and the file \
+                       tools still answer for it."
+                    .into(),
+            });
+        }
         match self.workspace_on_demand {
             Some(lazy) => lazy.get().map_err(|reason| Error::MissingContext {
                 needed: "the project's Cargo workspace".into(),

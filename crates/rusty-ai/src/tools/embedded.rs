@@ -32,11 +32,13 @@ impl Tool for ProjectStatus {
     fn def(&self) -> ToolDef {
         read_only(
             "project_status",
-            "What the open project targets, read from its Cargo.toml, \
-             .cargo/config.toml, and rust-toolchain.toml — the chip, whether it \
-             is no_std or ESP-IDF std, the configured target triple and \
-             toolchain, which HAL crates are in use — plus a list of problems \
-             found by cross-checking those files against each other. \
+            "What the open project targets, read from its own build files — \
+             Cargo.toml, .cargo/config.toml and rust-toolchain.toml for a Cargo \
+             project, platformio.ini or CMakeLists.txt for the others (`build`) — \
+             the chip, whether it is no_std or ESP-IDF std, the configured target \
+             triple and toolchain, which HAL crates are in use, what C it carries \
+             — plus a list of problems found by cross-checking those files \
+             against each other. \
              \
              Call this before answering any question about why a build fails. \
              These files routinely disagree, and when they do the compiler's \
@@ -62,9 +64,10 @@ impl Tool for ToolchainStatus {
     fn def(&self) -> ToolDef {
         read_only(
             "toolchain_status",
-            "What Rust and Espressif tooling is installed on this machine — \
-             rustup toolchains, installed targets, and whether espup, espflash, \
-             probe-rs, esp-generate and ldproxy are present — cross-checked \
+            "What tooling is installed on this machine — rustup toolchains and \
+             targets, and the tools the open project's part and build system use: \
+             espflash, probe-rs or wlink to flash; espup for Xtensa; PlatformIO, \
+             CMake and Ninja, and the part's cross C compiler — cross-checked \
              against what the open project needs. \
              \
              Use this for any 'it will not build' or 'it will not flash' \

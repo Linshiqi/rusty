@@ -1,6 +1,9 @@
 # rusty — embedded Rust workbench
 
-A desktop IDE for embedded Rust, ESP32 first, STM32 next.
+A desktop IDE for embedded Rust — Espressif, STM32, RP2040/RP2350, nRF52 and
+WCH CH32 parts, and the C and C++ beside the Rust in Cargo, PlatformIO and
+CMake projects. ESP32 came first and is still where the simulator is
+deepest; a part is data now (rule 6), not a code path.
 
 It began as "not an editor — it owns the half of the job rust-analyzer does
 not". That half is still where the differentiation lives: which chip, which
@@ -332,6 +335,15 @@ reads `readOnlyHint: false` and asks the user first, and the built-in
 assistant, which has no step where anybody says yes, stays on
 `ToolRegistry::workbench()`, every tool of which is read-only. The test that
 pins that is still there; it now pins the drawer's registry.
+
+**A description that lists things is generated from them.** `simulate`'s
+"supported on" named three parts while five ran; it is the catalogue's
+parts with an `emulation` now (`simulated_parts`). The prompt and the
+project and toolchain descriptions said "Espressif" and "Cargo.toml" for a
+workbench that opens PlatformIO and CMake projects for five vendors. And a
+Cargo tool asked about a project with no `Cargo.toml` says that, and which
+tools still answer — it reported a `cargo metadata` failure, which a model
+read as a broken project.
 
 **The project's files are tools as well** (`tools/files.rs`: `read_file`,
 `search_project`, `list_files`), through `rusty_edit` so the model sees the

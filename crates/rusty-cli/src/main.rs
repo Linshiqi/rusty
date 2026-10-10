@@ -18,9 +18,11 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
-    name = "rusty",
+    name = "rusty-cli",
     version,
-    about = "Embedded Rust workbench: projects, toolchains, boards, and binary size"
+    about = "rusty without the window: check, build, size and simulate embedded projects, \
+             list devices and parts, keep the build directory small, and serve rusty's \
+             analyses to other assistants over MCP"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -36,8 +38,10 @@ enum Command {
     /// into a bug report. Exits non-zero if anything blocking was found, so it
     /// drops straight into CI.
     Check {
+        /// The project directory.
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
@@ -46,6 +50,7 @@ enum Command {
     /// system's commands — `cargo build --release`, `pio run`, or CMake's
     /// configure and build — one after another, each echoed first.
     Build {
+        /// The project directory.
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -55,16 +60,20 @@ enum Command {
         /// Show boards instead of chips.
         #[arg(long)]
         boards: bool,
+        /// The project directory, for the parts and boards it adds.
         #[arg(long, default_value = ".")]
         path: PathBuf,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
 
     /// Serial ports and debug probes currently attached.
     Devices {
+        /// The project directory, whose chip says which ports look like its board.
         #[arg(long, default_value = ".")]
         path: PathBuf,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
@@ -80,6 +89,7 @@ enum Command {
         /// The project the chip is read from, when `elf` is a file.
         #[arg(long, default_value = ".")]
         path: PathBuf,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
@@ -89,6 +99,7 @@ enum Command {
     /// packages no longer in the graph, and incremental caches that are idle
     /// or superseded by a crate's newer ones.
     Disk {
+        /// The project directory.
         #[arg(default_value = ".")]
         path: PathBuf,
         /// An incremental cache untouched for this many days counts as idle.
@@ -98,6 +109,7 @@ enum Command {
         /// ones are superseded.
         #[arg(long, default_value_t = 4)]
         keep_variants: u32,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
@@ -106,8 +118,10 @@ enum Command {
     /// stops there unless `--apply` is given; nothing a build holds the lock
     /// on is touched either way.
     Sweep {
+        /// The project directory.
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// An incremental cache untouched for this many days counts as idle.
         #[arg(long, default_value_t = 7)]
         idle_days: u32,
         /// Keep this many of each crate's newest incremental caches; older
@@ -128,6 +142,7 @@ enum Command {
     Symbol {
         /// The part's number on lcsc.com, e.g. C2286.
         number: String,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
@@ -140,6 +155,7 @@ enum Command {
     /// `claude mcp add rusty -- rusty-cli mcp /path/to/project`. Every tool
     /// reads; none writes.
     Mcp {
+        /// The project directory.
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -155,6 +171,7 @@ enum Command {
     /// for the whole timeout. Exit code 0 passed, 1 failed or timed out, 2
     /// could not run at all (no chip, a missing tool, a failed build).
     Sim {
+        /// The project directory.
         #[arg(default_value = ".")]
         path: PathBuf,
         /// Seconds the firmware may run, from the emulator starting.
@@ -181,21 +198,28 @@ enum Command {
 
     /// Cargo dependency health: duplicates, direct vs transitive, build scripts.
     Deps {
+        /// The project directory.
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
 
     /// What a feature selection costs, relative to the package's defaults.
     Features {
+        /// The package whose features are weighed.
         package: String,
+        /// The project directory.
         #[arg(long, default_value = ".")]
         path: PathBuf,
+        /// Features to turn on, comma-separated.
         #[arg(long, value_delimiter = ',')]
         features: Vec<String>,
+        /// Start from no features rather than the package's defaults.
         #[arg(long)]
         no_default_features: bool,
+        /// Print JSON instead of text, for scripts and CI.
         #[arg(long)]
         json: bool,
     },
