@@ -28,7 +28,7 @@ fn next_serial() -> u64 {
 /// VS Code's "Show Call Hierarchy". Calls in first, as VS Code opens it, or
 /// whichever way the last hierarchy was being read.
 pub fn show_call_hierarchy(state: AppState) {
-    let Some(path) = state.active_path_now().filter(|path| path.ends_with(".rs")) else {
+    let Some(path) = state.active_path_now().filter(|path| state.served(path)) else {
         return;
     };
     if state.lsp.status.get_untracked() != LspStatus::Ready {

@@ -362,6 +362,24 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             required: true,
         });
     }
+    // The editor's half of a C project: clangd, which rusty starts for a
+    // PlatformIO or CMake project as rust-analyzer for a Cargo one. Not
+    // required — the build does not need it — and so no problem either.
+    if !cargo {
+        let path = tools::find("clangd");
+        status.tools.push(ToolStatus {
+            name: "clangd".to_string(),
+            purpose: "Completion, diagnostics and navigation for C and C++ in the editor"
+                .to_string(),
+            version: path.as_ref().and_then(|found| probe_version(found)),
+            path: path.map(|found| found.display().to_string()),
+            install_command: "install clangd (https://clangd.llvm.org/installation) and put it \
+                              on PATH"
+                .to_string(),
+            installable: false,
+            required: false,
+        });
+    }
     // A CMake project compiles its C with the part's cross compiler, which
     // nothing else installs; PlatformIO and ESP-IDF install their own.
     let needs_c_compiler = build.system == crate::model::BuildSystem::Cmake

@@ -207,7 +207,7 @@ pub(super) fn show_document(state: AppState, document: Document, announce: bool)
     state.editor.highlighted.set(document.lines.clone());
     painted_whole(state, document.paint, None);
     if announce && !document.read_only && state.lsp.status.get_untracked() == LspStatus::Ready {
-        lsp_open_doc(document.path.clone(), document.text.clone());
+        lsp_open_doc(state, document.path.clone(), document.text.clone());
         request_semantic(state, document.path.clone());
         request_hints(state, document.path.clone());
     }
@@ -425,7 +425,7 @@ fn remove_tab(state: AppState, path: String) {
     // A file no view holds any more: the server goes back to the disk for
     // it, and its undo history goes with the document.
     if !other_holds(state, &path) {
-        lsp_closed_doc(path.clone());
+        lsp_closed_doc(state, path.clone());
         state.editor.forget_history(&path);
     }
 

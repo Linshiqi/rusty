@@ -244,6 +244,7 @@ impl AppState {
                 diagnostics: RwSignal::new(HashMap::new()),
                 progress: RwSignal::new(None),
                 health: RwSignal::new(None),
+                server: RwSignal::new(None),
             },
             sim: Sim {
                 display: RwSignal::new(String::new()),
@@ -426,6 +427,16 @@ impl AppState {
     /// one that hides the day it means something.
     pub fn has_project_now(&self) -> bool {
         self.project.detected.with_untracked(Option::is_some)
+    }
+
+    /// Whether the project's language server is told about `path` — a
+    /// `.rs` file for rust-analyzer, C or C++ for clangd. Every request the
+    /// editor makes of the server asks this first. Untracked.
+    pub fn served(&self, path: &str) -> bool {
+        self.lsp
+            .server
+            .get_untracked()
+            .is_some_and(|server| server.serves(path))
     }
 
     /// The chip whose playground is open, tracked — `None` for any other

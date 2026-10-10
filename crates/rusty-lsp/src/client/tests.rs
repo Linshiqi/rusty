@@ -84,7 +84,12 @@ fn fake_server(
                 "initialize" => reply(
                     &mut writer,
                     &message,
-                    json!({ "capabilities": { "positionEncoding": "utf-8" } }),
+                    // What rust-analyzer declares: it answers pulls, which is
+                    // what makes its pushes only the check's half.
+                    json!({ "capabilities": {
+                        "positionEncoding": "utf-8",
+                        "diagnosticProvider": { "interFileDependencies": true },
+                    } }),
                 ),
                 "shutdown" => reply(&mut writer, &message, Value::Null),
                 // Dropping the writer is the end of the stream on the

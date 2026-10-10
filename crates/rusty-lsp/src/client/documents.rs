@@ -78,10 +78,10 @@ impl LspClient {
                 },
             );
         }
-        let language = match path.rsplit('.').next() {
-            Some("rs") => "rust",
-            Some("toml") => "toml",
-            _ => "plaintext",
+        let language = match self.shared.kind.language_id(path) {
+            Some(language) => language,
+            None if path.ends_with(".toml") => "toml",
+            None => "plaintext",
         };
         self.shared.notify(
             "textDocument/didOpen",
@@ -279,6 +279,10 @@ impl Shared {
     }
 
     pub(crate) fn poke_pull(&self, path: &str) {
+        // A server that pulls nothing has pushed the whole answer already.
+        if !self.pulls.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
         if let Some(poke) = self.poke.lock().expect("lsp poke").as_ref() {
             let _ = poke.send(path.to_string());
         }

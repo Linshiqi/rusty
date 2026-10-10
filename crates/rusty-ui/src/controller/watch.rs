@@ -252,6 +252,6 @@ fn adopt_active(state: AppState, document: Document) {
     share_document(state);
     // The server has its own copy of the buffer and no idea the disk moved.
     if state.lsp.status.get_untracked() == crate::state::LspStatus::Ready {
-        lsp_changed_doc(path, text);
+        lsp_changed_doc(state, path, text);
     }
 }

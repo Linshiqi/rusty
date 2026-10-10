@@ -62,6 +62,9 @@ pub struct Lsp {
     /// and nothing else ever does — the one broken state that used to look
     /// exactly like a working one.
     pub health: RwSignal<Option<(rusty_lsp::HealthLevel, Option<String>)>>,
+    /// Which server the project has — rust-analyzer or clangd — and so
+    /// which files are its: `None` before one was asked for.
+    pub server: RwSignal<Option<rusty_lsp::ServerKind>>,
 }
 
 /// The debug session, its breakpoints, and the chip's registers.

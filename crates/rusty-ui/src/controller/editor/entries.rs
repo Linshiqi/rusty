@@ -93,8 +93,8 @@ fn follow_move(state: AppState, from: &str, to: &str, is_dir: bool) {
         // Once per file: a file open on both sides moved once.
         for (old, new, text) in reopened {
             if announced.insert(old.clone()) {
-                lsp_closed_doc(old);
-                lsp_open_doc(new, text);
+                lsp_closed_doc(state, old);
+                lsp_open_doc(state, new, text);
             }
         }
     }

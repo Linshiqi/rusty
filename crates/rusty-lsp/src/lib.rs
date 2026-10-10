@@ -44,6 +44,6 @@ pub mod watched;
 #[cfg(feature = "backend")]
 pub use client::{Events, LspClient};
 #[cfg(feature = "backend")]
-pub use discover::find_rust_analyzer;
+pub use discover::{find_clangd, find_rust_analyzer};
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};

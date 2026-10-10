@@ -552,11 +552,27 @@ pub fn build_plans(project: &EmbeddedProject, root: &Path) -> Result<Vec<Command
                     "platformio.ini declares no [env:…] section, so there is nothing to build",
                 )
             })?;
-            Ok(vec![CommandPlan::new(
+            let mut plans = vec![CommandPlan::new(
                 "pio",
-                vec!["run".into(), "-e".into(), env],
+                vec!["run".into(), "-e".into(), env.clone()],
                 "PlatformIO builds the environment with the toolchain its platform installs",
-            )])
+            )];
+            // Once, so clangd has every file's flags: PlatformIO writes no
+            // compile database unless asked.
+            if !root.join("compile_commands.json").is_file() {
+                plans.push(CommandPlan::new(
+                    "pio",
+                    vec![
+                        "run".into(),
+                        "-e".into(),
+                        env,
+                        "-t".into(),
+                        "compiledb".into(),
+                    ],
+                    "writes compile_commands.json, which the editor reads C and C++ by",
+                ));
+            }
+            Ok(plans)
         }
         BuildSystem::Cmake => {
             if build.sdk == Some(CmakeSdk::EspIdf) {
@@ -772,6 +788,53 @@ fn image(path: &Path, profile: &str, target: &str, chosen: bool) -> Firmware {
             .map(|d| d.as_secs()),
         matches_configured_target: chosen,
     }
+}
+
+// ─── what an editor reads ────────────────────────────────────────────────────
+
+/// Where `compile_commands.json` is for `project` — the file clangd reads
+/// every file's flags from: a CMake project's build directory, ESP-IDF's
+/// `build/`, a PlatformIO project's root (`pio run -t compiledb` writes it
+/// there). `None` for Cargo, which has no such file.
+pub fn compile_commands_dir(root: &Path, project: &EmbeddedProject) -> Option<PathBuf> {
+    match project.build.system {
+        BuildSystem::Cargo => None,
+        BuildSystem::PlatformIo => Some(root.to_path_buf()),
+        BuildSystem::Cmake => Some(
+            root.join(
+                project
+                    .build
+                    .build_dir
+                    .clone()
+                    .unwrap_or_else(|| "build".to_string()),
+            ),
+        ),
+    }
+}
+
+/// The cross compilers clangd may run to learn their system headers
+/// (`--query-driver`), as globs: every C compiler the catalogue names for a
+/// part — `arm-none-eabi-gcc` becomes `**/arm-none-eabi-*` — and ESP-IDF's
+/// per-chip Xtensa names. Named rather than `**/*gcc*`: clangd *runs* what
+/// matches, and a glob that matches anything runs anything a compile
+/// database names.
+pub fn query_driver_globs(catalog: &Catalog) -> Vec<String> {
+    let mut globs: Vec<String> = catalog
+        .chips()
+        .iter()
+        .filter_map(|chip| chip.c_compiler.as_ref())
+        .filter_map(|compiler| {
+            let prefix = compiler
+                .binary
+                .strip_suffix("gcc")
+                .or_else(|| compiler.binary.strip_suffix("cc"))?;
+            (!prefix.is_empty()).then(|| format!("**/{prefix}*"))
+        })
+        .collect();
+    globs.push("**/xtensa-esp*-elf-*".to_string());
+    globs.sort();
+    globs.dedup();
+    globs
 }
 
 // ─── the tools each needs ────────────────────────────────────────────────────

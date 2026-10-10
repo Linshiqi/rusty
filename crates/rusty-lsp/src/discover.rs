@@ -101,6 +101,70 @@ fn is_rust_analyzer_version(stdout: &str) -> bool {
     stdout.trim_start().starts_with("rust-analyzer")
 }
 
+/// clangd, for a project's C and C++: one the caller names (the
+/// `RUSTY_CLANGD` variable, or a path), then the one on PATH, then LLVM's
+/// default install — each taken only when `--version` answers as clangd,
+/// since a file of that name is not proof of a server.
+pub fn find_clangd(named: Option<&Path>) -> Option<PathBuf> {
+    let asked = named
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("RUSTY_CLANGD").map(PathBuf::from));
+    let exe = if cfg!(windows) {
+        "clangd.exe"
+    } else {
+        "clangd"
+    };
+    let on_path = std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(exe))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let installed = [
+        PathBuf::from("C:/Program Files/LLVM/bin/clangd.exe"),
+        PathBuf::from("/usr/bin/clangd"),
+        PathBuf::from("/opt/homebrew/opt/llvm/bin/clangd"),
+        PathBuf::from("/usr/local/opt/llvm/bin/clangd"),
+    ];
+    asked
+        .into_iter()
+        .chain(on_path)
+        .chain(installed)
+        .find(|candidate| candidate.is_file() && answers_as_clangd(candidate))
+}
+
+fn answers_as_clangd(candidate: &Path) -> bool {
+    let mut command = Command::new(candidate);
+    command.arg("--version");
+    no_console_window(&mut command);
+    command.output().is_ok_and(|out| {
+        out.status.success()
+            && String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim_start().starts_with("clangd version"))
+    })
+}
+
+/// clangd's command line for a project: where `compile_commands.json` is,
+/// which cross compilers it may ask for their headers, an index built in
+/// the background, and no `#include` added behind somebody's back when a
+/// completion is accepted.
+pub(crate) fn clangd_args(compile_commands: Option<&Path>, query_driver: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "--background-index".to_string(),
+        "--header-insertion=never".to_string(),
+        "--log=error".to_string(),
+    ];
+    if let Some(dir) = compile_commands {
+        args.push(format!("--compile-commands-dir={}", dir.display()));
+    }
+    if !query_driver.is_empty() {
+        args.push(format!("--query-driver={}", query_driver.join(",")));
+    }
+    args
+}
+
 /// The server process, ready to spawn: stdio piped, and the environment as
 /// the project would want it.
 pub(crate) fn command_for(binary: &Path, root: &Path) -> Command {

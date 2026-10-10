@@ -350,13 +350,19 @@ pub(super) fn StatusBar() -> impl IntoView {
                         // reason takes the tooltip's place, since a failure
                         // nobody can read is a colour and nothing more.
                         let health = state.lsp.health.get();
+                        let server = state
+                            .lsp
+                            .server
+                            .get()
+                            .unwrap_or(rusty_lsp::ServerKind::RustAnalyzer)
+                            .label();
                         let title = match &health {
                             Some((_, Some(why))) => why.clone(),
                             _ => t!("status.lsp-hint"),
                         };
                         let (text, tone) = match lsp {
                             crate::state::LspStatus::Starting => {
-                                (t!("status.lsp-starting"), Tone::Neutral)
+                                (t!("status.lsp-starting", server = server), Tone::Neutral)
                             }
                             // A server that did not load the workspace comes
                             // before everything else it might be doing: it
@@ -398,15 +404,15 @@ pub(super) fn StatusBar() -> impl IntoView {
                             // full in the tooltip.
                             crate::state::LspStatus::Ready if state.lsp.progress.get().is_some() => {
                                 let what = state.lsp.progress.get().unwrap_or_default();
-                                (format!("rust-analyzer · {what}"), Tone::Amber)
+                                (format!("{server} · {what}"), Tone::Amber)
                             }
                             crate::state::LspStatus::Ready if errors > 0 => {
                                 (t!("status.lsp-errors", count = errors), Tone::Crimson)
                             }
                             crate::state::LspStatus::Ready => {
-                                ("rust-analyzer".to_string(), Tone::Patina)
+                                (server.to_string(), Tone::Patina)
                             }
-                            _ => (t!("status.lsp-missing"), Tone::Crimson),
+                            _ => (t!("status.lsp-missing", server = server), Tone::Crimson),
                         };
                         // A clipped line is only readable whole on hover. The
                         // health reason stays the tooltip whenever there is

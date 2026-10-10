@@ -22,7 +22,7 @@ pub fn find_places(state: AppState, query: PlaceQuery) {
     let Some(path) = state.active_path_now() else {
         return;
     };
-    if !path.ends_with(".rs") {
+    if !state.served(&path) {
         return;
     }
     let Some((line, col)) = caret_position(state) else {
@@ -89,7 +89,7 @@ pub(in crate::controller) fn word_around(text: &str, line: u32, col: u32) -> Str
 /// the dock, as a rename that found nothing does, rather than letting the
 /// command seem to do nothing.
 pub fn expand_macro(state: AppState) {
-    let Some(path) = state.active_path_now().filter(|path| path.ends_with(".rs")) else {
+    let Some(path) = state.active_path_now().filter(|path| state.served(path)) else {
         return;
     };
     if state.lsp.status.get_untracked() != LspStatus::Ready {
@@ -149,7 +149,7 @@ pub fn ask_symbols(state: AppState, workspace: bool, words: String) {
             .await;
             (ask, answer)
         } else {
-            let Some(path) = state.active_path_now().filter(|path| path.ends_with(".rs")) else {
+            let Some(path) = state.active_path_now().filter(|path| state.served(path)) else {
                 return;
             };
             let ask = format!("@{path}");

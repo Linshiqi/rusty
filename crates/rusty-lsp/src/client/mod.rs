@@ -54,7 +54,7 @@ use self::{
 use crate::{
     discover,
     error::{Error, Result},
-    model::{FileDiagnostic, LspEvent},
+    model::{FileDiagnostic, LspEvent, ServerKind},
     positions::Encoding,
     pull,
 };
@@ -161,6 +161,14 @@ pub(crate) struct Shared {
     /// watching the disk itself, and hears about changes only from
     /// [`LspClient::did_change_watched_files`] (`watched.rs` says why).
     watching: AtomicBool,
+    /// Which server this is: what a document's `languageId` is, and whether
+    /// rust-analyzer's own extensions are sent at all.
+    pub(crate) kind: ServerKind,
+    /// The server answers `textDocument/diagnostic` — it declared a
+    /// `diagnosticProvider`. rust-analyzer does and its pushes are only the
+    /// check's half; clangd does not, and what it pushes is the whole
+    /// answer, so nothing is pulled.
+    pub(crate) pulls: AtomicBool,
     pub(crate) root: PathBuf,
     pub(crate) events: Sender<LspEvent>,
 }
@@ -188,6 +196,37 @@ impl LspClient {
         Self::connect(Box::new(stdout), Box::new(stdin), Some(child), root, target)
     }
 
+    /// Start clangd for the C and C++ of the project at `root`.
+    ///
+    /// `compile_commands` is the directory holding `compile_commands.json` —
+    /// a CMake project's build directory, a PlatformIO project's root — and
+    /// `query_driver` the globs of the cross compilers clangd may run to ask
+    /// for their system headers: without them it reads an Arm or RISC-V
+    /// file with the host's headers and every `#include <stdint.h>` is an
+    /// error. `clangd` names a binary to use instead of the one discovery
+    /// would pick.
+    pub fn spawn_clangd(
+        root: &Path,
+        compile_commands: Option<&Path>,
+        query_driver: &[String],
+        clangd: Option<&Path>,
+    ) -> Result<(LspClient, Events)> {
+        let binary = discover::find_clangd(clangd).ok_or(Error::NotFound)?;
+        let mut command = discover::command_for(&binary, root);
+        command.args(discover::clangd_args(compile_commands, query_driver));
+        let mut child = command.spawn().map_err(Error::Spawn)?;
+        let stdin = child.stdin.take().expect("piped stdin");
+        let stdout = child.stdout.take().expect("piped stdout");
+        Self::connect_as(
+            Box::new(stdout),
+            Box::new(stdin),
+            Some(child),
+            root,
+            ServerKind::Clangd,
+            serde_json::Map::new(),
+        )
+    }
+
     /// A session over an already-open transport.
     ///
     /// What [`LspClient::spawn`] builds once the process exists — and what
@@ -201,6 +240,26 @@ impl LspClient {
         child: Option<Child>,
         root: &Path,
         target: Option<&str>,
+    ) -> Result<(LspClient, Events)> {
+        let options = handshake::rust_analyzer_options(root, target);
+        Self::connect_as(
+            reader,
+            writer,
+            child,
+            root,
+            ServerKind::RustAnalyzer,
+            options,
+        )
+    }
+
+    /// [`Self::connect`] for either server, with its initialization options.
+    pub(crate) fn connect_as(
+        reader: Box<dyn Read + Send>,
+        writer: Box<dyn Write + Send>,
+        child: Option<Child>,
+        root: &Path,
+        kind: ServerKind,
+        options: serde_json::Map<String, Value>,
     ) -> Result<(LspClient, Events)> {
         let (events_tx, events_rx) = mpsc::channel();
         let shared = Arc::new(Shared {
@@ -221,6 +280,8 @@ impl LspClient {
             pushed: Mutex::new(HashMap::new()),
             quiescent: AtomicBool::new(false),
             watching: AtomicBool::new(false),
+            kind,
+            pulls: AtomicBool::new(false),
             root: root.to_path_buf(),
             events: events_tx,
         });
@@ -229,7 +290,7 @@ impl LspClient {
         // The handshake, before anyone else gets the client. A failure here
         // must kill the child by hand — no `LspClient` exists yet to do it on
         // drop, and a leaked rust-analyzer holds the project's target dir open.
-        if let Err(e) = handshake(&shared, root, target) {
+        if let Err(e) = handshake(&shared, root, options) {
             if let Some(mut child) = child {
                 let _ = child.kill();
                 let _ = child.wait();

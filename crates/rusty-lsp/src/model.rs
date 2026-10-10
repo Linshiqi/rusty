@@ -35,6 +35,52 @@ pub struct FileDiagnostic {
     pub end_col: u32,
 }
 
+/// Which language server a session talks to — rust-analyzer for a Cargo
+/// project, clangd for a PlatformIO or CMake one — and so which files it
+/// is told about. Both sides read it: the client to name a document's
+/// language, the editor to decide which files hover, completion and the
+/// rest are asked of the server for at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServerKind {
+    RustAnalyzer,
+    Clangd,
+}
+
+/// C, C++ and their headers, as clangd takes them.
+const C_FAMILY: [&str; 9] = ["c", "h", "cc", "cpp", "cxx", "hh", "hpp", "hxx", "ino"];
+
+impl ServerKind {
+    /// The name the window shows for it.
+    pub fn label(self) -> &'static str {
+        match self {
+            ServerKind::RustAnalyzer => "rust-analyzer",
+            ServerKind::Clangd => "clangd",
+        }
+    }
+
+    /// Whether this server is told about `path` — rust-analyzer only ever
+    /// about `.rs` files (a `didOpen` for `.git/info/exclude` once produced
+    /// a syntax error per line), clangd about C and C++.
+    pub fn serves(self, path: &str) -> bool {
+        self.language_id(path).is_some()
+    }
+
+    /// The `languageId` a `didOpen` carries for `path`, or `None` for a file
+    /// this server is not told about.
+    pub fn language_id(self, path: &str) -> Option<&'static str> {
+        let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
+        match self {
+            ServerKind::RustAnalyzer => (extension == "rs").then_some("rust"),
+            ServerKind::Clangd => match extension.as_str() {
+                "c" | "h" => Some("c"),
+                other if C_FAMILY.contains(&other) => Some("cpp"),
+                _ => None,
+            },
+        }
+    }
+}
+
 /// What the server session tells the frontend as it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "camelCase")]

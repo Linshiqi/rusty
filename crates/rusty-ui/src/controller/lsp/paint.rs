@@ -12,7 +12,7 @@ pub fn request_semantic(state: AppState, path: String) {
         lines: Option<(u32, u32)>,
     }
 
-    if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
+    if !state.served(&path) || state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
     let lines = semantic_lines(state);
@@ -92,7 +92,7 @@ fn ask_hints(state: AppState, path: String, carry: bool) {
         draft: Option<rusty_lsp::Draft>,
     }
 
-    if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
+    if !state.served(&path) || state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
     let Some((from, to)) = hint_lines(state) else {
@@ -222,7 +222,7 @@ pub fn hints_cover(state: AppState, from: u32, to: u32) -> bool {
 pub fn request_highlights(state: AppState, path: String, line: u32, col: u32) {
     static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
+    if !state.served(&path) || state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
     let asked = ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

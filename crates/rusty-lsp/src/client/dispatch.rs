@@ -50,7 +50,10 @@ pub(super) fn dispatch(shared: &Shared, message: Value) {
             // brought them back until the next save.
             let quiescent = params["quiescent"].as_bool().unwrap_or(false);
             if quiescent && !shared.quiescent.swap(true, Ordering::AcqRel) {
-                let _ = shared.notify("rust-analyzer/runFlycheck", json!({ "textDocument": null }));
+                if shared.kind == crate::model::ServerKind::RustAnalyzer {
+                    let _ =
+                        shared.notify("rust-analyzer/runFlycheck", json!({ "textDocument": null }));
+                }
                 // And what the editor draws over the text is asked for again.
                 // rust-analyzer's own refresh comes while it is still loading,
                 // and what is asked then comes back empty — measured as a

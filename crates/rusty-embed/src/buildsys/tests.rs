@@ -107,9 +107,31 @@ fn a_platformio_environment_is_read_as_platformio_reads_it() {
     assert_eq!(c3["platform"], "espressif32", "extends");
 
     let plans = build_plans(&project, dir.path()).unwrap();
-    assert_eq!(plans.len(), 1);
+    assert_eq!(plans.len(), 2, "a build, then the compile database once");
     assert_eq!(plans[0].program, "pio");
     assert_eq!(args(&plans[0]), "run -e c3");
+    assert_eq!(args(&plans[1]), "run -e c3 -t compiledb");
+    write(dir.path(), "compile_commands.json", "[]");
+    assert_eq!(build_plans(&project, dir.path()).unwrap().len(), 1);
+    assert_eq!(
+        compile_commands_dir(dir.path(), &project).as_deref(),
+        Some(dir.path())
+    );
+}
+
+/// clangd may run the cross compilers the catalogue names, and no other.
+#[test]
+fn clangd_may_run_the_catalogues_cross_compilers_only() {
+    let globs = query_driver_globs(&Catalog::builtin());
+    for glob in [
+        "**/arm-none-eabi-*",
+        "**/riscv32-esp-elf-*",
+        "**/xtensa-esp-elf-*",
+        "**/xtensa-esp*-elf-*",
+    ] {
+        assert!(globs.iter().any(|g| g == glob), "{glob}: {globs:?}");
+    }
+    assert!(globs.iter().all(|g| g != "**/*"), "{globs:?}");
 }
 
 /// `board_build.mcu` names the part outright, by its ordering code; a board

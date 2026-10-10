@@ -114,7 +114,7 @@ fn capabilities() -> Value {
 }
 
 /// rust-analyzer's own settings for this project.
-fn initialization_options(root: &Path, target: Option<&str>) -> Map<String, Value> {
+pub(super) fn rust_analyzer_options(root: &Path, target: Option<&str>) -> Map<String, Value> {
     let mut cargo = Map::new();
     // Tests and benches do not build in `no_std` — there is no test harness —
     // so the default of checking `--all-targets` buries every real diagnostic
@@ -179,8 +179,11 @@ fn initialization_options(root: &Path, target: Option<&str>) -> Map<String, Valu
 }
 
 /// The `initialize` round trip.
-pub(super) fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<()> {
-    let options = initialization_options(root, target);
+pub(super) fn handshake(
+    shared: &Arc<Shared>,
+    root: &Path,
+    options: Map<String, Value>,
+) -> Result<()> {
     let params = json!({
         "processId": std::process::id(),
         "rootUri": path_to_uri(root),
@@ -194,6 +197,10 @@ pub(super) fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>)
         _ => Encoding::Utf16,
     };
     let _ = shared.encoding.set(encoding);
+    let pulls = !reply["capabilities"]["diagnosticProvider"].is_null();
+    shared
+        .pulls
+        .store(pulls, std::sync::atomic::Ordering::Release);
 
     let legend: Vec<String> =
         reply["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"]

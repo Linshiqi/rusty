@@ -96,8 +96,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     let scroller: NodeRef<html::Div> = NodeRef::new();
     let path = document.path.clone();
     let read_only = document.read_only;
-    // Hover only means something where a language server is listening.
-    let is_rust = path.ends_with(".rs");
+    // Hover only means something where a language server is listening —
+    // rust-analyzer for Rust, clangd for C and C++.
+    let is_rust = state.served(&path);
     // In no crate's module tree — one rule, shared with the tree and the tab
     // strip, so the three cannot dim different files.
     let unlinked = {

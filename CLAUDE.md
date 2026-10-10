@@ -250,7 +250,7 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
 | `rusty-git` | The repository's history, Fork-shaped: `graph.rs` lays the log out into lanes and edges (pure, tested — the frontend only turns a lane into an x), `parse/` reads `git`'s machine formats (the log, a commit's diff, the refs, the status), `repo/` runs the user's own `git` in the opened project (`run.rs` the one way a `git` is run, `stamp.rs` what moved without asking git). No libgit2: one binary on PATH is one implementation of the repository format to agree with |
-| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens, and navigation — references, implementations, type definitions, outlines, workspace symbols, the occurrences of a name, call hierarchies and macro expansion (`client/navigate.rs`, every answer a place with its line). `client/mod.rs` is the session; `documents`, `edits`, `query`, `navigate` and `hints` are the requests, and `transport`, `handshake` and `dispatch` the plumbing under them; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
+| `rusty-lsp` | The language-server client — rust-analyzer for a Cargo project, clangd for a PlatformIO or CMake one (`ServerKind`): stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens, and navigation — references, implementations, type definitions, outlines, workspace symbols, the occurrences of a name, call hierarchies and macro expansion (`client/navigate.rs`, every answer a place with its line). `client/mod.rs` is the session; `documents`, `edits`, `query`, `navigate` and `hints` are the requests, and `transport`, `handshake` and `dispatch` the plumbing under them; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here. The request/response commands are `commands/`, one module per concern and glob re-exported (`#[tauri::command]` puts a hidden macro beside each command, and `generate_handler!` finds it by the command's own path); the long-running, streaming ones have modules of their own (`ai`, `flash`, `simulate`, `lsp`, `terminal`, `debug`). A command that needs the project asks `AppState::require_root`; blocking work goes through `state::blocking` |
@@ -5384,8 +5384,8 @@ the workbench knows about C without becoming a C IDE.
   here.** It was out of scope — ESP-IDF's and STM32CubeIDE's job — and a
   folder without a `Cargo.toml` could not even be opened. It can now (*Build
   systems*, below): rusty builds it with the project's own tool, finds its
-  image, sizes and flashes it. Writing the C — completion, diagnostics — is
-  clangd's job, and the next thing to wire in.
+  image, sizes and flashes it, and clangd reads its C and C++ in the
+  editor (*C and C++ in the editor*, below).
 
 ## Build systems: Cargo, PlatformIO, CMake
 
@@ -5442,6 +5442,40 @@ same.
   build finding nothing to do — then `rusty-cli size` finding `build/
   blinky.elf`. PlatformIO is proven by its tests alone: nobody here has it
   installed.
+
+## C and C++ in the editor
+
+A PlatformIO or CMake project gets clangd where a Cargo one gets
+rust-analyzer: one server per project, chosen on both sides by the same rule
+(a `Cargo.toml` at the root), and `rusty_lsp::ServerKind` says which files
+are its — `.rs` for rust-analyzer, C and C++ and their headers for clangd.
+Every request the editor makes asks `AppState::served(path)` first; the
+sixteen places that asked `ends_with(".rs")` were the whole of what kept
+the editor Rust-only, and the client under them was already plain LSP.
+
+- **clangd reads `compile_commands.json`, which the build writes**: CMake's
+  configure exports it into the build directory, and a PlatformIO build adds
+  `pio run -t compiledb` once (`buildsys::compile_commands_dir`). Before the
+  first build there is none, and clangd guesses flags.
+- **`--query-driver` is what makes cross C readable, measured**: without it
+  clangd parses an Arm file with its own headers, and `#include <string.h>`
+  is `file not found` (`clangd --check`, a newlib header); with it clangd
+  runs `arm-none-eabi-gcc` for its system include paths and the same file
+  has no errors. The globs come from the catalogue's `c_compiler` names
+  (`buildsys::query_driver_globs`), never `**/*`: clangd *runs* whatever
+  matches, and a glob that matches anything runs anything a compile
+  database names. Windows paths in the database match `**/` globs.
+- **clangd declares no pull diagnostics, so nothing is pulled.** rust-
+  analyzer's pushes are only the check's half and its pulls the rest;
+  clangd's pushes are the whole answer. `Shared::pulls` is read off the
+  `initialize` reply's `diagnosticProvider`, and a server without one is
+  never asked — a mock server that does not declare it gets no pulls either,
+  which is why the unit tests' fake now declares what rust-analyzer does.
+  rust-analyzer's own extensions (`runFlycheck`) go to rust-analyzer only.
+- **`tests/clangd.rs` drives a real clangd** — a pushed diagnostic on the
+  right column under a CJK comment, completion and hover through the same
+  client — and skips aloud where none is installed, as `tests/analyzer.rs`
+  does. Format-on-save stays Rust's (rustfmt); a C file is saved as typed.
 
 ## After every feature: review before moving on
 

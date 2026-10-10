@@ -43,18 +43,18 @@ pub fn start_lsp(state: AppState) {
     // its events are told apart from the live one.
     let session = state.lsp.session.get_untracked() + 1;
     state.lsp.session.set(session);
-    // rust-analyzer analyses a Cargo project. A PlatformIO or CMake one has
-    // no server to start, which is not the server missing: "rust-analyzer
-    // missing" over a C project sends somebody to install what it would
-    // not use.
+    // rust-analyzer for a Cargo project, clangd for a PlatformIO or CMake
+    // one — the backend chooses by the same rule, a `Cargo.toml` at the
+    // root — and which files the editor asks the server about follows.
     let cargo = state.project.detected.with_untracked(|p| {
         p.as_ref()
             .is_none_or(|p| p.build.system == rusty_embed::BuildSystem::Cargo)
     });
-    if !cargo {
-        state.lsp.status.set(LspStatus::Off);
-        return;
-    }
+    state.lsp.server.set(Some(if cargo {
+        rusty_lsp::ServerKind::RustAnalyzer
+    } else {
+        rusty_lsp::ServerKind::Clangd
+    }));
     state.lsp.status.set(LspStatus::Starting);
     state.lsp.progress.set(None);
 
@@ -96,7 +96,7 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
             // in either group.
             for group in state.open_groups() {
                 if let Some(path) = group.active_path_now() {
-                    lsp_open_doc(path.clone(), group.editor.draft.get_untracked());
+                    lsp_open_doc(state, path.clone(), group.editor.draft.get_untracked());
                     request_semantic(group, path.clone());
                     request_hints(group, path);
                 }
@@ -215,11 +215,11 @@ fn lsp_sync(command: &'static str, args: impl serde::Serialize + 'static) {
     });
 }
 
-pub fn lsp_open_doc(path: String, text: String) {
+pub fn lsp_open_doc(state: AppState, path: String, text: String) {
     // rust-analyzer is only ever told about Rust. Announcing `.git/info/
     // exclude` as a document got every line a "Syntax Error: expected an
     // item" — sixty-eight problems from a file that was never code.
-    if !path.ends_with(".rs") {
+    if !state.served(&path) {
         return;
     }
     lsp_sync(cmd::lsp::OPEN, PathText { path, text });
@@ -231,21 +231,21 @@ pub fn lsp_open_doc(path: String, text: String) {
 /// document and has no idea the disk moved, so a file reloaded underneath it
 /// leaves the server answering about the previous text — completions at
 /// offsets that no longer exist, diagnostics on lines that are gone.
-pub(super) fn lsp_changed_doc(path: String, text: String) {
+pub(super) fn lsp_changed_doc(state: AppState, path: String, text: String) {
     #[derive(serde::Serialize)]
     struct Change {
         path: String,
         draft: rusty_lsp::Draft,
     }
-    if !path.ends_with(".rs") {
+    if !state.served(&path) {
         return;
     }
     let draft = draft(text);
     lsp_sync(cmd::lsp::CHANGE, Change { path, draft });
 }
 
-pub(super) fn lsp_saved_doc(path: String) {
-    if !path.ends_with(".rs") {
+pub(super) fn lsp_saved_doc(state: AppState, path: String) {
+    if !state.served(&path) {
         return;
     }
     lsp_sync(cmd::lsp::SAVED, PathArg { path });
@@ -255,8 +255,8 @@ pub(super) fn lsp_saved_doc(path: String) {
 /// a file moved out from under its old name — so it reads the disk for it
 /// again (`LspClient::did_close`). The client ignores a file it was never
 /// told about, so this needs no bookkeeping of what was announced.
-pub(super) fn lsp_closed_doc(path: String) {
-    if !path.ends_with(".rs") {
+pub(super) fn lsp_closed_doc(state: AppState, path: String) {
+    if !state.served(&path) {
         return;
     }
     lsp_sync(cmd::lsp::CLOSE, PathArg { path });

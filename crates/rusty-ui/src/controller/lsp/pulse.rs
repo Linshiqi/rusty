@@ -78,7 +78,7 @@ fn edit_pulse(state: AppState) {
     let Some(path) = state.active_path_now() else {
         return;
     };
-    if path.ends_with(".rs") && state.lsp.status.get_untracked() == LspStatus::Ready {
+    if state.served(&path) && state.lsp.status.get_untracked() == LspStatus::Ready {
         // The change and what is asked about the text, in one command
         // (`request_painted`): colours and hints are lines and columns, right
         // for one text alone. Each view of the file asks for its own — a long

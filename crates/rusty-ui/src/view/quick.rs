@@ -240,7 +240,7 @@ pub fn QuickOpen() -> impl IntoView {
         state
             .focused()
             .active_path_now()
-            .filter(|path| path.ends_with(".rs"))
+            .filter(|path| state.served(path))
             .map(|path| format!("@{path}"))
     };
 

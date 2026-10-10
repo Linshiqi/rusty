@@ -22,7 +22,8 @@ use crate::{
     state::{AppState, blocking},
 };
 
-/// Start rust-analyzer for the open project and stream what it says.
+/// Start the open project's language server — rust-analyzer for a Cargo
+/// project, clangd for a PlatformIO or CMake one — and stream what it says.
 ///
 /// An unavailable server is an event, not an error: the editor works without
 /// one — no squiggles, no completion — and a red banner about a missing
@@ -34,17 +35,35 @@ pub async fn lsp_start(
 ) -> Result<(), CommandError> {
     let root = state.require_root().await?;
 
-    // rust-analyzer analyses a Cargo workspace; at the root of a PlatformIO
-    // or CMake project it finds none, and would say so as an error on every
-    // file. Said once instead, as the server being unavailable here.
+    // rust-analyzer analyses a Cargo workspace; a PlatformIO or CMake
+    // project's C and C++ are clangd's, read through the compile database
+    // the build writes, with the part's cross compiler asked for its system
+    // headers — without that, every `#include <string.h>` in Arm firmware
+    // is "file not found" (measured with `clangd --check`).
     if !root.join("Cargo.toml").is_file() {
-        let _ = on_event.send(LspEvent::Unavailable {
-            message: "rust-analyzer analyses Cargo projects, and this folder has no \
-                      Cargo.toml"
-                .to_string(),
-            install: None,
-        });
-        return Ok(());
+        let spawned = blocking("the language server task", {
+            let root = root.clone();
+            move || {
+                let project = rusty_embed::project::detect(&root).ok();
+                let catalog = rusty_embed::catalog::Catalog::load(Some(&root));
+                let compile_commands = project
+                    .as_ref()
+                    .and_then(|p| rusty_embed::buildsys::compile_commands_dir(&root, p));
+                let globs = rusty_embed::buildsys::query_driver_globs(&catalog);
+                LspClient::spawn_clangd(&root, compile_commands.as_deref(), &globs, None)
+            }
+        })
+        .await?;
+        return match spawned {
+            Ok((client, events)) => serve(&state, on_event, client, events).await,
+            Err(e) => {
+                let _ = on_event.send(LspEvent::Unavailable {
+                    message: e.to_string(),
+                    install: Some(CLANGD_INSTALL.to_string()),
+                });
+                Ok(())
+            }
+        };
     }
 
     // What the firmware builds for, so cfg resolution matches the chip rather
@@ -115,6 +134,20 @@ pub async fn lsp_start(
         }
     };
 
+    serve(&state, on_event, client, events).await
+}
+
+/// Where clangd comes from: LLVM's own releases, or the system's package.
+const CLANGD_INSTALL: &str =
+    "install clangd (https://clangd.llvm.org/installation) and put it on PATH";
+
+/// Hold a started server and stream what it says until it ends.
+async fn serve(
+    state: &AppState,
+    on_event: Channel<LspEvent>,
+    client: LspClient,
+    events: rusty_lsp::Events,
+) -> Result<(), CommandError> {
     state.set_lsp(Some(Arc::new(client))).await;
     let _ = on_event.send(LspEvent::Ready {});
 

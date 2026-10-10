@@ -43,7 +43,7 @@ fn write_draft(state: AppState, always: bool) {
         state,
         async move { ipc::call::<_, ()>(cmd::files::SAVE, &args).await },
         move |()| {
-            lsp_saved_doc(path.clone());
+            lsp_saved_doc(state, path.clone());
             clear_stale(state, &path);
             // What is on disk is now this text, whatever has been typed
             // since. Only the document this write was for: the tab may have
@@ -121,7 +121,7 @@ pub fn save_all_then(state: AppState, then: impl FnOnce() + 'static) {
                 state.app.error.set(Some(error));
                 return;
             }
-            lsp_saved_doc(path.clone());
+            lsp_saved_doc(state, path.clone());
             clear_stale(state, &path);
             // Every copy of this document, in both groups, is now these
             // bytes on disk — the file in front and a tab parked behind.
