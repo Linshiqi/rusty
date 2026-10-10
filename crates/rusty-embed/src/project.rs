@@ -81,6 +81,9 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
     let (mut chip_id, mut chip_source) = chip_from_manifest(&manifest, &catalog);
 
     let configured_target = read_build_target(root, &mut evidence)?;
+    let probe_chip = read_cargo_config(root)
+        .as_ref()
+        .and_then(probe_chip_from_runner);
     let configured_toolchain = read_toolchain_channel(root, &mut evidence)?;
 
     // Fall back to the target triple only when the manifest was silent, and
@@ -118,6 +121,7 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
         runtime,
         configured_target,
         configured_toolchain,
+        probe_chip,
         frameworks,
         uses_defmt,
         uses_embassy,
@@ -548,6 +552,66 @@ fn read_build_target(root: &Path, evidence: &mut Vec<String>) -> Result<Option<S
         return Ok(None);
     }
     Ok(None)
+}
+
+/// The project's `.cargo/config.toml` (or the legacy `config`), parsed, or
+/// `None` where there is none or it does not parse — `read_build_target`
+/// has already said so about a broken one.
+fn read_cargo_config(root: &Path) -> Option<toml::Table> {
+    [".cargo/config.toml", ".cargo/config"]
+        .iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| text.parse().ok())
+}
+
+/// The part a `probe-rs` runner names, from any `[target.…] runner` in the
+/// config: `probe-rs run --chip STM32F411CEUx` and `--chip=…` alike. A
+/// runner that is not probe-rs — espflash, wlink, a script — names nothing
+/// this is for, and two probe-rs runners naming different parts name
+/// neither: which one cargo uses depends on a target this does not know.
+pub(crate) fn probe_chip_from_runner(config: &toml::Table) -> Option<String> {
+    let targets = config.get("target")?.as_table()?;
+    let mut named: Vec<String> = targets
+        .values()
+        .filter_map(|target| target.get("runner"))
+        .filter_map(|runner| match runner {
+            toml::Value::String(line) => Some(
+                line.split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
+            ),
+            toml::Value::Array(words) => Some(
+                words
+                    .iter()
+                    .filter_map(|w| w.as_str().map(str::to_string))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .filter(|words| {
+            words.first().is_some_and(|program| {
+                let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+                name == "probe-rs" || name == "probe-rs.exe"
+            })
+        })
+        .filter_map(|words| {
+            words.iter().enumerate().find_map(|(at, word)| {
+                if word == "--chip" {
+                    words.get(at + 1).cloned()
+                } else {
+                    word.strip_prefix("--chip=").map(str::to_string)
+                }
+            })
+        })
+        .collect();
+    named.sort();
+    named.dedup();
+    match named.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
 }
 
 /// A target as cargo names it: a triple as written, and a target

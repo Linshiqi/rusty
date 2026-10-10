@@ -1033,6 +1033,7 @@ mod tests {
             runtime: None,
             configured_target: Some("riscv32imc-unknown-none-elf".to_string()),
             configured_toolchain: Some("nightly-2025-06-01".to_string()),
+            probe_chip: None,
             frameworks: Vec::new(),
             uses_defmt: false,
             uses_embassy: false,

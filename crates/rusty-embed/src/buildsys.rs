@@ -60,6 +60,7 @@ fn empty(root: &Path, build: BuildSetup, evidence: Vec<String>) -> EmbeddedProje
         runtime: None,
         configured_target: None,
         configured_toolchain: None,
+        probe_chip: None,
         frameworks: Vec::new(),
         uses_defmt: false,
         uses_embassy: false,

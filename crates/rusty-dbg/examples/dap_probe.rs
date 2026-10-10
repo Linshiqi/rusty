@@ -47,6 +47,7 @@ fn main() {
             args: rest.clone(),
             root: root.clone(),
             breakpoints: breakpoints.clone(),
+            board: None,
         };
         match DapSession::start(&launch) {
             Ok(pair) => {

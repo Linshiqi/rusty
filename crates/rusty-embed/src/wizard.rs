@@ -356,7 +356,30 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
         });
     }
 
-    if !chip.radios.iter().any(|r| r == "none" || r == "no radio")
+    // A probe is the only way onto a part with no ROM serial bootloader
+    // espflash speaks, and the board a beginner buys does not always have
+    // one: said before the project exists, not at the first Flash.
+    if !chip.flashers.is_empty() && !chip.flashers.contains(&Flasher::Espflash) {
+        let probe = if chip.flashers.contains(&Flasher::Wlink) {
+            "a WCH-LinkE"
+        } else {
+            "a debug probe — an ST-Link, a J-Link, a Raspberry Pi Debug Probe"
+        };
+        out.push(Explanation {
+            topic: "Flashed through a probe".into(),
+            detail: format!(
+                "{} is written and debugged through {probe}, wired to its debug pins.                  A USB cable alone lets rusty watch what the board prints over serial,                  not flash it.",
+                chip.name
+            ),
+            consequence: None,
+        });
+    }
+
+    // Only where the generator offers the radio as an option: rusty's own
+    // templates have none, and "a feature flag later" is esp-hal's story,
+    // not every HAL's.
+    if !chip.writes_itself(choice.runtime)
+        && !chip.radios.iter().any(|r| r == "none" || r == "no radio")
         && !choice.options.iter().any(|o| o == "wifi")
     {
         out.push(Explanation {

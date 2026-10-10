@@ -39,6 +39,14 @@ pub struct EmbeddedProject {
     pub configured_target: Option<String>,
     /// Toolchain channel from `rust-toolchain.toml`, if set.
     pub configured_toolchain: Option<String>,
+    /// probe-rs's name for the part, as the project's own cargo runner
+    /// gives it (`runner = "probe-rs run --chip STM32F411CEUx"`). A probe
+    /// flash and a board debug use it before the catalogue's: the runner
+    /// is what `cargo run` already flashes with, and a die the catalogue
+    /// names without a package (`stm32f411`) has no name of its own to
+    /// give probe-rs.
+    #[serde(default)]
+    pub probe_chip: Option<String>,
     /// HAL and framework crates found in the manifest.
     pub frameworks: Vec<String>,
     /// Whether `defmt` is a dependency — decides whether the monitor should
@@ -156,6 +164,7 @@ mod root_is_firmware_tests {
             runtime: None,
             configured_target: None,
             configured_toolchain: None,
+            probe_chip: None,
             frameworks: Vec::new(),
             uses_defmt: false,
             uses_embassy: false,

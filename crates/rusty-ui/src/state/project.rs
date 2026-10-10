@@ -104,6 +104,8 @@ pub enum DeviceAction {
     FlashOnly,
     /// Attach to what is already on the board.
     Monitor,
+    /// Build, then flash and debug on the board through its debug probe.
+    Debug,
 }
 
 /// Starting a new project.

@@ -5361,6 +5361,55 @@ the plan says so by name.
   transports `flash::plan` knows (`Serial`, `Probe`); the catalogue says
   probe-rs, and a Pico user without a Debug Probe is told so rather than
   sent somewhere that cannot work.
+- **Debug on the board is probe-rs's own debug adapter, not gdb.** For a
+  release the title bar's Debug meant the simulator and nothing else: a
+  `Target::Probe` branch sat in `debug_start` with no caller, so an STM32,
+  RP or nRF user — anybody whose part QEMU does not model — could not debug
+  at all. `probe-rs dap-server` flashes the image and debugs it in one
+  session, for every part probe-rs knows, with no cross gdb to install, and
+  rusty already spoke DAP for LLDB: `rusty_dbg::Board` on a `DapLaunch` is
+  the whole difference (`debug_board`). The launch is probe-rs's own
+  `SessionConfig`, read off its source rather than its docs, and so is the
+  rest — RTT arrives as `probe-rs-rtt-data`, not `output`, and only after
+  the client answers `probe-rs-rtt-channel-config` with `rttWindowOpened`;
+  a refused launch carries its reason in the error body's `format`, while
+  `message` says only `cancelled`. Measured against probe-rs 0.32 with no
+  probe plugged in: refused within a second, in its own words ("No
+  connected probes were found."), where the first version waited out the
+  five minutes a flash may take. `tests/probe_rs.rs` holds that. **Which
+  Debug runs is a rule, not a setting** (`debugs_on_board`): the board when
+  the part has a probe-rs name and either a probe is the chosen device or
+  the simulator cannot run the project; a C3 with its serial port chosen
+  stays in the simulator, and a WCH-Link, which wlink drives and probe-rs
+  cannot, never counts as a probe. The image debugged is the image Flash
+  writes — release, which every template builds with `debug = 2` — and
+  probe-rs flashes the file it is handed, which is why this command, unlike
+  `debug_start`, may be told which file. **Not run against a board**:
+  nobody here has a probe.
+- **Watching a board needs no bootloader.** Monitor over a serial port was
+  refused for every part espflash cannot talk to, because the refusal came
+  before the action was looked at — an nRF's USB-CDC, an STM32 on a
+  USB-UART. It is rusty's own serial link for those now (`open_link`, the
+  Plot panel's), through the same `absorb`.
+- **The probe-rs name is the project's runner's first**
+  (`EmbeddedProject::probe_chip`, read off `runner = "probe-rs run --chip
+  STM32F411CEUx"` in `.cargo/config.toml`, a string or an argument list):
+  it is what `cargo run` already flashes with, and the catalogue's die
+  entries (`stm32f411`) have no package and so no name to give. Two probe-rs
+  runners naming different parts name neither. The refusal for a part with
+  no name says to put one there.
+- **The pin map reads every HAL's pin names** (`pins::pin_of`): `.GPIO5`,
+  `.PIN_25`, and through the part's `ports`, `.PC13` and `.P0_13`
+  (`Ports::number`, the inverse of `Ports::name`), and names a pin as its
+  vendor does on screen. A part that is not Espressif's is mapped from the
+  catalogue's `gpio` list, with a note that the catalogue knows which pins
+  exist and nothing about what each can do — it told an STM32 user that
+  esp-hal's description of their part could not be found.
+- **The wizard lists what it can create**: a part with no generator is one
+  to open a project for, not to start one with, and picking `stm32f411`
+  ended at the last step on "no generator". A part with no `std` target
+  gets no ESP-IDF row, a nightly part is said to need nightly, and a part
+  flashed through a probe says so before the project exists.
 
 ## Meeting C
 

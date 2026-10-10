@@ -243,6 +243,9 @@ pub mod debug {
     /// A host test under gdb: builds it, finds its binary, runs it. Streams
     /// like [`START`].
     pub const TEST: &str = "debug_test";
+    /// A board through its debug probe: probe-rs flashes the image and
+    /// debugs it. Streams like [`START`].
+    pub const BOARD: &str = "debug_board";
     pub const BREAKPOINT: &str = "debug_breakpoint";
     pub const CONTROL: &str = "debug_control";
     pub const FRAME: &str = "debug_frame";

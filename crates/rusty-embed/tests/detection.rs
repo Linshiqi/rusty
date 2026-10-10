@@ -513,3 +513,72 @@ esp-hal = \"0.23\"
         "a pure-Rust project claims no C interop",
     );
 }
+
+const F4_MANIFEST: &str = r#"
+[package]
+name = "blackpill"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stm32f4xx-hal = { version = "0.22", features = ["stm32f411"] }
+"#;
+
+/// The part probe-rs flashes is the one the project's own runner names —
+/// the die the manifest selects (`stm32f411`) has no package, so the
+/// catalogue has no probe-rs name to give it, and the runner does.
+#[test]
+fn the_probe_rs_chip_is_read_off_the_projects_own_runner() {
+    let dir = project_dir(&[
+        ("Cargo.toml", F4_MANIFEST),
+        (
+            ".cargo/config.toml",
+            "[target.'cfg(all(target_arch = \"arm\", target_os = \"none\"))']\n\
+             runner = \"probe-rs run --chip STM32F411CEUx\"\n\n\
+             [build]\ntarget = \"thumbv7em-none-eabihf\"\n",
+        ),
+        ("src/main.rs", "fn main() {}\n"),
+    ]);
+    assert_eq!(
+        detect(dir.path()).probe_chip.as_deref(),
+        Some("STM32F411CEUx")
+    );
+
+    // `--chip=` and an argument list, as cargo also accepts a runner.
+    let equals = project_dir(&[
+        ("Cargo.toml", F4_MANIFEST),
+        (
+            ".cargo/config.toml",
+            "[target.thumbv7em-none-eabihf]\nrunner = [\"probe-rs\", \"run\", \"--chip=STM32F411CEUx\"]\n",
+        ),
+    ]);
+    assert_eq!(
+        detect(equals.path()).probe_chip.as_deref(),
+        Some("STM32F411CEUx")
+    );
+}
+
+/// A runner that is not probe-rs names no probe-rs part, and two probe-rs
+/// runners naming different parts name neither: which one cargo runs
+/// depends on a target detection does not choose.
+#[test]
+fn a_runner_that_is_not_probe_rs_or_is_ambiguous_names_no_part() {
+    let espflash = project_dir(&[
+        ("Cargo.toml", C3_MANIFEST),
+        (
+            ".cargo/config.toml",
+            "[target.riscv32imc-unknown-none-elf]\nrunner = \"espflash flash --monitor --chip esp32c3\"\n",
+        ),
+    ]);
+    assert_eq!(detect(espflash.path()).probe_chip, None);
+
+    let two = project_dir(&[
+        ("Cargo.toml", F4_MANIFEST),
+        (
+            ".cargo/config.toml",
+            "[target.thumbv7em-none-eabihf]\nrunner = \"probe-rs run --chip STM32F411CEUx\"\n\
+             [target.thumbv6m-none-eabi]\nrunner = \"probe-rs run --chip RP2040\"\n",
+        ),
+    ]);
+    assert_eq!(detect(two.path()).probe_chip, None);
+}

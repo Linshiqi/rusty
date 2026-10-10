@@ -4,7 +4,9 @@
 //! removes, and it has exactly two sources, kept apart because their
 //! trustworthiness differs:
 //!
-//! - **What the source claims** — a text scan for `.GPIO<n>`. Always
+//! - **What the source claims** — a text scan for the pin names a HAL's
+//!   peripherals struct uses: `.GPIO<n>` (esp-hal), `.PC13` (embassy-stm32,
+//!   ch32-hal), `.P0_13` (embassy-nrf), `.PIN_25` (embassy-rp). Always
 //!   available, needs no build, and sees only what is written literally. A
 //!   pin reached through a binding (`let p = peripherals.GPIO5;`) is invisible
 //!   to it, so what this reports is *pins the source names*, never *pins the
@@ -18,13 +20,20 @@
 //! The second source is worth the trouble because it carries what no amount
 //! of reading the code can tell you — `input_only`, the ADC channels, and
 //! which pins the module has already spent on flash, USB and the console.
+//!
+//! **A part that is not Espressif's has no esp-hal description**, and asking
+//! for one told an STM32 user that rusty "could not find esp-hal's
+//! description of stm32f411ce". What the part has is then the catalogue's
+//! `gpio` list — which pins the die has, transcribed per package, and
+//! nothing about what each can do — and the note says that much and no
+//! more.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::model::{PinClaim, PinInfo, PinReport};
+use crate::model::{Chip, PinClaim, PinInfo, PinReport, Ports};
 
 /// The part's pins and the project's claims on them.
 ///
@@ -38,7 +47,11 @@ use crate::model::{PinClaim, PinInfo, PinReport};
 ///
 /// Identical for every ordinary project, where the root has its own chip.
 pub fn report(root: &Path, firmware: &Path, chip: &str) -> PinReport {
-    let claims = claims(root, firmware);
+    let part = crate::chip::by_id(chip);
+    let claims = claims(root, firmware, part.as_ref().and_then(|p| p.ports));
+    if let Some(part) = part.as_ref().filter(|p| p.vendor != "espressif") {
+        return from_catalogue(part, claims);
+    }
     // With no capabilities, every claim is `unknown` — not because the pin
     // does not exist, but because nothing here can say that it does. The
     // note carries the difference.
@@ -129,7 +142,77 @@ pub fn report(root: &Path, firmware: &Path, chip: &str) -> PinReport {
     }
 }
 
-/// Every `.GPIO<n>` in the project's own sources.
+/// What a part that is not Espressif's has, from rusty's catalogue: the
+/// pins of its package, and the claims sorted onto them. Nothing about what
+/// each pin can do — the catalogue does not say, and the note says that it
+/// does not.
+fn from_catalogue(part: &Chip, claims: Vec<PinClaim>) -> PinReport {
+    if part.gpio.is_empty() {
+        return PinReport {
+            chip: part.id.clone(),
+            pins: Vec::new(),
+            source: None,
+            note: Some(format!(
+                "rusty's catalogue lists no pins for {}, so only what the source names is \
+                 shown.",
+                part.name
+            )),
+            unknown: claims,
+        };
+    }
+    let mut pins: Vec<PinInfo> = part
+        .gpio
+        .iter()
+        .map(|&gpio| PinInfo {
+            gpio,
+            input_only: false,
+            analog: Vec::new(),
+            reserved: None,
+            claims: Vec::new(),
+        })
+        .collect();
+    pins.sort_by_key(|pin| pin.gpio);
+    let mut unknown = Vec::new();
+    for claim in claims {
+        match pins.iter_mut().find(|pin| pin.gpio == claim.gpio) {
+            Some(pin) => pin.claims.push(claim),
+            None => unknown.push(claim),
+        }
+    }
+    PinReport {
+        chip: part.id.clone(),
+        pins,
+        source: Some(format!("rusty's catalogue ({})", part.name)),
+        note: Some(format!(
+            "These are the pins {} has. Which of them are input-only, analog, or \
+             already wired to something on your board is not in rusty's catalogue — \
+             the board's schematic says.",
+            part.name
+        )),
+        unknown,
+    }
+}
+
+/// The pin a peripherals-struct field names, or `None`: `GPIO5` (esp-hal),
+/// `PIN_25` (embassy-rp), and on a part whose pins are named by port,
+/// `PC13` or `P0_13` (embassy-stm32, ch32-hal, embassy-nrf).
+pub(crate) fn pin_of(name: &str, ports: Option<Ports>) -> Option<u32> {
+    let numbered = |digits: &str| {
+        (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| digits.parse().ok())
+            .flatten()
+    };
+    if let Some(digits) = name.strip_prefix("GPIO") {
+        return numbered(digits);
+    }
+    if let Some(digits) = name.strip_prefix("PIN_") {
+        return numbered(digits);
+    }
+    ports.and_then(|ports| ports.number(name)).map(u32::from)
+}
+
+/// Every pin the project's own sources name, as a field of the HAL's
+/// peripherals struct (`pin_of`).
 ///
 /// Anchored on the dot so a comment or a string mentioning "GPIO26" is not a
 /// claim, and so `GPIO26` inside a longer identifier is not either.
@@ -141,15 +224,15 @@ pub fn report(root: &Path, firmware: &Path, chip: &str) -> PinReport {
 /// so `firmware/src/main.rs` is the path that resolves. Getting either half
 /// wrong is silent: the wrong scan root reports no claims at all, and the
 /// wrong relative root reports paths that fail to open.
-pub fn claims(root: &Path, firmware: &Path) -> Vec<PinClaim> {
-    fn walk(dir: &Path, root: &Path, found: &mut Vec<PinClaim>) {
+pub fn claims(root: &Path, firmware: &Path, ports: Option<Ports>) -> Vec<PinClaim> {
+    fn walk(dir: &Path, root: &Path, ports: Option<Ports>, found: &mut Vec<PinClaim>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                walk(&path, root, found);
+                walk(&path, root, ports, found);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let Ok(text) = std::fs::read_to_string(&path) else {
                     continue;
@@ -160,12 +243,12 @@ pub fn claims(root: &Path, firmware: &Path) -> Vec<PinClaim> {
                     .to_string_lossy()
                     .replace('\\', "/");
                 for (number, line) in text.lines().enumerate() {
-                    for (at, _) in line.match_indices(".GPIO") {
-                        let digits: String = line[at + 5..]
+                    for (at, _) in line.match_indices('.') {
+                        let name: String = line[at + 1..]
                             .chars()
-                            .take_while(char::is_ascii_digit)
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                             .collect();
-                        let Ok(gpio) = digits.parse::<u32>() else {
+                        let Some(gpio) = pin_of(&name, ports) else {
                             continue;
                         };
                         found.push(PinClaim {
@@ -181,7 +264,7 @@ pub fn claims(root: &Path, firmware: &Path) -> Vec<PinClaim> {
     }
 
     let mut found = Vec::new();
-    walk(&firmware.join("src"), root, &mut found);
+    walk(&firmware.join("src"), root, ports, &mut found);
     found
 }
 
@@ -607,7 +690,7 @@ macro_rules! for_each_analog_function {
         )
         .unwrap();
 
-        let found = claims(dir.path(), dir.path());
+        let found = claims(dir.path(), dir.path(), None);
         let pins: Vec<u32> = found.iter().map(|claim| claim.gpio).collect();
         assert_eq!(
             pins,
@@ -619,6 +702,60 @@ macro_rules! for_each_analog_function {
             "zero-based, like every line that crosses the wire"
         );
         assert!(found[0].text.starts_with("let led ="));
+    }
+
+    /// The HALs name pins by port, and a pin map that read only esp-hal's
+    /// `.GPIO<n>` had nothing to say about an STM32, an nRF or a Pico.
+    #[test]
+    fn each_hal_names_its_pins_its_own_way_and_each_is_read() {
+        let st = Some(Ports {
+            width: 16,
+            numbered: false,
+        });
+        let nordic = Some(Ports {
+            width: 32,
+            numbered: true,
+        });
+        assert_eq!(pin_of("PC13", st), Some(45));
+        assert_eq!(pin_of("PA0", st), Some(0));
+        assert_eq!(pin_of("P0_13", nordic), Some(13));
+        assert_eq!(pin_of("P1_05", nordic), Some(37));
+        assert_eq!(pin_of("PIN_25", None), Some(25));
+        assert_eq!(pin_of("GPIO5", None), Some(5));
+        // Past a port's width is no pin, and a word that merely begins
+        // with P is not one either.
+        assert_eq!(pin_of("PA16", st), None);
+        assert_eq!(pin_of("PERIPH", st), None);
+        assert_eq!(pin_of("PC13", None), None);
+    }
+
+    /// An STM32 project's pin map: the catalogue's pins of its package, the
+    /// claims sorted onto them, and a note that says what the catalogue does
+    /// not know — never "could not find esp-hal's description".
+    #[test]
+    fn a_part_that_is_not_espressifs_is_mapped_from_the_catalogue() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            "let led = Output::new(p.PC13, Level::High, Speed::Low);
+             let button = Input::new(p.PA0, Pull::Up);
+",
+        )
+        .unwrap();
+        let report = report(dir.path(), dir.path(), "stm32f411ce");
+        assert!(!report.pins.is_empty(), "{report:?}");
+        let claimed: Vec<u32> = report
+            .pins
+            .iter()
+            .filter(|pin| !pin.claims.is_empty())
+            .map(|pin| pin.gpio)
+            .collect();
+        assert_eq!(claimed, [0, 45]);
+        assert!(report.unknown.is_empty(), "{:?}", report.unknown);
+        let note = report.note.unwrap_or_default();
+        assert!(!note.contains("esp-hal"), "{note}");
+        assert!(report.source.unwrap_or_default().contains("catalogue"));
     }
 
     /// A workspace whose firmware is one directory down still reports paths
@@ -640,7 +777,7 @@ macro_rules! for_each_analog_function {
         )
         .unwrap();
 
-        let found = claims(dir.path(), &firmware);
+        let found = claims(dir.path(), &firmware, None);
         assert_eq!(
             found.len(),
             1,

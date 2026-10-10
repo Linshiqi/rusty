@@ -249,6 +249,35 @@ impl Ports {
             format!("P{}{pin}", (b'A' + port) as char)
         }
     }
+
+    /// The pin a name says — the inverse of [`Ports::name`], in the vendor's
+    /// spellings and the HALs': `PC13`, `P1.05`, and the `P0_13` embassy-nrf
+    /// writes. `None` for anything else, and for a pin past the port's width:
+    /// `PA16` on a part sixteen to a port is not `PB0`.
+    pub fn number(self, name: &str) -> Option<u8> {
+        let rest = name.strip_prefix('P')?;
+        let (port, pin) = if self.numbered {
+            let (port, pin) = rest.split_once(['.', '_'])?;
+            if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            (port.parse::<u8>().ok()?, pin)
+        } else {
+            let letter = *rest.as_bytes().first()?;
+            if !letter.is_ascii_uppercase() {
+                return None;
+            }
+            (letter - b'A', &rest[1..])
+        };
+        if pin.is_empty() || !pin.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let pin: u8 = pin.parse().ok()?;
+        if pin >= self.width {
+            return None;
+        }
+        port.checked_mul(self.width)?.checked_add(pin)
+    }
 }
 
 /// A cross C compiler for a part, and how to get it.

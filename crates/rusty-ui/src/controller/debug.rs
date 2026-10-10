@@ -32,6 +32,36 @@ pub fn debug_start(state: AppState, hardware: bool) {
     );
 }
 
+/// Flash the board through `probe` and debug it there, with the standing
+/// breakpoints placed before it runs — probe-rs's debug adapter does all of
+/// it. The image is the one the build just made, which is the one flashed:
+/// probe-rs writes the file it is handed and debugs that file.
+pub fn debug_board(state: AppState, probe: Option<String>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        firmware: String,
+        probe: Option<String>,
+        breakpoints: Vec<(String, u32)>,
+    }
+    let Some(firmware) = state.current_firmware_untracked().map(|f| f.path) else {
+        state
+            .app
+            .error
+            .set(Some(ipc::IpcError::local(t!("device.debug-no-image"))));
+        return;
+    };
+    attach_session(
+        state,
+        cmd::debug::BOARD,
+        Args {
+            firmware,
+            probe,
+            breakpoints: state.debug.breakpoints.get_untracked(),
+        },
+        crate::state::DockTab::Output,
+    );
+}
+
 /// Run one test under gdb — the Debug half of the lens beside a test. The
 /// backend builds the test binaries, finds the one holding the test, and
 /// starts it frozen; the standing breakpoints are placed before it runs, the

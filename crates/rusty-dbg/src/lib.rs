@@ -21,6 +21,6 @@ pub mod session;
 #[cfg(feature = "backend")]
 pub use any::AnySession;
 #[cfg(feature = "backend")]
-pub use dap::{DapLaunch, DapSession};
+pub use dap::{Board, DapLaunch, DapSession};
 #[cfg(feature = "backend")]
 pub use session::{Debugger, Error, Events, Launch, Target};

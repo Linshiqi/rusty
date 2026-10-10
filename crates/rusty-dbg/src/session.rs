@@ -34,8 +34,6 @@ use crate::placement::placed_line;
 pub enum Target {
     /// Espressif QEMU's gdbstub, frozen at reset by `-s -S`.
     Qemu { port: u16 },
-    /// probe-rs serving gdb for real hardware.
-    Probe { port: u16 },
     /// A program for this machine — a test binary — that gdb runs itself,
     /// with these arguments. Nothing is listening: the first resume is
     /// `-exec-run` rather than `-exec-continue`, the program's own stdout
@@ -98,6 +96,10 @@ pub enum Error {
     },
     #[error("the debugger's input is closed")]
     Closed,
+    /// The debugger said no, in its own words — a debug adapter refusing a
+    /// launch: no probe plugged in, a part it does not know.
+    #[error("{0}")]
+    Refused(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -248,7 +250,7 @@ impl Debugger {
         debugger.send("-gdb-set pagination off")?;
         debugger.send("-gdb-set confirm off")?;
         match &launch.target {
-            Target::Qemu { port } | Target::Probe { port } => {
+            Target::Qemu { port } => {
                 debugger.send(&format!("-target-select extended-remote localhost:{port}"))?;
             }
             Target::Host { args } => {

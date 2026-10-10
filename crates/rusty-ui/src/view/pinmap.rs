@@ -138,6 +138,8 @@ fn Body(report: PinReport) -> impl IntoView {
     // this part" — nothing here knows what is on the part. It is unverified,
     // and reads as such: a neutral list, not a red one.
     let blind = report.pins.is_empty();
+    // A pin is called what its vendor calls it: `PC13`, `P0.13`, `GPIO5`.
+    let ports = ports_of(state, &report.chip);
     let (unknown_box, unknown_row) = if blind {
         (
             "mb-1.5 rounded-[6px] bg-sunken px-2 py-1.5",
@@ -168,10 +170,11 @@ fn Body(report: PinReport) -> impl IntoView {
                                 .into_iter()
                                 .map(|claim| {
                                     let (file, line) = (claim.file.clone(), claim.line);
+                                    let name = pin_name(ports, claim.gpio);
                                     let label = if blind {
-                                        t!("pinmap.unverified", gpio = claim.gpio.to_string())
+                                        t!("pinmap.unverified", pin = name)
                                     } else {
-                                        t!("pinmap.not-on-part", gpio = claim.gpio.to_string())
+                                        t!("pinmap.not-on-part", pin = name)
                                     };
                                     view! {
                                         <button
@@ -190,8 +193,8 @@ fn Body(report: PinReport) -> impl IntoView {
                     }
                 })}
             <div class="flex gap-1">
-                <Column pins=left />
-                <Column pins=right />
+                <Column pins=left ports=ports />
+                <Column pins=right ports=ports />
             </div>
             {(!report.pins.is_empty())
                 .then(|| {
@@ -209,8 +212,24 @@ fn Body(report: PinReport) -> impl IntoView {
     }
 }
 
+/// The catalogue's port naming for a part, when it has one.
+fn ports_of(state: AppState, chip: &str) -> Option<rusty_embed::Ports> {
+    state
+        .project
+        .chips
+        .with_untracked(|chips| chips.iter().find(|c| c.id == chip).and_then(|c| c.ports))
+}
+
+/// A pin's name, as `nets::pin_label` gives it everywhere else.
+fn pin_name(ports: Option<rusty_embed::Ports>, gpio: u32) -> String {
+    match u8::try_from(gpio) {
+        Ok(gpio) => rusty_embed::nets::pin_label(ports, gpio),
+        Err(_) => format!("GPIO{gpio}"),
+    }
+}
+
 #[component]
-fn Column(pins: Vec<PinInfo>) -> impl IntoView {
+fn Column(pins: Vec<PinInfo>, ports: Option<rusty_embed::Ports>) -> impl IntoView {
     let state = AppState::expect();
     view! {
         <div class="flex min-w-0 flex-1 flex-col gap-px">
@@ -228,7 +247,8 @@ fn Column(pins: Vec<PinInfo>) -> impl IntoView {
                         (None, Some(_)) => "bg-selection text-rust",
                         (None, None) => "text-label-3",
                     };
-                    let mut hint = format!("GPIO{}", pin.gpio);
+                    let name = pin_name(ports, pin.gpio);
+                    let mut hint = name.clone();
                     if pin.input_only {
                         hint.push_str(&format!(" · {}", t!("pinmap.input-only")));
                     }
@@ -259,7 +279,13 @@ fn Column(pins: Vec<PinInfo>) -> impl IntoView {
                                 "flex items-baseline gap-1 rounded-[3px] px-1 py-px text-left font-mono text-caption transition-colors disabled:pointer-events-none {tone}",
                             )
                         >
-                            <span class="w-[3.5ch] shrink-0">{pin.gpio}</span>
+                            <span class=if ports.is_some() {
+                                "w-[5.5ch] shrink-0"
+                            } else {
+                                "w-[3.5ch] shrink-0"
+                            }>
+                                {if ports.is_some() { name } else { pin.gpio.to_string() }}
+                            </span>
                             <span class="min-w-0 truncate opacity-80">
                                 {reserved
                                     .map(|r| r.split(" (").next().unwrap_or(&r).to_string())

@@ -13,7 +13,8 @@
 use leptos::{ev, prelude::*};
 
 use rusty_embed::{
-    Chip, CrateNameProblem, Runtime, WizardChoice, WizardLayout, crate_name_problem,
+    Chip, CrateNameProblem, Runtime, ToolchainRequirement, WizardChoice, WizardLayout,
+    crate_name_problem,
 };
 
 use rusty_i18n::t;
@@ -313,6 +314,12 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
                     .project.chips
                     .get()
                     .into_iter()
+                    // A part with no way to start a project is one to open a
+                    // project for, not to create one with: a die the
+                    // catalogue names without a package (`stm32f411`) used
+                    // to be listed, and picking it ended at the last step on
+                    // "this combination has no generator".
+                    .filter(|chip| chip.generator.is_some() || chip.std_generator.is_some())
                     .filter(|chip| {
                         needle.is_empty()
                             || chip.name.to_lowercase().contains(&needle)
@@ -396,10 +403,10 @@ fn ChipDetail(chip: Chip) -> impl IntoView {
         // The single fact that most changes what the next hour looks like. It
         // belongs here, on the part that has it, not as a badge on ten rows.
         <p class="mb-3 text-callout leading-relaxed text-label-2">
-            {if forked {
-                t!("wizard.forked")
-            } else {
-                t!("wizard.stock")
+            {match chip.toolchain {
+                ToolchainRequirement::EspXtensa => t!("wizard.forked"),
+                ToolchainRequirement::NightlyBuildStd => t!("wizard.nightly"),
+                ToolchainRequirement::Stock => t!("wizard.stock"),
             }}
         </p>
 
@@ -452,6 +459,10 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     let list = view! {
         {[Runtime::BareMetal, Runtime::EspIdf]
                 .into_iter()
+                // A part with no `std` target at all has no second runtime
+                // to choose: one row, not one row and a greyed-out one
+                // naming Espressif's framework beside an STM32.
+                .filter(|runtime| *runtime == Runtime::BareMetal || available.get_untracked())
                 .map(|runtime| {
                     let disabled = Signal::derive(move || {
                         runtime == Runtime::EspIdf && !available.get()

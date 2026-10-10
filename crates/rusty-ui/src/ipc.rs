@@ -183,7 +183,8 @@ impl IpcError {
         }
     }
 
-    fn local(message: impl Into<String>) -> Self {
+    /// A refusal the frontend makes itself, for the same banner.
+    pub fn local(message: impl Into<String>) -> Self {
         IpcError {
             message: message.into(),
             causes: Vec::new(),

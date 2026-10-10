@@ -15,6 +15,20 @@
 //! and the adapter's stdout carries only the program's own output, which is
 //! exactly what the dock wants to show.
 //!
+//! **A board is the same protocol, a different adapter.** probe-rs ships a
+//! DAP server (`probe-rs dap-server`) that flashes an image through a debug
+//! probe and debugs it on the part — every Cortex-M part the catalogue
+//! names, and the RISC-V ones probe-rs reaches — with no cross gdb at all.
+//! [`Board`] is what it needs beyond a program: probe-rs's name for the part
+//! and which probe. The launch request is probe-rs's own `SessionConfig`,
+//! read off its source (`probe-rs-tools` 0.32, `dap_server/server/
+//! configuration.rs`), and what the firmware prints arrives through RTT as
+//! probe-rs's own events, not `output`: `probe-rs-rtt-channel-config` names a
+//! channel, the client answers `rttWindowOpened` — probe-rs does not poll a
+//! channel until a window says it is open, so nothing is lost before anyone
+//! is reading — and `probe-rs-rtt-data` carries the text, already decoded
+//! from defmt where the image uses it.
+//!
 //! **Every request is fire-and-forget and every answer is dispatched by its
 //! `command`.** A reader that blocked waiting for its own reply would
 //! deadlock, because the reply arrives on the thread doing the blocking. The
@@ -51,11 +65,30 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// spends looking at a frozen button.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// How long probe-rs has to answer `initialized`. It flashes the image
+/// before it says so, and a large image over a slow probe takes minutes.
+const FLASH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A board, debugged through probe-rs: what the launch needs beyond the
+/// image.
+#[derive(Debug, Clone)]
+pub struct Board {
+    /// probe-rs's name for the part (`STM32F411CEUx`), the catalogue's
+    /// `probe_rs_target`.
+    pub chip: String,
+    /// Which probe, in probe-rs's selector form (`VID:PID[:SERIAL]`), or
+    /// `None` for the one probe plugged in — which probe-rs refuses by
+    /// name when there are several.
+    pub probe: Option<String>,
+}
+
 /// What to debug, and with which adapter.
 #[derive(Debug, Clone)]
 pub struct DapLaunch {
-    /// `lldb-dap` or `codelldb`.
+    /// `lldb-dap` or `codelldb` for a program on this machine; `probe-rs`
+    /// for a board.
     pub adapter: PathBuf,
+    /// The program to run, or for a board the image to flash and debug.
     pub program: PathBuf,
     pub args: Vec<String>,
     /// Where the program runs, and what source paths are relative to.
@@ -68,6 +101,8 @@ pub struct DapLaunch {
     /// the program is already running, and a breakpoint placed then is one the
     /// test may have run past. The frontend holds the list, so it sends it.
     pub breakpoints: Vec<(String, u32)>,
+    /// A board through probe-rs rather than a program on this machine.
+    pub board: Option<Board>,
 }
 
 /// `Content-Length: N` out of a frame's header block, ignoring any other
@@ -265,6 +300,7 @@ impl DapSession {
         let outlet: Outlet = Arc::new(Mutex::new(Some(sender)));
         let (ready_tx, ready_rx) = channel();
         let reader = Reader {
+            rtt: Mutex::new(String::new()),
             state: Arc::clone(&session.state),
             wire: Arc::clone(&session.wire),
             outlet: Arc::clone(&outlet),
@@ -317,11 +353,11 @@ impl DapSession {
     /// configuration — the standing breakpoints and `configurationDone`. An
     /// adapter that never says so is an error, and like every error here it
     /// drops the session, which stops the adapter.
-    fn handshake(&self, launch: &DapLaunch, ready: &Receiver<()>) -> Result<()> {
+    fn handshake(&self, launch: &DapLaunch, ready: &Receiver<Ready>) -> Result<()> {
         self.wire.send(
             "initialize",
             json!({
-                "adapterID": "lldb",
+                "adapterID": if launch.board.is_some() { "probe-rs-debug" } else { "lldb" },
                 "clientID": "rusty",
                 "linesStartAt1": true,
                 "columnsStartAt1": true,
@@ -333,27 +369,31 @@ impl DapSession {
                 "supportsRunInTerminalRequest": false,
             }),
         )?;
-        self.wire.send(
-            "launch",
-            json!({
-                "program": launch.program.to_string_lossy(),
-                "args": launch.args,
-                "cwd": launch.root.to_string_lossy(),
-                "stopOnEntry": false,
-            }),
-        )?;
+        self.wire.send("launch", launch_arguments(launch))?;
 
         // `initialized` is the adapter saying it will take configuration now.
         // Its `launch` reply does not come until after `configurationDone`, so
-        // waiting on that instead would deadlock the handshake.
-        if ready.recv_timeout(READY_TIMEOUT).is_err() {
-            return Err(Error::Spawn {
-                gdb: launch.adapter.display().to_string(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "the debug adapter never reported itself ready",
-                ),
-            });
+        // waiting on that instead would deadlock the handshake. A launch the
+        // adapter refuses — no probe plugged in, a part probe-rs does not
+        // know — wakes the wait with its reason rather than leaving it to
+        // time out minutes later.
+        let timeout = if launch.board.is_some() {
+            FLASH_TIMEOUT
+        } else {
+            READY_TIMEOUT
+        };
+        match ready.recv_timeout(timeout) {
+            Ok(Ok(())) => {}
+            Ok(Err(reason)) => return Err(Error::Refused(reason)),
+            Err(_) => {
+                return Err(Error::Spawn {
+                    gdb: launch.adapter.display().to_string(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "the debug adapter never reported itself ready",
+                    ),
+                });
+            }
         }
 
         self.place_all(&launch.breakpoints)?;
@@ -585,8 +625,43 @@ fn free_port() -> Result<u16> {
 }
 
 /// The adapter, told to listen on `port`.
+/// The `launch` request's arguments: a program for LLDB, or for probe-rs
+/// its own `SessionConfig` — the part, the probe, flashing on, one core with
+/// its image and RTT.
+fn launch_arguments(launch: &DapLaunch) -> Value {
+    match &launch.board {
+        None => json!({
+            "program": launch.program.to_string_lossy(),
+            "args": launch.args,
+            "cwd": launch.root.to_string_lossy(),
+            "stopOnEntry": false,
+        }),
+        Some(board) => {
+            let mut config = json!({
+                "chip": board.chip,
+                "cwd": launch.root.to_string_lossy(),
+                "flashingConfig": { "flashingEnabled": true },
+                "coreConfigs": [{
+                    "coreIndex": 0,
+                    "programBinary": launch.program.to_string_lossy(),
+                    "rttEnabled": true,
+                }],
+            });
+            if let Some(probe) = &board.probe {
+                config["probe"] = json!(probe);
+            }
+            config
+        }
+    }
+}
+
 fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
     let mut command = Command::new(&launch.adapter);
+    if launch.board.is_some() {
+        // One session and then gone, as an IDE expects of an adapter it
+        // started; without it probe-rs waits for the next client for ever.
+        command.args(["dap-server", "--single-session"]);
+    }
     command
         .arg("--port")
         .arg(port.to_string())
@@ -607,6 +682,50 @@ fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
         gdb: launch.adapter.display().to_string(),
         source,
     })
+}
+
+/// Why the adapter refused a request, in its own words.
+///
+/// DAP's `message` is a short code as often as a reason — probe-rs answers
+/// a launch it cannot carry out with `cancelled` — and the reason proper is
+/// the error body's `format`, its `{variables}` filled in: `Invalid program
+/// binary file specified …`, `No connected probes were found`.
+fn refusal(message: &Value) -> String {
+    let error = message.get("body").and_then(|body| body.get("error"));
+    if let Some(format) = error.and_then(|e| e.get("format")).and_then(Value::as_str) {
+        let mut text = format.to_string();
+        if let Some(variables) = error
+            .and_then(|e| e.get("variables"))
+            .and_then(Value::as_object)
+        {
+            for (name, value) in variables {
+                if let Some(value) = value.as_str() {
+                    text = text.replace(&format!("{{{name}}}"), value);
+                }
+            }
+        }
+        if !text.trim().is_empty() {
+            return text;
+        }
+    }
+    message
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("the debug adapter refused the request")
+        .to_string()
+}
+
+/// The whole lines in `held` once `text` is added, `held` keeping what
+/// follows the last line break.
+fn complete_lines(held: &mut String, text: &str) -> Vec<String> {
+    held.push_str(text);
+    let Some(end) = held.rfind('\n') else {
+        return Vec::new();
+    };
+    let rest = held.split_off(end + 1);
+    let lines = held.lines().map(str::to_string).collect();
+    *held = rest;
+    lines
 }
 
 /// Connect to the adapter, retrying while it starts listening.
@@ -658,9 +777,16 @@ struct Reader {
     running: Arc<AtomicBool>,
     /// What each `setBreakpoints` still unanswered was clicked on.
     pending: Pending,
-    /// Told when the adapter says it will take configuration.
-    ready: Sender<()>,
+    /// Told when the adapter says it will take configuration, or that it
+    /// refused the launch.
+    ready: Sender<Ready>,
+    /// RTT text received after its last line break: probe-rs sends what the
+    /// channel held, which need not end at a line.
+    rtt: Mutex<String>,
 }
+
+/// The adapter's answer to "will you take configuration": yes, or why not.
+type Ready = std::result::Result<(), String>;
 
 impl Reader {
     /// Read the adapter for the life of the session.
@@ -738,8 +864,40 @@ impl Reader {
         let body = message.get("body").cloned().unwrap_or(Value::Null);
         match message.get("event").and_then(Value::as_str).unwrap_or("") {
             "initialized" => {
-                let _ = self.ready.send(());
+                let _ = self.ready.send(Ok(()));
                 false
+            }
+            // probe-rs names an RTT channel and waits to be told a window is
+            // open before it reads it.
+            "probe-rs-rtt-channel-config" => {
+                if let Some(channel) = body.get("channelNumber").and_then(Value::as_u64) {
+                    let _ = self.wire.send(
+                        "rttWindowOpened",
+                        json!({ "channelNumber": channel, "windowIsOpen": true }),
+                    );
+                }
+                false
+            }
+            "probe-rs-rtt-data" => {
+                let Some(text) = body.get("data").and_then(Value::as_str) else {
+                    return false;
+                };
+                let lines = complete_lines(&mut self.rtt.lock().expect("dap rtt"), text);
+                if lines.is_empty() {
+                    return false;
+                }
+                self.state.lock().expect("dap state").output.extend(lines);
+                true
+            }
+            // What probe-rs would put in a dialog — a flash that failed, a
+            // probe it could not open — is said in the dock instead.
+            "probe-rs-show-message" => {
+                let Some(text) = body.get("message").and_then(Value::as_str) else {
+                    return false;
+                };
+                let mut state = self.state.lock().expect("dap state");
+                state.output.extend(text.lines().map(str::to_string));
+                true
             }
             "stopped" => {
                 if let Some(id) = body.get("threadId").and_then(Value::as_i64) {
@@ -828,11 +986,11 @@ impl Reader {
             ) {
                 return false;
             }
-            let detail = message
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("the debug adapter refused the request");
-            self.state.lock().expect("dap state").error = Some(detail.to_string());
+            let detail = refusal(message);
+            if matches!(command, "initialize" | "launch") {
+                let _ = self.ready.send(Err(detail.clone()));
+            }
+            self.state.lock().expect("dap state").error = Some(detail);
             return true;
         }
         match command {
@@ -1009,8 +1167,81 @@ mod tests {
             running: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
             ready,
+            rtt: Mutex::new(String::new()),
         };
         (reader, states)
+    }
+
+    /// probe-rs's RTT text arrives as the channel held it, not a line at a
+    /// time: a line split across two events is one line in the dock, and a
+    /// line still unfinished waits for its break.
+    #[test]
+    fn rtt_text_from_probe_rs_reaches_the_dock_a_whole_line_at_a_time() {
+        let (reader, states) = unwired();
+        let data = |text: &str| {
+            event(
+                "probe-rs-rtt-data",
+                json!({ "channelNumber": 0, "data": text }),
+            )
+        };
+        assert!(reader.handle(&data("INFO  blink\nINFO  bl")));
+        assert!(reader.handle(&data("ink\nINFO  half")));
+        let sent: Vec<String> = states.try_iter().flat_map(|state| state.output).collect();
+        assert_eq!(sent, ["INFO  blink", "INFO  blink"]);
+        assert_eq!(*reader.rtt.lock().unwrap(), "INFO  half");
+    }
+
+    /// A launch probe-rs refuses — no probe plugged in — wakes the
+    /// handshake with the reason at once, rather than leaving it to wait
+    /// out the minutes a flash may take.
+    #[test]
+    fn a_refused_launch_wakes_the_handshake_with_its_reason() {
+        let (sender, _states) = channel();
+        let (ready, woken) = channel();
+        let (mut reader, _) = unwired();
+        reader.ready = ready;
+        reader.outlet = Arc::new(Mutex::new(Some(sender)));
+        // As probe-rs 0.32 sends it: the reason in the error body, and
+        // `cancelled` in the message.
+        let refused = json!({
+            "seq": 7, "type": "response", "command": "launch", "success": false,
+            "message": "cancelled", "request_seq": 2,
+            "body": { "error": {
+                "format": "{response_message}", "id": 0, "showUser": true,
+                "variables": { "response_message": "Invalid program binary file specified 'E:/nope.elf'" },
+            }},
+        });
+        reader.handle(&refused);
+        assert_eq!(
+            woken.try_recv().expect("the handshake was woken"),
+            Err("Invalid program binary file specified 'E:/nope.elf'".to_string())
+        );
+    }
+
+    /// probe-rs's own `SessionConfig`: the part, the probe when one was
+    /// picked, flashing on, and one core with its image and RTT.
+    #[test]
+    fn a_board_is_launched_as_probe_rs_reads_its_configuration() {
+        let mut board = launch();
+        board.program = PathBuf::from(r"E:\proj\target\thumbv7em-none-eabihf\release\blinky");
+        board.board = Some(Board {
+            chip: "STM32F411CEUx".to_string(),
+            probe: Some("0483:374b:066DFF".to_string()),
+        });
+        let config = launch_arguments(&board);
+        assert_eq!(config["chip"], "STM32F411CEUx");
+        assert_eq!(config["probe"], "0483:374b:066DFF");
+        assert_eq!(config["flashingConfig"]["flashingEnabled"], true);
+        assert_eq!(config["coreConfigs"][0]["coreIndex"], 0);
+        assert_eq!(config["coreConfigs"][0]["rttEnabled"], true);
+        assert!(
+            config["coreConfigs"][0]["programBinary"]
+                .as_str()
+                .unwrap()
+                .ends_with("blinky")
+        );
+        // A program on this machine is still LLDB's launch.
+        assert!(launch_arguments(&launch()).get("chip").is_none());
     }
 
     fn event(name: &str, body: Value) -> Value {
@@ -1165,6 +1396,7 @@ mod tests {
             args: Vec::new(),
             root: root(),
             breakpoints: Vec::new(),
+            board: None,
         }
     }
 

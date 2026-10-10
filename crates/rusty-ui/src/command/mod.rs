@@ -268,9 +268,14 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
                 controller::test_project(state);
             }
         }
-        Action::Run | Action::Debug => {
+        Action::Run => {
             if state.has_project_now() {
-                controller::simulate(state, action == Action::Debug);
+                controller::simulate(state, false);
+            }
+        }
+        Action::Debug => {
+            if state.has_project_now() {
+                controller::debug(state);
             }
         }
         Action::Stop => {

@@ -10,7 +10,9 @@
 
 use std::sync::Arc;
 
-use rusty_dbg::{AnySession, DapLaunch, DapSession, DebugState, Debugger, Events, Launch, Target};
+use rusty_dbg::{
+    AnySession, Board, DapLaunch, DapSession, DebugState, Debugger, Events, Launch, Target,
+};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -18,19 +20,18 @@ use crate::{
     state::{AppState, blocking},
 };
 
-/// Start gdb against a target that is already listening, and stream the
-/// session's state until it ends.
+/// Start gdb against the simulator, which is already listening, and stream
+/// the session's state until it ends.
 ///
-/// The target — QEMU frozen at reset, or probe-rs serving hardware — is
-/// started by whoever asked for the debug run; this attaches to it. Two
-/// things starting QEMU would be two QEMUs.
+/// QEMU, frozen at reset, is started by the debug run; this attaches to it.
+/// Two things starting QEMU would be two QEMUs. A board is `debug_board`'s,
+/// through probe-rs's own debug adapter rather than gdb.
 ///
 /// Which ELF and which port come from that run, not from here and not from
 /// the frontend: it built the image, so it is the only thing that knows what
 /// is executing.
 #[tauri::command]
 pub async fn debug_start(
-    hardware: bool,
     on_state: Channel<DebugState>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
@@ -64,16 +65,75 @@ pub async fn debug_start(
     let launch = Launch {
         gdb,
         elf: std::path::PathBuf::from(attach.elf),
-        target: if hardware {
-            Target::Probe { port: attach.port }
-        } else {
-            Target::Qemu { port: attach.port }
-        },
+        target: Target::Qemu { port: attach.port },
         root,
     };
 
     let (debugger, events) = blocking("the debugger", move || Debugger::start(&launch)).await??;
     stream_session(AnySession::Gdb(debugger), events, on_state, &state).await
+}
+
+/// Flash a board through its debug probe and debug it there.
+///
+/// probe-rs's DAP server does all of it in one session — writes `firmware`,
+/// places the standing breakpoints, runs, stops where they say, and carries
+/// what the firmware prints over RTT — for every part probe-rs knows, with
+/// no cross gdb to install. The image debugged is the image flashed, by
+/// construction: probe-rs flashes the file it is given, which is why this
+/// command, unlike `debug_start`, may be told which file that is. The
+/// caller passes the one the build it just ran produced.
+///
+/// Refused before anything runs where it could only fail later: a part with
+/// no probe-rs name (the catalogue's `probe_rs_target`), or a WCH-Link,
+/// which wlink drives and probe-rs cannot.
+#[tauri::command]
+pub async fn debug_board(
+    firmware: String,
+    probe: Option<String>,
+    breakpoints: Vec<(String, u32)>,
+    on_state: Channel<DebugState>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let firmware_root = state.require_firmware_root().await?;
+    // Breakpoints and the stack's files are named from the opened project,
+    // as the editor names them, whichever crate the firmware is.
+    let root = state.require_root().await?;
+    let project = blocking("project detection", move || {
+        rusty_embed::project::detect(&firmware_root)
+    })
+    .await??;
+    let chip_id = project.chip.clone().unwrap_or_default();
+    // The project's own runner first, as a probe flash reads it.
+    let target = project
+        .probe_chip
+        .clone()
+        .or_else(|| rusty_embed::chip::by_id(&chip_id).and_then(|chip| chip.probe_rs_target))
+        .ok_or_else(|| {
+            CommandError::from(rusty_embed::Error::UnknownProbeTarget {
+                chip: chip_id.clone(),
+            })
+        })?;
+    if probe.as_deref().is_some_and(|p| p.starts_with("wlink:")) {
+        return Err(CommandError::new(
+            "This probe is a WCH-Link, which rusty drives with wlink — and wlink \
+             flashes but does not debug. Pick a probe probe-rs lists, or debug \
+             this part in the simulator.",
+        ));
+    }
+    let launch = DapLaunch {
+        adapter: rusty_embed::tools::find("probe-rs").unwrap_or_else(|| "probe-rs".into()),
+        program: std::path::PathBuf::from(firmware),
+        args: Vec::new(),
+        root,
+        breakpoints,
+        board: Some(Board {
+            chip: target,
+            probe,
+        }),
+    };
+    let (session, events) =
+        blocking("the debug adapter", move || DapSession::start(&launch)).await??;
+    stream_session(AnySession::Dap(session), events, on_state, &state).await
 }
 
 /// Debug one test built for this machine: build the test binaries, find the
@@ -198,6 +258,7 @@ pub async fn debug_test(
                     args: args.clone(),
                     root: root.clone(),
                     breakpoints: breakpoints.clone(),
+                    board: None,
                 };
                 match blocking("the debug adapter", move || DapSession::start(&launch)).await? {
                     Ok(pair) => {

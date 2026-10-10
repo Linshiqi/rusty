@@ -23,6 +23,9 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct FlashRequest {
     pub chip_id: String,
+    /// probe-rs's name for the part as the project's runner gives it
+    /// (`EmbeddedProject::probe_chip`), which wins over the catalogue's.
+    pub probe_chip: Option<String>,
     pub transport: Transport,
     pub action: FlashAction,
     /// The linked ELF. espflash and probe-rs both take the ELF rather than a
@@ -234,9 +237,10 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
         }
 
         Transport::Probe { identifier } => {
-            let target = chip
-                .as_ref()
-                .and_then(|c| c.probe_rs_target.clone())
+            let target = request
+                .probe_chip
+                .clone()
+                .or_else(|| chip.as_ref().and_then(|c| c.probe_rs_target.clone()))
                 .ok_or_else(|| Error::UnknownProbeTarget {
                     chip: request.chip_id.clone(),
                 })?;
@@ -428,6 +432,7 @@ mod tests {
     fn request(chip_id: &str, transport: Transport, action: FlashAction) -> FlashRequest {
         FlashRequest {
             chip_id: chip_id.to_string(),
+            probe_chip: None,
             transport,
             action,
             firmware: Some(PathBuf::from("target/blinky")),

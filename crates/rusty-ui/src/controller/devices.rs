@@ -144,15 +144,26 @@ pub fn device_action(state: AppState, action: DeviceAction) {
         return;
     }
     scan_then(state, move || {
-        let transport = state.device.transport.get_untracked().or_else(|| {
-            let serial = serial_capable(state);
+        // Debugging a board goes through a probe whatever the part's
+        // bootloader is: a chosen serial port is no answer to it, and the
+        // probe found for it is not made the choice for every other verb.
+        let debugging = action == DeviceAction::Debug;
+        let chosen = state
+            .device
+            .transport
+            .get_untracked()
+            .filter(|transport| !debugging || matches!(transport, Transport::Probe { .. }));
+        let transport = chosen.or_else(|| {
+            let serial = serial_capable(state) && !debugging;
             let pick = state.device.ports.with_untracked(|ports| {
                 state
                     .device
                     .probes
                     .with_untracked(|probes| only_candidate(ports, probes, serial))
             });
-            if let Some(transport) = &pick {
+            if let Some(transport) = &pick
+                && state.device.transport.with_untracked(Option::is_none)
+            {
                 state.device.transport.set(Some(transport.clone()));
             }
             pick
@@ -288,9 +299,99 @@ pub fn close_picker(state: AppState) {
     state.device.pending.set(None);
 }
 
+/// Whether Debug means the board rather than the simulator: the project's
+/// part can be debugged through a probe, and either a probe is the device
+/// chosen or the simulator cannot run this project at all. Pure, so the
+/// title bar's button and the key decide the same way.
+pub fn debugs_on_board(
+    transport: Option<&Transport>,
+    simulator_runs: bool,
+    board_debuggable: bool,
+) -> bool {
+    let probe_chosen = matches!(
+        transport,
+        Some(Transport::Probe { identifier })
+            if !identifier.as_deref().is_some_and(|id| id.starts_with("wlink:"))
+    );
+    board_debuggable && (probe_chosen || !simulator_runs)
+}
+
+/// Whether the open project's part has a name probe-rs debugs it by — the
+/// project's own runner's, or the catalogue's. Tracked.
+pub fn board_debuggable(state: AppState) -> bool {
+    let (chip, runner) = state.project.detected.with(|p| {
+        p.as_ref()
+            .map(|p| (p.chip.clone(), p.probe_chip.is_some()))
+            .unwrap_or_default()
+    });
+    runner
+        || chip.is_some_and(|chip| {
+            state.project.chips.with(|chips| {
+                chips
+                    .iter()
+                    .any(|c| c.id == chip && c.probe_rs_target.is_some())
+            })
+        })
+}
+
+/// The title bar's Debug, F5 and the menu's: resume a session at rest, or
+/// start one — on the board through its probe, or in the simulator.
+pub fn debug(state: AppState) {
+    let on_board = debugs_on_board(
+        state.device.transport.get_untracked().as_ref(),
+        state
+            .sim
+            .plan
+            .with_untracked(|plan| plan.as_ref().is_some_and(|p| p.supported)),
+        untrack(|| board_debuggable(state)),
+    );
+    let at_rest = state
+        .debug
+        .session
+        .with_untracked(|s| s.as_ref().is_some_and(rusty_dbg::DebugState::stopped));
+    if on_board && !at_rest {
+        device_action(state, DeviceAction::Debug);
+    } else {
+        simulate(state, true);
+    }
+}
+
 fn perform(state: AppState, action: DeviceAction, transport: Transport) {
     match action {
+        // A part espflash cannot talk to still prints on a serial port —
+        // an nRF's USB-CDC, an STM32 on a USB-UART — and watching it needs
+        // no bootloader at all: rusty's own link reads the port, through the
+        // same `absorb` every other stream goes through.
+        DeviceAction::Monitor
+            if matches!(transport, Transport::Serial { .. }) && !serial_capable(state) =>
+        {
+            if let Transport::Serial { port } = transport {
+                open_link(state, port, 115_200);
+                state.show_dock(crate::state::DockTab::Output);
+            }
+        }
         DeviceAction::Monitor => write(state, transport, FlashAction::Monitor),
+        DeviceAction::Debug => {
+            let Transport::Probe { identifier } = transport else {
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: t!("device.debug-needs-probe"),
+                    level: Some(LogLevel::Error),
+                });
+                state
+                    .app
+                    .error
+                    .set(Some(ipc::IpcError::local(t!("device.debug-needs-probe"))));
+                return;
+            };
+            // Built first, as Flash is: probe-rs writes the image it is
+            // given and debugs that one, so it is the code on screen.
+            build_then(state, move |built| {
+                if built {
+                    debug_board(state, identifier);
+                }
+            });
+        }
         DeviceAction::Flash | DeviceAction::FlashOnly => {
             let then = if action == DeviceAction::Flash {
                 FlashAction::FlashAndMonitor
@@ -739,5 +840,33 @@ mod tests {
             Some(Transport::Probe { identifier: Some(id) }) if id.starts_with("303a")
         ));
         assert!(only_candidate(&ports, &[probe("a"), probe("b")], false).is_none());
+    }
+
+    /// Debug goes to the board when the part can be debugged through a
+    /// probe and either a probe is chosen or the simulator cannot run the
+    /// project — an STM32, an nRF, any PlatformIO or CMake project. A C3
+    /// with a serial port chosen stays in the simulator, and a WCH-Link,
+    /// which wlink drives and probe-rs cannot, never counts as a probe.
+    #[test]
+    fn debug_goes_to_the_board_only_where_a_probe_can_reach_it() {
+        let probe = Transport::Probe {
+            identifier: Some("0483:374b:066D".to_string()),
+        };
+        let serial = Transport::Serial {
+            port: "COM5".to_string(),
+        };
+        let wlink = Transport::Probe {
+            identifier: Some("wlink:0".to_string()),
+        };
+        // Nothing simulates it: the board, whatever is chosen.
+        assert!(debugs_on_board(None, false, true));
+        assert!(debugs_on_board(Some(&serial), false, true));
+        // The simulator runs it: the board only through a chosen probe.
+        assert!(!debugs_on_board(None, true, true));
+        assert!(!debugs_on_board(Some(&serial), true, true));
+        assert!(debugs_on_board(Some(&probe), true, true));
+        assert!(!debugs_on_board(Some(&wlink), true, true));
+        // No probe-rs name for the part: never the board.
+        assert!(!debugs_on_board(Some(&probe), false, false));
     }
 }

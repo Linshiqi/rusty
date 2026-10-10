@@ -83,7 +83,7 @@ pub fn DevicePicker() -> impl IntoView {
         let _ = state.project.firmware.get();
         let action = match state.device.pending.get() {
             Some(DeviceAction::Monitor) => FlashAction::Monitor,
-            Some(DeviceAction::FlashOnly) => FlashAction::Flash,
+            Some(DeviceAction::FlashOnly | DeviceAction::Debug) => FlashAction::Flash,
             _ => FlashAction::FlashAndMonitor,
         };
         controller::plan_session(state, action);
@@ -166,6 +166,7 @@ fn PickerList() -> impl IntoView {
     let heading = move || match state.device.pending.get() {
         Some(DeviceAction::Flash | DeviceAction::FlashOnly) => t!("device.pick-to-flash"),
         Some(DeviceAction::Monitor) => t!("device.pick-to-monitor"),
+        Some(DeviceAction::Debug) => t!("device.pick-to-debug"),
         None => t!("device.heading"),
     };
 

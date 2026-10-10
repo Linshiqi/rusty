@@ -105,7 +105,9 @@ pub enum Error {
 
     #[error(
         "probe-rs needs an exact target name for `{chip}`, which depends on package and \
-         flash size. Run `probe-rs chip list` and pick the one matching your board."
+         flash size. Run `probe-rs chip list`, pick the one matching your board, and \
+         name it in the cargo runner in .cargo/config.toml — \
+         `runner = \"probe-rs run --chip <name>\"` — which rusty reads."
     )]
     UnknownProbeTarget { chip: String },
 }

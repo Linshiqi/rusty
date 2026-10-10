@@ -53,8 +53,24 @@ pub fn RunControls() -> impl IntoView {
             Some(_) => None,
         })
     });
-    // Debug needs the chip's gdb on top of everything Run needs.
+    // On the board when the part can be debugged through a probe and either
+    // a probe is the chosen device or the simulator cannot run the project.
+    let on_board = Signal::derive(move || {
+        controller::debugs_on_board(
+            state.device.transport.get().as_ref(),
+            state
+                .sim
+                .plan
+                .with(|plan| plan.as_ref().is_some_and(|p| p.supported)),
+            controller::board_debuggable(state),
+        )
+    });
+    // In the simulator, Debug needs the chip's gdb on top of everything Run
+    // needs; on the board it needs only the probe, which it asks for.
     let debug_block = Signal::derive(move || {
+        if on_board.get() {
+            return None;
+        }
         run_block.get().or_else(|| {
             state
                 .sim
@@ -200,14 +216,18 @@ pub fn RunControls() -> impl IntoView {
                         }
                         let block = debug_block.get();
                         let disabled = running.get() || block.is_some();
-                        let title = block
-                            .unwrap_or_else(|| with_chord(state, Action::Debug, t!("toolbar.debug")));
+                        let words = if on_board.get() {
+                            t!("toolbar.debug-board")
+                        } else {
+                            t!("toolbar.debug")
+                        };
+                        let title = block.unwrap_or_else(|| with_chord(state, Action::Debug, words));
                         view! {
                             <button
                                 type="button"
                                 title=title
                                 disabled=disabled
-                                on:click=move |_| controller::simulate(state, true)
+                                on:click=move |_| controller::debug(state)
                                 class=format!("{BUTTON} text-label-2 hover:text-label")
                             >
                                 <IconView icon=Icon::Bug size=15 />

@@ -81,6 +81,7 @@ pub async fn plan_flash(
 
         let mut plan = flash::plan(&flash::FlashRequest {
             chip_id,
+            probe_chip: detected.probe_chip,
             transport,
             action,
             firmware: firmware.map(PathBuf::from),

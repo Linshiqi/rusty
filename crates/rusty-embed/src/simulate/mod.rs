@@ -115,6 +115,7 @@ mod tests {
             runtime: None,
             configured_target: target.map(str::to_string),
             configured_toolchain: None,
+            probe_chip: None,
             frameworks: Vec::new(),
             uses_defmt: false,
             uses_embassy: false,
