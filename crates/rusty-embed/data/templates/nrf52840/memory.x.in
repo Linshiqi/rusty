@@ -1,0 +1,6 @@
+/* The nRF52840: 1 MB of flash and 256 KB of RAM, with nothing in front
+ * of the application (no SoftDevice). */
+MEMORY {
+    FLASH : ORIGIN = 0x00000000, LENGTH = 1024K
+    RAM   : ORIGIN = 0x20000000, LENGTH = 256K
+}

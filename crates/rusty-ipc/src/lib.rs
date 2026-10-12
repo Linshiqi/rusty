@@ -1,0 +1,388 @@
+//! Command names, shared by both sides of the IPC boundary.
+//!
+//! A Tauri command's name is a string on the wire. Written twice — once in the
+//! backend's handler list, once in the frontend's call site — the two drift,
+//! and the failure is a runtime "command not found" rather than a build error.
+//!
+//! So the names live here and both sides `use` them. `rusty-app` additionally
+//! has a test asserting each constant matches the function it names, which
+//! turns the remaining risk (a typo in a constant) into a test failure.
+//!
+//! No dependencies, and nothing but `&'static str`, so this costs the wasm
+//! bundle nothing.
+
+#![no_std]
+
+/// Opening and inspecting a project.
+pub mod project {
+    pub const OPEN: &str = "open_project";
+    pub const STATUS: &str = "project_status";
+    pub const PATH: &str = "project_path";
+    pub const WORKSPACE_REPORT: &str = "workspace_report";
+}
+
+/// The playground: a project rusty keeps per chip for trying things.
+pub mod playground {
+    pub const OPEN: &str = "open_playground";
+    pub const RESET: &str = "reset_playground";
+    /// Copy it somewhere as a project of its own.
+    pub const KEEP: &str = "keep_playground";
+}
+
+/// What the workbench remembers, and where it keeps it.
+pub mod workbench {
+    pub const RECENTS: &str = "recent_projects";
+    pub const FORGET_RECENT: &str = "forget_recent";
+    pub const STORAGE_LOCATION: &str = "storage_location";
+    pub const RELOCATE: &str = "relocate_storage";
+    /// How much disk the data directory is using — what decides whether to
+    /// move it.
+    pub const FOOTPRINT: &str = "storage_footprint";
+    pub const PROXY: &str = "proxy_setting";
+    pub const SET_PROXY: &str = "set_proxy_setting";
+    pub const KEYBINDS: &str = "keybinds";
+    /// Editor tabs per project, and the assistant profile — both moved out of
+    /// the WebView's storage, which no data-directory relocation carries.
+    pub const RECORD_TABS: &str = "record_tabs";
+    pub const PROJECT_TABS: &str = "project_tabs";
+    pub const ASSISTANT: &str = "assistant_choice";
+    pub const SET_ASSISTANT: &str = "set_assistant_choice";
+    pub const SET_KEYBIND: &str = "set_keybind";
+    /// Modal editing on or off, remembered across launches and shared by
+    /// every window.
+    pub const VIM: &str = "vim_enabled";
+    pub const SET_VIM: &str = "set_vim";
+    pub const AUTO_SAVE: &str = "auto_save_enabled";
+    pub const SET_AUTO_SAVE: &str = "set_auto_save";
+    /// What the editor draws around the code: inlay hints, the minimap,
+    /// sticky scroll, indent guides.
+    pub const EDITOR_VIEW: &str = "editor_view";
+    pub const SET_EDITOR_VIEW: &str = "set_editor_view";
+    /// A rust-analyzer the user named, in place of the one rusty finds.
+    pub const RUST_ANALYZER: &str = "rust_analyzer_path";
+    pub const SET_RUST_ANALYZER: &str = "set_rust_analyzer_path";
+    /// Display language. `None` means follow the system.
+    pub const LOCALE: &str = "display_locale";
+    pub const SET_LOCALE: &str = "set_display_locale";
+    /// Is there a newer rusty. The check runs the Tauri updater against the
+    /// release feed, so what it finds is also what the three below can
+    /// fetch, hold and apply — in that order, because a hundred-megabyte
+    /// download that ends by restarting the app has to be cancellable, and
+    /// the restart has to be the user's gesture, not the download's end.
+    pub const UPDATE: &str = "check_update";
+    pub const UPDATE_DOWNLOAD: &str = "download_update";
+    pub const UPDATE_CANCEL: &str = "cancel_update";
+    pub const UPDATE_APPLY: &str = "apply_update";
+    /// Stop prompting about the version the last check found.
+    pub const UPDATE_SKIP: &str = "skip_update";
+    /// How many other rusty windows installing closes along with this one.
+    pub const UPDATE_CLOSES: &str = "update_closes";
+    pub const OPEN_URL: &str = "open_url";
+}
+
+/// Hardware the workbench knows about.
+pub mod catalog {
+    pub const CHIPS: &str = "chip_catalogue";
+    pub const BOARDS: &str = "board_catalogue";
+    pub const PROBLEMS: &str = "catalog_problems";
+}
+
+/// The part's pins, and what the source says about them.
+pub mod pins {
+    pub const REPORT: &str = "pin_report";
+}
+
+/// Moving a project from one chip to another.
+pub mod migrate {
+    pub const PLAN: &str = "plan_migration";
+    pub const APPLY: &str = "apply_migration";
+}
+
+pub mod toolchain {
+    pub const REPORT: &str = "toolchain_report";
+}
+
+pub mod memory {
+    pub const REPORT: &str = "memory_report";
+}
+
+/// Binaries the project has already built.
+pub mod firmware {
+    pub const LIST: &str = "firmware_list";
+    /// The commands that build the open project, by its build system.
+    pub const BUILD_PLAN: &str = "build_plan";
+}
+
+/// Devices, and getting a binary onto one.
+pub mod flash {
+    pub const SERIAL_PORTS: &str = "serial_ports";
+    pub const DEBUG_PROBES: &str = "debug_probes";
+    /// Boards waiting in a USB bootloader: UF2 drives and DFU devices.
+    pub const BOOT_DEVICES: &str = "boot_devices";
+    pub const PLAN: &str = "plan_flash";
+    pub const RUN: &str = "run_flash";
+    pub const STOP: &str = "stop_flash";
+    /// Hold a serial port open in both directions, for tuning a running
+    /// board. Streams like [`RUN`] and never resolves until the link closes.
+    pub const LINK: &str = "serial_link";
+}
+
+/// Starting a new project.
+pub mod wizard {
+    pub const OPTIONS: &str = "wizard_options";
+    pub const EXPLAIN: &str = "explain_choice";
+    pub const PLAN: &str = "plan_new_project";
+    pub const CREATE: &str = "create_project";
+    /// Scaffold C interop into the open project, either direction.
+    pub const C_INTEROP: &str = "scaffold_c_interop";
+}
+
+/// The terminal: a real shell behind a pseudo-terminal, plus the one-shot
+/// runner the panels use to launch a tool without a shell.
+pub mod terminal {
+    pub const RUN: &str = "run_command";
+    pub const OPEN: &str = "terminal_open";
+    pub const WRITE: &str = "terminal_write";
+    pub const RESIZE: &str = "terminal_resize";
+    pub const SCROLL: &str = "terminal_scroll";
+    pub const CLOSE: &str = "terminal_close";
+    pub const SHELL_INFO: &str = "terminal_shell_info";
+    pub const SET_SHELL: &str = "set_terminal_shell";
+    pub const SHELLS: &str = "terminal_shells";
+}
+
+/// Looking at and changing the project's files.
+pub mod files {
+    pub const TREE: &str = "file_tree";
+    /// The `.rs` files no `mod` declaration reaches — what the tree dims,
+    /// because rust-analyzer only says so for a file somebody has opened.
+    pub const UNLINKED: &str = "unlinked_files";
+    pub const OPEN: &str = "open_file";
+    /// One file's bytes, base64 — a figure in a page, an image opened from
+    /// the tree. `OPEN` refuses those as binary, rightly, for the editor.
+    pub const BLOB: &str = "read_blob";
+    pub const SAVE: &str = "save_file";
+    pub const CREATE: &str = "create_entry";
+    /// What the tree's drag-and-drop and its right-click menu do to an
+    /// entry. Each answers with the relative path it produced, because the
+    /// open tabs move with the file.
+    pub const MOVE: &str = "move_entry";
+    pub const COPY: &str = "copy_entry";
+    pub const RENAME: &str = "rename_entry";
+    /// To the recycle bin, never for ever.
+    pub const DELETE: &str = "delete_entry";
+    /// Select the entry in the platform's file manager.
+    pub const REVEAL: &str = "reveal_entry";
+    pub const DETACH: &str = "open_editor_window";
+    /// Bring a detached editor's file back into the main window.
+    pub const REATTACH: &str = "reattach_editor_window";
+    /// An edited buffer repainted against the painting the editor holds:
+    /// the lines the edit changed, not the file.
+    pub const REPAINT: &str = "repaint_text";
+    /// A fenced code block, highlighted by the language its fence names —
+    /// what the Markdown page asks for, where there is no path to read a
+    /// grammar off.
+    pub const HIGHLIGHT_SNIPPET: &str = "highlight_snippet";
+    pub const OPEN_EXTERNAL: &str = "open_external";
+    pub const FORMAT: &str = "format_text";
+    pub const SEARCH: &str = "search_project";
+    /// Rewrite every match the search would list. Destructive and not
+    /// undoable from inside the window, which is why it reports what it
+    /// changed and what it refused rather than a bare count.
+    pub const REPLACE: &str = "replace_in_project";
+    /// Long-lived: streams a batch every time the project settles after
+    /// somebody else changed it. Never resolves while it is up, like
+    /// `lsp_start`.
+    pub const WATCH: &str = "watch_project";
+}
+
+/// The language server behind the editor.
+pub mod lsp {
+    pub const START: &str = "lsp_start";
+    pub const OPEN: &str = "lsp_open";
+    pub const CHANGE: &str = "lsp_change";
+    pub const SAVED: &str = "lsp_saved";
+    /// The editor let a document go: the server reads it from disk again.
+    pub const CLOSE: &str = "lsp_close";
+    pub const COMPLETE: &str = "lsp_complete";
+    /// The `use` line an accepted completion brings with it, when the item
+    /// was not yet in scope.
+    pub const RESOLVE_COMPLETION: &str = "lsp_resolve_completion";
+    pub const HOVER: &str = "lsp_hover";
+    pub const DEFINITION: &str = "lsp_definition";
+    /// Every use of the symbol at a position, each with its line.
+    pub const REFERENCES: &str = "lsp_references";
+    pub const IMPLEMENTATIONS: &str = "lsp_implementations";
+    pub const TYPE_DEFINITION: &str = "lsp_type_definition";
+    /// The other places in a file the name at a position occurs.
+    pub const HIGHLIGHTS: &str = "lsp_highlights";
+    /// A file's outline, flattened.
+    pub const DOCUMENT_SYMBOLS: &str = "lsp_document_symbols";
+    /// Symbols across the workspace matching a query.
+    pub const WORKSPACE_SYMBOLS: &str = "lsp_workspace_symbols";
+    /// The function at a position, as the start of a call hierarchy.
+    pub const CALL_HIERARCHY: &str = "lsp_call_hierarchy";
+    /// The calls into or out of a function of a call hierarchy.
+    pub const CALLS: &str = "lsp_calls";
+    /// The macro call at a position, expanded, as a read-only document.
+    pub const EXPAND_MACRO: &str = "lsp_expand_macro";
+    /// What rust-analyzer infers over a range of a file's lines.
+    pub const INLAY_HINTS: &str = "lsp_inlay_hints";
+    pub const SIGNATURE: &str = "lsp_signature";
+    pub const SEMANTIC: &str = "lsp_semantic";
+    /// After an edit: the edit, then the colours and the hints, in one call.
+    pub const PAINTED: &str = "lsp_painted";
+    pub const ACTIONS: &str = "lsp_code_actions";
+    /// Write the part of an accepted quick fix that lands in other files.
+    pub const APPLY_ACTION: &str = "lsp_apply_action";
+    /// Rename a symbol everywhere it is used. Writes the files it changes.
+    pub const RENAME: &str = "lsp_rename";
+}
+
+/// Breakpoints, stepping, and what the target is doing.
+pub mod debug {
+    pub const START: &str = "debug_start";
+    /// A host test under gdb: builds it, finds its binary, runs it. Streams
+    /// like [`START`].
+    pub const TEST: &str = "debug_test";
+    /// A board through its debug probe: probe-rs flashes the image and
+    /// debugs it. Streams like [`START`].
+    pub const BOARD: &str = "debug_board";
+    pub const BREAKPOINT: &str = "debug_breakpoint";
+    pub const CONTROL: &str = "debug_control";
+    pub const FRAME: &str = "debug_frame";
+    pub const STOP: &str = "debug_stop";
+    pub const READ: &str = "debug_read_memory";
+    pub const REGISTERS: &str = "register_map";
+    pub const FETCH_SVD: &str = "fetch_svd";
+}
+
+/// The workspace's direct dependencies against crates.io.
+pub mod crates {
+    pub const REPORT: &str = "crate_report";
+}
+
+/// Where the project's builds went on disk, and the sweep that keeps a build
+/// directory to what the current dependency graph needs.
+pub mod disk {
+    pub const REPORT: &str = "disk_report";
+    pub const SWEEP: &str = "disk_sweep";
+    pub const REMOVE: &str = "disk_remove";
+    pub const REMOVE_CACHE: &str = "disk_remove_cache";
+    pub const AUTO_SWEEP: &str = "disk_auto_sweep";
+    pub const SET_AUTO_SWEEP: &str = "set_disk_auto_sweep";
+}
+
+/// The math toolbox's sheet, in the project's `.rusty/math.toml`.
+pub mod math {
+    pub const LOAD: &str = "math_sheet_load";
+    pub const SAVE: &str = "math_sheet_save";
+}
+
+/// Running firmware without hardware: Espressif's QEMU.
+pub mod sim {
+    pub const PLAN: &str = "plan_simulation";
+    pub const RUN: &str = "run_simulation";
+    pub const SAVE_BOARD: &str = "save_sim_board";
+    /// A line into whatever session is running — QEMU's stdin, or a serial
+    /// port rusty holds open. Named for the simulator it was written for; it
+    /// is the only write path either has.
+    pub const SEND: &str = "sim_send";
+    pub const SAVE_TRACE: &str = "save_sim_trace";
+    pub const INSTALL: &str = "install_sim_tool";
+    /// An LCSC part number, answered with its symbol and kept in the library.
+    pub const IMPORT_SYMBOL: &str = "sim_import_symbol";
+    /// Stop the emulator's clock, or start it again. The session stays: a
+    /// paused simulation is one you can look at, not one you have lost.
+    pub const PAUSE: &str = "sim_pause";
+    /// A `.kicad_sch` read onto the sheet, with its own symbols kept in the
+    /// project so it still draws when the project is reopened.
+    pub const IMPORT_KICAD: &str = "sim_import_kicad";
+    /// The sheet written back out as `.kicad_sch`. The file that is there is
+    /// patched rather than replaced, so everything rusty does not model
+    /// keeps its own bytes; `docs/kicad.md` is why.
+    pub const EXPORT_KICAD: &str = "sim_export_kicad";
+    /// One reading of a sensor on the sheet, moved while the simulation
+    /// runs: the part, the channel, the value in the channel's unit.
+    pub const SENSOR_SET: &str = "sim_sensor_set";
+    /// What a signal plays, changed while the simulation runs: the part,
+    /// where the signal is kept (`signal`, `signal.<reading>`), and its text,
+    /// or nothing to take it off. Answered with what the run says about it.
+    pub const SIGNAL_SET: &str = "sim_signal_set";
+    /// A key that joins two GPIOs — a matrix's, which is not a level.
+    pub const SWITCH: &str = "sim_switch";
+    /// A Wokwi `diagram.json` read onto the sheet.
+    pub const IMPORT_WOKWI: &str = "sim_import_wokwi";
+}
+
+pub mod features {
+    pub const ROWS: &str = "feature_rows";
+    pub const IMPACT: &str = "feature_impact";
+}
+
+/// Window controls. The app draws its own title bar.
+pub mod window {
+    pub const MINIMIZE: &str = "window_minimize";
+    pub const TOGGLE_MAXIMIZE: &str = "window_toggle_maximize";
+    pub const CLOSE: &str = "window_close";
+    pub const SET_ZOOM: &str = "window_set_zoom";
+    /// Another rusty, with a project of its own: New Window.
+    pub const NEW: &str = "window_new";
+    /// Whether this instance was started by New Window, and so opens on the
+    /// welcome screen rather than on the last project.
+    pub const FRESH: &str = "window_fresh";
+}
+
+/// The assistant and its configuration.
+pub mod ai {
+    pub const ASK: &str = "ai_ask";
+    /// Stop the question in flight. [`ASK`] then resolves with an error whose
+    /// message is exactly [`STOPPED`], rather than with a transcript.
+    pub const CANCEL: &str = "ai_cancel";
+    /// The message [`ASK`] fails with after [`CANCEL`]. Shared so the frontend
+    /// recognises a stop by the constant, not by retyping the sentence — the
+    /// two drifted apart once and every stop then raised the error banner.
+    pub const STOPPED: &str = "The assistant was stopped before it finished.";
+    pub const PRESETS: &str = "ai_presets";
+    pub const TOOLS: &str = "ai_tools";
+    pub const KEY_CONFIGURED: &str = "ai_key_configured";
+    pub const STORE_KEY: &str = "ai_store_key";
+    pub const DELETE_KEY: &str = "ai_delete_key";
+    pub const LIST_MODELS: &str = "ai_list_models";
+    pub const CHECK_PROVIDER: &str = "ai_check_provider";
+}
+
+/// The repository: its history, one commit, the branches.
+pub mod git {
+    pub const HISTORY: &str = "git_history";
+    pub const COMMIT: &str = "git_commit";
+    /// Every branch and tag, with each branch's tracking — one question.
+    pub const REFS: &str = "git_refs";
+    /// A fingerprint of the repository's own files, read without running
+    /// git: what the panel compares to know whether anything moved.
+    pub const STAMP: &str = "git_stamp";
+    /// The working tree: branch, upstream, every changed path.
+    pub const STATUS: &str = "git_status";
+    pub const STASHES: &str = "git_stashes";
+    /// Every remote the config names, fetched from yet or not.
+    pub const REMOTES: &str = "git_remotes";
+    /// Fold an empty repository inside this one into it: its `.git` to the
+    /// recycle bin, and only when it has no commits.
+    pub const INCLUDE_NESTED: &str = "git_include_nested";
+    /// One path's diff — index against HEAD, or tree against index.
+    pub const DIFF: &str = "git_diff";
+    /// Put paths in the index, or take them out. Quiet: everything that
+    /// rewrites history or talks to a remote runs as a dock command instead.
+    pub const STAGE: &str = "git_stage";
+    /// One file's bytes at a revision (or in the working tree), base64 — how
+    /// an image in a diff reaches the screen.
+    pub const BLOB: &str = "git_blob";
+    /// `git clone`, streamed like an install: the one git command that runs
+    /// with no project open, because it is how a project arrives.
+    pub const CLONE: &str = "git_clone";
+    /// A commit in a window of its own, as Fork tears one off.
+    pub const WINDOW: &str = "open_git_window";
+    /// `user.name` and `user.email` as git resolves them — asked before a
+    /// commit, so "Author identity unknown" is a form and not a dock error.
+    pub const IDENTITY: &str = "git_identity";
+}

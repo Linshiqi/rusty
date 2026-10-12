@@ -1,0 +1,27 @@
+# rusty's playground for the ESP32-C3. Edit src/main.rs and press Run.
+#
+# `[workspace]` on its own keeps this a project of its own, wherever the
+# data directory happens to sit.
+[workspace]
+
+[package]
+edition = "2024"
+name    = "playground"
+version = "0.1.0"
+
+[[bin]]
+name = "playground"
+path = "./src/main.rs"
+
+[dependencies]
+esp-hal                = { version = "~1.1.0", features = ["esp32c3", "unstable"] }
+esp-println            = { version = "0.15", features = ["esp32c3"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c3"] }
+critical-section       = "1.2.0"
+
+# Built for trying things: an edit rebuilds in seconds. No link-time
+# optimisation, which would re-run over every dependency on every change.
+[profile.release]
+debug       = 2
+incremental = true
+opt-level   = "s"

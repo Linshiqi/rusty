@@ -1,0 +1,849 @@
+//! What the board editor's commands do to the sheet, with no signals in them.
+//!
+//! The sibling of [`super::geometry`], and there for the same reason: the
+//! canvas is a two-thousand-line component, and everything inside it that
+//! is really arithmetic or bookkeeping was unreachable from a test. What
+//! rotating, deleting, duplicating, wiring and undoing actually *do* to the
+//! part list and the wire list is pinned here.
+//!
+//! Every function here takes the lists and mutates them. The component
+//! keeps the signals, calls these, and sets `dirty` — so a command is one
+//! line there and its behaviour is here.
+
+use rusty_embed::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
+
+use super::geometry::{
+    EditPart, GroupStart, SNAP, Snapshot, branch_route, part_box, simplify_route, turned_anchor,
+};
+use super::layout;
+
+/// How many steps of undo the editor keeps.
+///
+/// Bounded because each snapshot is a whole copy of the sheet and a long
+/// session would otherwise grow without limit; sixty-four is more than a
+/// hand undoes in one go and far less than a browser tab minds.
+const HISTORY_CAP: usize = 64;
+
+/// Push a snapshot, dropping the oldest once the cap is reached.
+pub(super) fn remember(past: &mut Vec<Snapshot>, now: Snapshot) {
+    if past.len() >= HISTORY_CAP {
+        past.remove(0);
+    }
+    past.push(now);
+}
+
+/// The next free `prefix<n>`: `D3` when `D1` and `D2` are placed. A deleted
+/// `D2` is reused, as KiCad's annotation does. Never the devkit's `U1`.
+pub(super) fn next_reference(list: &[EditPart], prefix: &str) -> String {
+    let prefix = prefix.trim_end_matches(['?', '_']);
+    let prefix = if prefix.is_empty() { "U" } else { prefix };
+    (1..)
+        .map(|n| format!("{prefix}{n}"))
+        .find(|candidate| {
+            *candidate != KIT_REFERENCE && list.iter().all(|p| p.inst.reference != *candidate)
+        })
+        .expect("the integers do not run out")
+}
+
+/// Place a symbol at `(x, y)`, numbered after the parts already there. Its
+/// value starts as the symbol's own unless that is just the symbol's name
+/// — `LED` beside an LED says nothing, `10kΩ` beside an imported resistor
+/// says everything. Returns the new part's index.
+/// Place a part, **beside** whatever is already there rather than on it.
+///
+/// The point asked for when it is free, and the nearest free one when it is
+/// not: a click plants a part where the pointer is, and an import plants a
+/// dozen wherever another editor's canvas had them, which here is often the
+/// same square inch. Two bodies in one place is not a drawing anybody can
+/// read.
+pub(super) fn add(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize {
+    let index = place_raw(list, symbol, x, y);
+    // Its own box is known only once it is in the list — the drawing
+    // decides its size — so it is placed and then moved if it has to be.
+    let (x0, y0, x1, y1) = part_box(&list[index]);
+    let taken = layout::taken_boxes(list, Some(index));
+    let at = layout::free_spot(&taken, (x1 - x0, y1 - y0), (x, y), SNAP);
+    list[index].inst.x = at.0;
+    list[index].inst.y = at.1;
+    index
+}
+
+fn place_raw(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize {
+    let reference = next_reference(list, &symbol.reference);
+    let value = if symbol.value == symbol.name {
+        String::new()
+    } else {
+        symbol.value.clone()
+    };
+    // A generator arrives playing the first case the lab offers — a slow
+    // reading under mains hum and a little noise — rather than silence: a
+    // new part with nothing to look at is a part nobody learns from.
+    let mut props = std::collections::BTreeMap::new();
+    if rusty_embed::nets::behaviour_of(symbol) == rusty_embed::nets::Behaviour::Generator
+        && let Some(first) = rusty_embed::signal::presets().first()
+    {
+        props.insert(
+            rusty_embed::generator::SIGNAL.to_string(),
+            first.signal.to_string(),
+        );
+    }
+    list.push(EditPart {
+        inst: Instance {
+            reference,
+            symbol: symbol.id(),
+            value,
+            x,
+            y,
+            rot: 0,
+            mirror: false,
+            props,
+        },
+        symbol: Some(symbol.clone()),
+    });
+    list.len() - 1
+}
+
+/// Rename a part, and every wire end that named it. Refused — `false` —
+/// for a blank name, the devkit's, or one another part already wears;
+/// a sheet with two `D1`s is a sheet whose wires no longer say which.
+pub(super) fn rename(list: &mut [EditPart], wires: &mut [Wire], index: usize, name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name == KIT_REFERENCE {
+        return false;
+    }
+    if list
+        .iter()
+        .enumerate()
+        .any(|(i, p)| i != index && p.inst.reference == name)
+    {
+        return false;
+    }
+    let Some(part) = list.get_mut(index) else {
+        return false;
+    };
+    if part.is_kit() {
+        return false;
+    }
+    let old = std::mem::replace(&mut part.inst.reference, name.to_string());
+    for wire in wires {
+        if wire.from.part == old {
+            wire.from.part = name.to_string();
+        }
+        if wire.to.part == old {
+            wire.to.part = name.to_string();
+        }
+    }
+    true
+}
+
+pub(super) fn set_value(list: &mut [EditPart], index: usize, value: &str) {
+    if let Some(part) = list.get_mut(index) {
+        part.inst.value = value.trim().to_string();
+    }
+}
+
+pub(super) fn set_prop(list: &mut [EditPart], index: usize, key: &str, value: &str) {
+    if let Some(part) = list.get_mut(index) {
+        if value.trim().is_empty() {
+            part.inst.props.remove(key);
+        } else {
+            part.inst
+                .props
+                .insert(key.to_string(), value.trim().to_string());
+        }
+    }
+}
+
+/// A quarter turn clockwise — the devkit included. It is a part like any
+/// other and every geometric question about it already goes through
+/// `orient`, so the header, the hit-testing and the wires follow the turn
+/// for free; the two things that do not are the board's own art, which the
+/// view turns with it, and the row names, which are placed after the turn
+/// like every other label because text is never turned.
+pub(super) fn rotate(list: &mut [EditPart], index: usize) {
+    if let Some(part) = list.get_mut(index) {
+        let rot = (part.inst.rot + 90) % 360;
+        let (x, y) = turned_anchor(part, rot, part.inst.mirror);
+        part.inst.rot = rot;
+        part.inst.x = x;
+        part.inst.y = y;
+    }
+}
+
+/// Mirror left-to-right — KiCad's X key. Not a second rotation: a part
+/// on the chip's right wants its pins on the near edge *in the same
+/// order*, and turning it 180° reverses them.
+pub(super) fn mirror(list: &mut [EditPart], index: usize) {
+    if let Some(part) = list.get_mut(index) {
+        let mirror = !part.inst.mirror;
+        let (x, y) = turned_anchor(part, part.inst.rot, mirror);
+        part.inst.mirror = mirror;
+        part.inst.x = x;
+        part.inst.y = y;
+    }
+}
+
+pub(super) fn nudge(list: &mut [EditPart], index: usize, dx: f64, dy: f64) {
+    if let Some(part) = list.get_mut(index) {
+        part.inst.x += dx;
+        part.inst.y += dy;
+    }
+}
+
+/// Move every part in `start` by one displacement from where it stood
+/// when the drag began — never by a delta from the last frame, which
+/// accumulates snapping into drift.
+pub(super) fn translate(list: &mut [EditPart], start: &[GroupStart], dx: f64, dy: f64) {
+    for (index, (x, y)) in start {
+        if let Some(part) = list.get_mut(*index) {
+            part.inst.x = x + dx;
+            part.inst.y = y + dy;
+        }
+    }
+}
+
+/// Remove a part and every wire that touched it. The devkit stays.
+pub(super) fn remove(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, index: usize) -> bool {
+    if index >= list.len() || list[index].is_kit() {
+        return false;
+    }
+    let reference = list.remove(index).inst.reference;
+    wires.retain(|w| w.from.part != reference && w.to.part != reference);
+    true
+}
+
+/// Remove several parts at once — Delete on a rubber-band selection.
+/// Highest index first, so each removal leaves the rest where they were.
+pub(super) fn remove_many(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, indices: &[usize]) {
+    let mut order: Vec<usize> = indices.to_vec();
+    order.sort_unstable();
+    order.dedup();
+    for index in order.into_iter().rev() {
+        remove(list, wires, index);
+    }
+}
+
+/// A copy beside the original, numbered afresh, with no wires: wires are
+/// connections somebody made, and a copy of a connection is a short.
+pub(super) fn duplicate(list: &mut Vec<EditPart>, index: usize) -> Option<usize> {
+    let original = list.get(index).filter(|p| !p.is_kit())?.clone();
+    let prefix: String = original
+        .inst
+        .reference
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_string();
+    let reference = next_reference(list, &prefix);
+    list.push(EditPart {
+        inst: Instance {
+            reference,
+            x: original.inst.x + 16.0,
+            y: original.inst.y + 16.0,
+            ..original.inst
+        },
+        symbol: original.symbol,
+    });
+    Some(list.len() - 1)
+}
+
+/// The pin's spelling in a wire, from its part's symbol.
+fn key_of(part: &EditPart, number: &str) -> Option<PinRef> {
+    let symbol = part.symbol.as_ref()?;
+    let pin = symbol.pin(number)?;
+    Some(PinRef::new(&part.inst.reference, symbol.wire_key(pin)))
+}
+
+/// Whether a wire end names this pin, whichever spelling it used.
+pub(super) fn end_is(list: &[EditPart], end: &PinRef, index: usize, number: &str) -> bool {
+    let Some(part) = list.get(index) else {
+        return false;
+    };
+    if end.part != part.inst.reference {
+        return false;
+    }
+    part.pin(&end.pin).is_some_and(|p| p.number == number)
+}
+
+/// Every wire touching a pin.
+pub(super) fn wires_at(
+    list: &[EditPart],
+    wires: &[Wire],
+    index: usize,
+    number: &str,
+) -> Vec<usize> {
+    wires
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| end_is(list, &w.from, index, number) || end_is(list, &w.to, index, number))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The wire joining two pins, routed as it will be drawn — or `None` where
+/// joining them means nothing: a pin to itself, and a pair already joined.
+///
+/// This is what the ghost under the pointer shows while the wire is being
+/// pulled, and it is `connect` less the push, so a preview cannot promise
+/// a shape the connection does not deliver.
+pub(super) fn connection(
+    list: &[EditPart],
+    wires: &[Wire],
+    from: (usize, &str),
+    to: (usize, &str),
+) -> Option<Wire> {
+    if from == to {
+        return None;
+    }
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let b = key_of(list.get(to.0)?, to.1)?;
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    let mut wire = Wire {
+        from: a,
+        to: b,
+        bends: Vec::new(),
+    };
+    // Round the parts rather than through them, and clear of the wires
+    // already there. A wire with no bends draws one elbow, which is right
+    // when the way is clear, a line through somebody's display when it is
+    // not, and a line drawn on top of another wire when that is what the
+    // elbow lands on — and the author can still drag every bend this
+    // leaves.
+    layout::route_beside(list, wires, &mut wire);
+    Some(wire)
+}
+
+/// Join two pins, and answer with the index of the wire made.
+pub(super) fn connect(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    to: (usize, &str),
+) -> Option<usize> {
+    let wire = connection(list, wires, from, to)?;
+    wires.push(wire);
+    Some(wires.len() - 1)
+}
+
+/// Join two pins along the route somebody drew, click by click — `route`
+/// is the whole polyline, start pin first and end pin last — and answer
+/// with the index of the wire made.
+///
+/// Not routed: the author laid every corner, and a wire that moved them
+/// would be a wire nobody drew. What is stored is exactly the corners
+/// between the two pins, folded where two segments run straight on. The
+/// refusals are `connect`'s, for its reasons: a pin to itself, and a pair
+/// already joined.
+pub(super) fn connect_drawn(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    to: (usize, &str),
+    route: Vec<(f64, f64)>,
+) -> Option<usize> {
+    if from == to {
+        return None;
+    }
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let b = key_of(list.get(to.0)?, to.1)?;
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    let tidy = simplify_route(route);
+    let bends = if tidy.len() > 2 {
+        tidy[1..tidy.len() - 1].to_vec()
+    } else {
+        Vec::new()
+    };
+    wires.push(Wire {
+        from: a,
+        to: b,
+        bends,
+    });
+    Some(wires.len() - 1)
+}
+
+/// A drawn wire that ends on another wire rather than on a pin: the T,
+/// made as a wire to one of the trunk's own pins exactly as `branch` makes
+/// one, with the corners the author laid before it. `route` runs from the
+/// start pin to the point on the trunk where the click landed.
+pub(super) fn branch_drawn(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    trunk: usize,
+    route: Vec<(f64, f64)>,
+) -> Option<usize> {
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let at = *route.last()?;
+    let (b, along) = branch_route(list, wires.get(trunk)?, at)?;
+    if a == b {
+        return None;
+    }
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    // The drawn route to the trunk, then along the trunk to its pin: the
+    // drop point is the last of the one and the first of the other, and the
+    // fold takes the duplicate out.
+    let mut full = route;
+    full.extend(along);
+    let tidy = simplify_route(full);
+    // The start pin is the route's first point; everything after it is a
+    // bend, since the trunk's pin the wire names is not on this list.
+    let bends = tidy.get(1..).map(<[_]>::to_vec).unwrap_or_default();
+    wires.push(Wire {
+        from: a,
+        to: b,
+        bends,
+    });
+    Some(wires.len() - 1)
+}
+
+/// A branch off an existing wire: the T-junction, made as a wire to one of
+/// the trunk's own pins.
+///
+/// Nothing about the net model changes, because nothing needs to — three
+/// wires at one pin have always been one net. `branch_route` picks which of
+/// the trunk's pins to name and lays the bends along the trunk so the two
+/// draw as a T; the refusals are `connect`'s, for the same reasons: a wire
+/// to itself, and a pair already joined.
+pub(super) fn branch(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    trunk: usize,
+    at: (f64, f64),
+) -> Option<usize> {
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let (b, bends) = branch_route(list, wires.get(trunk)?, at)?;
+    if a == b {
+        return None;
+    }
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    wires.push(Wire {
+        from: a,
+        to: b,
+        bends,
+    });
+    Some(wires.len() - 1)
+}
+
+/// Drop every wire at a pin.
+pub(super) fn disconnect_pin(list: &[EditPart], wires: &mut Vec<Wire>, index: usize, number: &str) {
+    let doomed = wires_at(list, wires, index, number);
+    for at in doomed.into_iter().rev() {
+        wires.remove(at);
+    }
+}
+
+/// Drop every wire touching a part.
+pub(super) fn disconnect_all(list: &[EditPart], wires: &mut Vec<Wire>, index: usize) {
+    let Some(part) = list.get(index) else {
+        return;
+    };
+    let reference = part.inst.reference.clone();
+    wires.retain(|w| w.from.part != reference && w.to.part != reference);
+}
+
+pub(super) fn remove_wire(wires: &mut Vec<Wire>, index: usize) {
+    if index < wires.len() {
+        wires.remove(index);
+    }
+}
+
+/// Forget a wire's bends, so it routes itself again.
+pub(super) fn straighten(list: &[EditPart], wires: &mut [Wire], index: usize) {
+    // The author's bends go, and the wire is laid out afresh rather than
+    // left as the bare elbow: on a clear sheet those are the same line,
+    // and on a crowded one the bare elbow is a wire through somebody's
+    // display — which is the one way back into the mess this menu item
+    // exists to get out of.
+    layout::relay(list, wires, index);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusty_embed::nets::kit_rows;
+    use rusty_embed::{Fill, Graphic, Pin, PinKind};
+
+    use crate::view::panels::simulate::geometry::{KIT_SYMBOL, kit_symbol};
+
+    fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
+        Symbol {
+            library: library.into(),
+            name: name.into(),
+            reference: reference.into(),
+            value: name.into(),
+            description: None,
+            pins: pins
+                .iter()
+                .enumerate()
+                .map(|(i, (number, name))| Pin {
+                    number: (*number).into(),
+                    name: (*name).into(),
+                    kind: PinKind::Passive,
+                    at: (if i == 0 { -3.81 } else { 3.81 }, 0.0),
+                    length: 2.54,
+                    angle: if i == 0 { 0 } else { 180 },
+                    hidden: false,
+                })
+                .collect(),
+            graphics: vec![Graphic::Rectangle {
+                start: (-1.0, -1.0),
+                end: (1.0, 1.0),
+                width: 0.254,
+                fill: Fill::None,
+            }],
+        }
+    }
+
+    fn led() -> Symbol {
+        symbol("Device", "LED", "D", &[("1", "K"), ("2", "A")])
+    }
+
+    fn sheet() -> Vec<EditPart> {
+        let rows = kit_rows(rusty_embed::nets::Pinout::numbered(&[
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21,
+        ]));
+        vec![EditPart {
+            inst: Instance {
+                reference: KIT_REFERENCE.into(),
+                symbol: KIT_SYMBOL.into(),
+                value: "ESP32C3".into(),
+                x: 460.0,
+                y: 40.0,
+                rot: 0,
+                mirror: false,
+                props: Default::default(),
+            },
+            symbol: Some(kit_symbol("esp32c3", &rows)),
+        }]
+    }
+
+    #[test]
+    fn a_new_part_is_numbered_after_the_ones_there_and_a_gap_is_reused() {
+        let mut list = sheet();
+        let first = add(&mut list, &led(), 100.0, 100.0);
+        let second = add(&mut list, &led(), 150.0, 100.0);
+        assert_eq!(list[first].inst.reference, "D1");
+        assert_eq!(list[second].inst.reference, "D2");
+        assert_eq!(
+            list[first].inst.value, "",
+            "`LED` beside an LED says nothing"
+        );
+        let mut wires = Vec::new();
+        assert!(remove(&mut list, &mut wires, first));
+        assert_eq!(add(&mut list, &led(), 0.0, 0.0), 2);
+        assert_eq!(list[2].inst.reference, "D1", "the gap is filled");
+        let mut lcsc = symbol("lcsc", "C25804", "R", &[("1", "1"), ("2", "2")]);
+        lcsc.value = "10kΩ".into();
+        let r = add(&mut list, &lcsc, 0.0, 0.0);
+        assert_eq!(list[r].inst.reference, "R1");
+        assert_eq!(list[r].inst.value, "10kΩ", "a real value is kept");
+        assert_eq!(next_reference(&list, "U"), "U2", "never the devkit's");
+        assert_eq!(
+            next_reference(&list, "LED?"),
+            "LED1",
+            "LCSC's question mark is not part of the name"
+        );
+    }
+
+    #[test]
+    fn wiring_joins_two_pins_by_their_spelling_and_refuses_what_means_nothing() {
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let mut wires = Vec::new();
+        let made = connect(&list, &mut wires, (0, "4"), (d, "2")).expect("wired");
+        assert_eq!(
+            wires[made].from,
+            PinRef::new("U1", "GPIO2"),
+            "the row's unique name"
+        );
+        assert_eq!(wires[made].to, PinRef::new("D1", "A"), "the pin's name");
+        assert_eq!(
+            connect(&list, &mut wires, (d, "2"), (0, "4")),
+            None,
+            "already joined, either way round"
+        );
+        assert_eq!(
+            connect(&list, &mut wires, (d, "2"), (d, "2")),
+            None,
+            "a pin to itself"
+        );
+        connect(&list, &mut wires, (d, "1"), (0, "9")).expect("to ground");
+        assert_eq!(
+            wires[1].to,
+            PinRef::new("U1", "9"),
+            "GND repeats, so its number"
+        );
+        assert_eq!(wires_at(&list, &wires, d, "1"), vec![1]);
+        assert!(
+            end_is(&list, &PinRef::new("D1", "K"), d, "1"),
+            "a name resolves to its number"
+        );
+        disconnect_pin(&list, &mut wires, d, "2");
+        assert_eq!(wires.len(), 1);
+        assert!(rename(&mut list, &mut wires, d, "D9"));
+        assert_eq!(wires[0].from.part, "D9", "the wire follows the new name");
+        assert!(!rename(&mut list, &mut wires, d, ""));
+        assert!(!rename(&mut list, &mut wires, d, "U1"));
+        assert!(
+            !rename(&mut list, &mut wires, 0, "U2"),
+            "the devkit keeps its name"
+        );
+        let other = add(&mut list, &led(), 0.0, 0.0);
+        assert!(!rename(&mut list, &mut wires, other, "D9"), "taken");
+        disconnect_all(&list, &mut wires, d);
+        assert!(wires.is_empty());
+    }
+
+    /// A T-junction is a wire to one of the trunk's own pins, because three
+    /// wires at one pin have always been one net. What is asserted is that
+    /// property — which pin it names and that the tail lies on the trunk —
+    /// rather than coordinates, which depend on where the drawing puts a
+    /// lamp's legs.
+    #[test]
+    fn a_branch_onto_a_wire_names_one_of_its_pins_and_starts_at_the_drop() {
+        use crate::view::panels::simulate::geometry::{wire_ends, wire_path, wire_under};
+
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let e = add(&mut list, &led(), 100.0, 300.0);
+        let mut wires = Vec::new();
+        let trunk = connect(&list, &mut wires, (0, "4"), (d, "2")).expect("trunk");
+
+        // A point genuinely on the trunk, read off the drawn path rather
+        // than guessed: the middle of its longest segment.
+        let ends = wire_ends(&list, &wires[trunk]).expect("the trunk is drawable");
+        let path = wire_path(&ends, &wires[trunk].bends);
+        let length = |s: &[(f64, f64)]| (s[1].0 - s[0].0).hypot(s[1].1 - s[0].1);
+        let seg = path
+            .windows(2)
+            .max_by(|p, q| length(p).total_cmp(&length(q)))
+            .expect("a segment");
+        let at = ((seg[0].0 + seg[1].0) / 2.0, (seg[0].1 + seg[1].1) / 2.0);
+
+        assert_eq!(
+            wire_under(&list, &wires, at, 8.0),
+            Some(trunk),
+            "the hit test finds the wire under the drop"
+        );
+        assert_eq!(
+            wire_under(&list, &wires, (at.0 + 400.0, at.1 + 400.0), 8.0),
+            None,
+            "and nothing at all out of reach, rather than the nearest"
+        );
+
+        let made = branch(&list, &mut wires, (e, "2"), trunk, at).expect("branched");
+        assert_eq!(wires[made].from, PinRef::new("D2", "A"));
+        assert!(
+            wires[made].to == wires[trunk].from || wires[made].to == wires[trunk].to,
+            "a branch names one of the trunk's own pins: {:?}",
+            wires[made].to
+        );
+        assert_eq!(
+            wires[made].bends.first().copied(),
+            Some(at),
+            "and its first bend is where the pointer let go"
+        );
+
+        assert_eq!(
+            branch(&list, &mut wires, (e, "2"), trunk, at),
+            None,
+            "the same branch twice is the pair that is already joined"
+        );
+        assert_eq!(
+            branch(&list, &mut wires, (d, "2"), trunk, at),
+            None,
+            "and a branch from one of the trunk's own pins means nothing"
+        );
+    }
+
+    #[test]
+    fn removing_a_part_takes_its_wires_and_the_devkit_cannot_go() {
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let r = add(
+            &mut list,
+            &symbol("Device", "R", "R", &[("1", "~"), ("2", "~")]),
+            200.0,
+            100.0,
+        );
+        let mut wires = Vec::new();
+        connect(&list, &mut wires, (0, "4"), (r, "1"));
+        connect(&list, &mut wires, (r, "2"), (d, "2"));
+        assert!(!remove(&mut list, &mut wires, 0), "the devkit stays");
+        assert!(remove(&mut list, &mut wires, r));
+        assert_eq!(wires.len(), 0, "both wires touched the resistor");
+        assert_eq!(list.len(), 2);
+        remove_many(&mut list, &mut wires, &[1, 0, 1]);
+        assert_eq!(list.len(), 1, "the lamp went, the devkit did not");
+    }
+
+    #[test]
+    fn the_devkit_turns_like_any_part_and_is_still_never_copied() {
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        for _ in 0..4 {
+            rotate(&mut list, d);
+        }
+        assert_eq!(list[d].inst.rot, 0, "four turns come back upright");
+        rotate(&mut list, d);
+        mirror(&mut list, d);
+        assert_eq!((list[d].inst.rot, list[d].inst.mirror), (90, true));
+        // The devkit turns like anything else — a sheet whose parts sit
+        // below the board wants its header pointing that way — but there is
+        // only ever one of it, and its reference is the one every wire
+        // spells, so copying and renaming stay refused.
+        rotate(&mut list, 0);
+        mirror(&mut list, 0);
+        assert_eq!((list[0].inst.rot, list[0].inst.mirror), (90, true));
+        assert_eq!(duplicate(&mut list, 0), None);
+        assert!(
+            !rename(&mut list, &mut Vec::new(), 0, "U9"),
+            "the devkit keeps its reference"
+        );
+        let copy = duplicate(&mut list, d).expect("copied");
+        assert_eq!(list[copy].inst.reference, "D2");
+        assert_eq!(
+            (
+                list[copy].inst.x,
+                list[copy].inst.rot,
+                list[copy].inst.mirror
+            ),
+            (116.0, 90, true)
+        );
+        nudge(&mut list, copy, -8.0, 0.0);
+        assert_eq!(list[copy].inst.x, 108.0);
+        translate(&mut list, &[(d, (100.0, 100.0))], 10.0, 20.0);
+        assert_eq!((list[d].inst.x, list[d].inst.y), (110.0, 120.0));
+        set_value(&mut list, d, " blue ");
+        assert_eq!(list[d].inst.value, "blue");
+        set_prop(&mut list, d, "max", "1023");
+        assert_eq!(list[d].inst.prop::<u16>("max"), Some(1023));
+        set_prop(&mut list, d, "max", "");
+        assert!(list[d].inst.props.is_empty());
+    }
+
+    #[test]
+    fn history_is_capped_and_keeps_the_newest() {
+        let mut past: Vec<Snapshot> = Vec::new();
+        for i in 0..(HISTORY_CAP + 5) {
+            let mut list = sheet();
+            list[0].inst.x = i as f64;
+            remember(&mut past, (list, Vec::new(), Vec::new()));
+        }
+        assert_eq!(past.len(), HISTORY_CAP);
+        assert_eq!(past[0].0[0].inst.x, 5.0, "the oldest five were dropped");
+        assert_eq!(past.last().unwrap().0[0].inst.x, (HISTORY_CAP + 4) as f64);
+    }
+
+    /// Where a pin is and which way its wire leaves it, on the sheet.
+    fn end(list: &[EditPart], index: usize, number: &str) -> ((f64, f64), (f64, f64)) {
+        use crate::view::panels::simulate::geometry::{pin_out, pin_point};
+        let part = &list[index];
+        let pin = part.pin(number).expect("the pin");
+        (pin_point(part, pin), pin_out(part, pin))
+    }
+
+    /// A wire drawn click by click is made of the corners that were drawn
+    /// — not routed afterwards — so the wire on the sheet draws exactly the
+    /// polyline the preview showed; and it refuses what `connect` refuses.
+    #[test]
+    fn a_drawn_wire_is_the_route_it_was_drawn_as() {
+        use crate::view::panels::simulate::geometry::{Drawing, wire_ends, wire_path};
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let (start, out) = end(&list, 0, "4");
+        let (finish, finish_out) = end(&list, d, "2");
+
+        let mut draft = Drawing::new((0, "4".into()));
+        draft.place(start, out, (start.0 - 80.0, start.1 + 64.0));
+        draft.place(start, out, (finish.0 + 64.0, start.1 + 96.0));
+        let route = draft.route_into(start, out, finish, finish_out);
+
+        let mut wires = Vec::new();
+        let made = connect_drawn(&list, &mut wires, (0, "4"), (d, "2"), route.clone())
+            .expect("drawn and made");
+        let ends = wire_ends(&list, &wires[made]).expect("both ends resolve");
+        assert_eq!(
+            wire_path(&ends, &wires[made].bends),
+            route,
+            "the wire draws the route that was drawn, corner for corner"
+        );
+
+        assert!(
+            connect_drawn(&list, &mut wires, (0, "4"), (d, "2"), route.clone()).is_none(),
+            "a pair already joined is refused, drawn or not"
+        );
+        assert!(
+            connect_drawn(&list, &mut wires, (d, "2"), (d, "2"), route).is_none(),
+            "a pin to itself means nothing"
+        );
+    }
+
+    /// A drawn wire that ends on another wire is the T a drag onto a wire
+    /// makes: a wire to one of the trunk's pins, through the drawn corners
+    /// and the point where the click landed.
+    #[test]
+    fn a_drawn_wire_ending_on_a_wire_branches_through_the_click() {
+        use crate::view::panels::simulate::geometry::{Drawing, wire_ends, wire_path};
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let mut wires = Vec::new();
+        let trunk = connect(&list, &mut wires, (0, "4"), (d, "2")).expect("trunk");
+        let trunk_path = wire_path(
+            &wire_ends(&list, &wires[trunk]).unwrap(),
+            &wires[trunk].bends,
+        );
+        // A point on the trunk's longest segment, snapped as a click would be.
+        let (a, b) = trunk_path
+            .windows(2)
+            .map(|pair| (pair[0], pair[1]))
+            .max_by(|x, y| {
+                let length = |(p, q): &((f64, f64), (f64, f64))| (q.0 - p.0).hypot(q.1 - p.1);
+                length(x).total_cmp(&length(y))
+            })
+            .unwrap();
+        let on_trunk = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+
+        let (start, out) = end(&list, 0, "5");
+        let draft = Drawing::new((0, "5".into()));
+        let route = draft.route_to(start, out, on_trunk);
+        let made = branch_drawn(&list, &mut wires, (0, "5"), trunk, route).expect("a branch");
+
+        let branch = &wires[made];
+        let names_trunk_pin = branch.to == wires[trunk].from || branch.to == wires[trunk].to;
+        assert!(
+            names_trunk_pin,
+            "the branch names one of the trunk's own pins"
+        );
+        let path = wire_path(&wire_ends(&list, branch).unwrap(), &branch.bends);
+        assert!(
+            path.windows(2).any(|pair| {
+                let (p, q) = (pair[0], pair[1]);
+                let on_x = (p.0 - q.0).abs() < 0.01 && (on_trunk.0 - p.0).abs() < 0.01;
+                let on_y = (p.1 - q.1).abs() < 0.01 && (on_trunk.1 - p.1).abs() < 0.01;
+                let within = |v: f64, m: f64, n: f64| v >= m.min(n) - 0.01 && v <= m.max(n) + 0.01;
+                (on_x && within(on_trunk.1, p.1, q.1)) || (on_y && within(on_trunk.0, p.0, q.0))
+            }),
+            "the branch passes through the point that was clicked: {path:?}"
+        );
+    }
+}

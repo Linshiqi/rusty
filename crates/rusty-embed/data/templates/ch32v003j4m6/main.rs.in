@@ -1,0 +1,62 @@
+//! An LED that breathes: TIM1 drives PC4 with PWM, and the duty rises and
+//! falls a step every 10 ms. Hold the button on PC1 and it stays at full.
+//!
+//! Press Run and watch the LED on the board beside this file: it is as
+//! bright as the current through it. Change the step, the period or the
+//! pin and run it again.
+
+#![no_std]
+#![no_main]
+
+use hal::delay::Delay;
+use hal::gpio::{Input, Pull};
+use hal::time::Hertz;
+use hal::timer::low_level::CountingMode;
+use hal::timer::simple_pwm::{PwmPin, SimplePwm};
+use {ch32_hal as hal, panic_halt as _};
+
+#[qingke_rt::entry]
+fn main() -> ! {
+    hal::debug::SDIPrint::enable();
+    let p = hal::init(Default::default());
+
+    // PC4 is TIM1's channel 4: the duty is how bright the LED is.
+    let led = PwmPin::new_ch4::<0>(p.PC4);
+    let mut pwm = SimplePwm::new(
+        p.TIM1,
+        None,
+        None,
+        None,
+        Some(led),
+        Hertz::khz(1),
+        CountingMode::default(),
+    );
+    let channel = hal::timer::Channel::Ch4;
+    let full = pwm.get_max_duty();
+    pwm.enable(channel);
+
+    // The button joins PC1 to ground; the pull-up holds it high otherwise.
+    let button = Input::new(p.PC1, Pull::Up);
+
+    // Printed once: SDI print waits for a debugger to take each line, and a
+    // board running with no WCH-LinkE attached would wait for ever.
+    hal::println!("breathing on PC4, {} steps of duty", full);
+
+    let mut level: u32 = 0;
+    let mut rising = true;
+    loop {
+        if button.is_low() {
+            pwm.set_duty(channel, full);
+        } else {
+            pwm.set_duty(channel, full * level / 100);
+        }
+        if rising {
+            level += 1;
+            rising = level < 100;
+        } else {
+            level -= 1;
+            rising = level == 0;
+        }
+        Delay.delay_ms(10);
+    }
+}

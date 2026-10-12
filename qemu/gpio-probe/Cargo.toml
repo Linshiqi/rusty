@@ -1,0 +1,25 @@
+# `[workspace]` on its own detaches this from rusty's workspace, exactly as
+# the examples do — cargo otherwise refuses to build under a workspace root
+# it is not a member of.
+[workspace]
+
+[package]
+edition = "2024"
+name    = "gpio-probe"
+version = "0.1.0"
+
+[[bin]]
+name = "gpio-probe"
+path = "./src/main.rs"
+
+[dependencies]
+esp-hal                = { version = "~1.1.0", features = ["esp32c3", "unstable"] }
+esp-println            = { version = "0.15", features = ["esp32c3"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c3"] }
+critical-section       = "1.2.0"
+
+[profile.release]
+codegen-units = 1
+debug         = 2
+lto           = "fat"
+opt-level     = "s"

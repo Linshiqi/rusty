@@ -1,0 +1,82 @@
+[package]
+name = "rusty-embed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The chip catalogue and the wire types are rendered by the frontend, so the
+# unconditional half of this crate must compile to wasm32.
+serde = { version = "1.0.229", features = ["derive"] }
+
+toml = { version = "1.1.4", optional = true }
+# In-process downloads for tool installs: rustls instead of the OS TLS —
+# Windows schannel aborts on some CDNs — and a mirror can be tried in turn.
+ureq = { version = "3.4.0", optional = true, features = ["socks-proxy"] }
+# Two fields out of GitHub's release answer. Already in the tree via the
+# frontend and the CLI, so this costs nothing a build did not already pay.
+serde_json = { version = "1.0.151", optional = true }
+# SVD is XML. Already in the tree via tauri, so this adds no crate to the
+# build — and hand-rolling an XML reader for vendor files is how a register
+# view ends up wrong about the one chip nobody tested.
+quick-xml = { version = "0.41.0", optional = true }
+thiserror = { version = "2.0.20", optional = true }
+object = { version = "0.40.0", optional = true }
+rustc-demangle = { version = "0.1.28", optional = true }
+# The DWARF a firmware image carries, read for which C or C++ file each
+# address was compiled from: a symbol C wrote demangles to nothing, and the
+# memory report would otherwise call all of it unattributed.
+gimli = { version = "0.34.0", optional = true, default-features = false, features = ["read", "std"] }
+# `libudev` is what supplies USB vendor/product ids on Linux, which is how a
+# dev board is told apart from a modem. It costs a system library at build
+# time; the default feature set keeps it, and a packager who cannot have it can
+# turn it off and lose only the board-name guess.
+serialport = { version = "4.9.0", optional = true }
+# One rule for "a repository with no commits", shared with the Git panel —
+# the wizard removes such a `.git` after esp-generate, and the panel offers
+# to for a project generated before it did.
+rusty-git = { path = "../rusty-git", optional = true }
+# The CH32V003, emulated in-process: nobody's QEMU models a WCH part, and
+# this one is small enough that a machine of its own costs less than one.
+rusty-mcu = { path = "../rusty-mcu", optional = true }
+
+# Finding Visual Studio's `link.exe` the way rustc does, so the Toolchain
+# panel cannot call a linker missing that rustc would use. Already in the
+# tree through a dozen build scripts.
+[target.'cfg(windows)'.dependencies]
+cc = { version = "1.4", optional = true }
+
+# build.rs reads data/templates/*/template.toml to compile the templates in.
+[build-dependencies]
+toml = "1.1.4"
+
+[features]
+default = ["backend"]
+backend = [
+    "dep:toml",
+    "dep:ureq", "dep:thiserror", "dep:serde_json", "dep:quick-xml",
+    "dep:object",
+    "dep:rustc-demangle",
+    "dep:gimli",
+    "dep:serialport",
+    "dep:rusty-git",
+    "dep:rusty-mcu",
+    "dep:cc",
+]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# The writer of the drawing protocol, so a test can hold `draw`'s reader to
+# what the crate actually writes rather than to a copy of its format.
+rusty-draw = { path = "../rusty-draw" }
+object = { version = "0.40.0", features = ["write"] }
+tempfile = "3.27.0"
+# A socket bound before it connects, which std cannot make: how a test makes
+# the connection that meets itself (`simulate::connect_local`). Already in
+# the lock through reqwest.
+socket2 = "0.6.5"

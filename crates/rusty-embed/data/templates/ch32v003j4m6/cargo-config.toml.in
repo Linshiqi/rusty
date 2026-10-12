@@ -1,0 +1,12 @@
+[build]
+# ch32-hal's description of the CH32V003's core: RV32EC, which no target
+# rustup ships matches. cargo builds `core` for it (`build-std` below).
+target = "riscv32ec-unknown-none-elf.json"
+
+[target.'cfg(all(target_arch = "riscv32", target_os = "none"))']
+# Flash through a WCH-LinkE and watch SDI print, as ch32-hal's examples do.
+runner = "wlink -v flash --enable-sdi-print --watch-serial"
+
+[unstable]
+build-std = ["core"]
+json-target-spec = true

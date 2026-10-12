@@ -1,0 +1,417 @@
+//! Where rust-analyzer is, and how it is started.
+//!
+//! Two pieces of embedded-specific knowledge live here, because getting
+//! either wrong looks like "rust-analyzer is broken" rather than like a
+//! setting:
+//!
+//! - The `rust-analyzer` on PATH is usually rustup's proxy, which dispatches
+//!   by the project's pinned toolchain — and an ESP project pins `esp`, which
+//!   has no rust-analyzer component, so the proxy fails *precisely for the
+//!   projects this workbench serves*. The stable toolchain's real binary is
+//!   resolved first instead; it analyses any toolchain's project fine, and
+//!   reads the pinned toolchain's own sysroot for the target's `core`.
+//! - A workspace that excludes its firmware crate gets no IDE services there
+//!   unless the excluded manifest is named to the server. [`linked_projects`]
+//!   reads `workspace.exclude` for exactly that.
+
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+
+/// Where rust-analyzer actually is.
+///
+/// The bare name on PATH is rustup's proxy, which dispatches by the pinned
+/// toolchain — and `rust-toolchain.toml` pinning `esp` (every Xtensa project)
+/// makes the proxy fail with "unknown binary in toolchain 'esp'". So: stable's
+/// real binary first, the active toolchain's second, PATH last.
+pub fn find_rust_analyzer(named: Option<&Path>) -> Option<PathBuf> {
+    // A binary the user named wins over every rung below, because the rungs
+    // answer "which one is installed" and this answers "which one I want
+    // here" — the copy a VS Code install already carries, or a build being
+    // tried out. It is not an escape from the `--lockfile-path` failure and
+    // must not be offered as one: every rust-analyzer since 1.83 carries
+    // that flag, so the first one that does not is from October 2024. The
+    // answer is a newer Xtensa toolchain (`toolchain::report` raises
+    // `xtensa-analyzer-blind` with the command), which keeps the analyzer
+    // current as well.
+    let asked = named
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("RUSTY_RUST_ANALYZER").map(PathBuf::from));
+    if let Some(path) = asked {
+        // Checked like any other candidate: a path that is not a
+        // rust-analyzer is a typo, and falling through to the ladder is
+        // kinder than spawning something that answers nothing.
+        if path.is_file() && answers_as_rust_analyzer(&path) {
+            return Some(path);
+        }
+    }
+    for toolchain in [Some("stable"), None] {
+        let mut command = Command::new("rustup");
+        command.arg("which");
+        if let Some(toolchain) = toolchain {
+            command.args(["--toolchain", toolchain]);
+        }
+        command.arg("rust-analyzer");
+        no_console_window(&mut command);
+        if let Ok(out) = command.output()
+            && out.status.success()
+        {
+            let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+            if path.is_file() && answers_as_rust_analyzer(&path) {
+                return Some(path);
+            }
+        }
+    }
+
+    // No rustup: take PATH literally — but not on faith. The file found there
+    // is usually rustup's own proxy, which exists on every machine with
+    // rustup whether or not the component does; with it missing, the proxy
+    // starts, prints an error and exits, and a client that trusted the file
+    // spawned it, lost it, and reported "spawn rust-analyzer" failed. That
+    // was the CI runner: no component, a proxy on PATH, and a test that was
+    // written to skip without rust-analyzer running instead.
+    let path = std::env::var_os("PATH")?;
+    let name = if cfg!(windows) {
+        "rust-analyzer.exe"
+    } else {
+        "rust-analyzer"
+    };
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file() && answers_as_rust_analyzer(candidate))
+}
+
+/// Whether the file is rust-analyzer itself: it answers `--version` with its
+/// own name. rustup's proxy for a missing component answers with an error
+/// and a non-zero exit; a stale or foreign binary with neither.
+fn answers_as_rust_analyzer(candidate: &Path) -> bool {
+    let mut command = Command::new(candidate);
+    command.arg("--version");
+    command.env_remove("RUSTUP_TOOLCHAIN");
+    no_console_window(&mut command);
+    command.output().is_ok_and(|out| {
+        out.status.success() && is_rust_analyzer_version(&String::from_utf8_lossy(&out.stdout))
+    })
+}
+
+/// What `rust-analyzer --version` prints begins with the name; what the
+/// rustup proxy prints for a missing component does not (and goes to stderr).
+fn is_rust_analyzer_version(stdout: &str) -> bool {
+    stdout.trim_start().starts_with("rust-analyzer")
+}
+
+/// clangd, for a project's C and C++: one the caller names (the
+/// `RUSTY_CLANGD` variable, or a path), then the one on PATH, then LLVM's
+/// default install — each taken only when `--version` answers as clangd,
+/// since a file of that name is not proof of a server.
+pub fn find_clangd(named: Option<&Path>) -> Option<PathBuf> {
+    let asked = named
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("RUSTY_CLANGD").map(PathBuf::from));
+    let exe = if cfg!(windows) {
+        "clangd.exe"
+    } else {
+        "clangd"
+    };
+    let on_path = std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(exe))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let installed = [
+        PathBuf::from("C:/Program Files/LLVM/bin/clangd.exe"),
+        PathBuf::from("/usr/bin/clangd"),
+        PathBuf::from("/opt/homebrew/opt/llvm/bin/clangd"),
+        PathBuf::from("/usr/local/opt/llvm/bin/clangd"),
+    ];
+    asked
+        .into_iter()
+        .chain(on_path)
+        .chain(installed)
+        .find(|candidate| candidate.is_file() && answers_as_clangd(candidate))
+}
+
+fn answers_as_clangd(candidate: &Path) -> bool {
+    let mut command = Command::new(candidate);
+    command.arg("--version");
+    no_console_window(&mut command);
+    command.output().is_ok_and(|out| {
+        out.status.success()
+            && String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim_start().starts_with("clangd version"))
+    })
+}
+
+/// clangd's command line for a project: where `compile_commands.json` is,
+/// which cross compilers it may ask for their headers, an index built in
+/// the background, and no `#include` added behind somebody's back when a
+/// completion is accepted.
+pub(crate) fn clangd_args(compile_commands: Option<&Path>, query_driver: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "--background-index".to_string(),
+        "--header-insertion=never".to_string(),
+        "--log=error".to_string(),
+    ];
+    if let Some(dir) = compile_commands {
+        args.push(format!("--compile-commands-dir={}", dir.display()));
+    }
+    if !query_driver.is_empty() {
+        args.push(format!("--query-driver={}", query_driver.join(",")));
+    }
+    args
+}
+
+/// The server process, ready to spawn: stdio piped, and the environment as
+/// the project would want it.
+pub(crate) fn command_for(binary: &Path, root: &Path) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        // rust-analyzer narrates progress on stderr. Piped-but-undrained
+        // would fill the pipe and deadlock the server mid-index, so it is
+        // discarded — except when someone is diagnosing "no diagnostics",
+        // which is exactly when the server's own complaints are the answer.
+        .stderr(if std::env::var_os("RUSTY_LSP_LOG").is_some() {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        });
+    // The rustup shim exports this for rusty's own build, and rust-analyzer
+    // has no business inheriting it: the server runs `cargo metadata` in the
+    // project, and rustup lets the variable outrank `rust-toolchain.toml`,
+    // so an esp-pinned project would be read with stable — the same leak
+    // that made a spawned cargo fail with "can't find crate for `core`".
+    command.env_remove("RUSTUP_TOOLCHAIN");
+    // `CARGO` is the same leak in another spelling: a rusty started by
+    // `cargo run` carries one naming the toolchain that *built rusty*, so a
+    // development build would hand the server stable's cargo for an
+    // esp-pinned project. It only decides anything where rust-analyzer finds
+    // no sysroot — with one it prefers rustup's proxy, measured — but an
+    // inherited value that is right by accident is not a reason to keep it.
+    command.env_remove("CARGO");
+    no_console_window(&mut command);
+    command
+}
+
+/// Manifests rust-analyzer would otherwise never see.
+///
+/// The layout this exists for is the standard embedded one: a workspace whose
+/// host-testable crates are members, and a firmware crate `exclude`d because
+/// it needs a bare-metal target and its own toolchain — `cargo test` at the
+/// root would otherwise try to build `no_std` firmware for the host.
+///
+/// rust-analyzer loads *one* workspace from the root, so every file under the
+/// excluded directory comes back "not included in any crates, so
+/// rust-analyzer can't offer IDE services" — no completion, no diagnostics,
+/// no navigation, in exactly the half of the repository this workbench is
+/// for. `linkedProjects` is the server's own answer: name the extra manifests
+/// and it loads them alongside.
+///
+/// Read from `workspace.exclude` rather than guessed by walking: a directory
+/// the workspace deliberately named is a fact, and linking every `Cargo.toml`
+/// under the root would pull in vendored copies and fixtures.
+/// The environment rust-analyzer's cargo needs to load a project whose
+/// target is a JSON description: `CARGO_UNSTABLE_JSON_TARGET_SPEC`, cargo's
+/// spelling of the `[unstable] json-target-spec` key such a project sets.
+///
+/// The project's config says it, and cargo reads it — in the project. But
+/// rust-analyzer also runs `cargo metadata` for the standard library's own
+/// workspace, from the sysroot's directory, where the project's config does
+/// not reach; nightly cargo then refuses the `.json` target outright, and
+/// the server loads without the sysroot: "partly loaded", and `core::` and
+/// `alloc::` answer nothing. Measured on the CH32V003 playground. Only for a
+/// project that asks for the key — the root's or a linked crate's — because
+/// a stable cargo given unstable configuration is a warning at best.
+pub(crate) fn cargo_env(root: &Path) -> Vec<(String, String)> {
+    let mut dirs = vec![root.to_path_buf()];
+    dirs.extend(
+        linked_projects(root)
+            .iter()
+            .filter_map(|manifest| Path::new(manifest).parent().map(Path::to_path_buf)),
+    );
+    let wants_json_targets = dirs.iter().any(|dir| {
+        [".cargo/config.toml", ".cargo/config"].iter().any(|name| {
+            std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|text| text.parse::<toml::Table>().ok())
+                .and_then(|config| config.get("unstable")?.get("json-target-spec")?.as_bool())
+                .unwrap_or(false)
+        })
+    });
+    if wants_json_targets {
+        vec![(
+            "CARGO_UNSTABLE_JSON_TARGET_SPEC".to_string(),
+            "true".to_string(),
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(crate) fn linked_projects(root: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    // `Table`, not `Value`: in toml 1.x `Value`'s `FromStr` parses a single
+    // TOML *value*, so a whole manifest fails at the first table header with
+    // an error that reads as a broken `Cargo.toml`.
+    let Ok(manifest) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(excluded) = manifest
+        .get("workspace")
+        .and_then(|w| w.get("exclude"))
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    excluded
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .map(|name| root.join(name).join("Cargo.toml"))
+        .filter(|manifest| manifest.is_file())
+        .map(|manifest| manifest.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Same reason as everywhere else a process is spawned on Windows: without
+/// this, every rust-analyzer start flashes a console window over the app.
+pub(crate) fn no_console_window(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The real binary names itself; the proxy's complaint, and an empty
+    /// answer, are not it.
+    #[test]
+    fn only_a_binary_that_names_itself_is_rust_analyzer() {
+        assert!(is_rust_analyzer_version(
+            "rust-analyzer 1.98.0 (88d9e12ae 2026-08-18)\n"
+        ));
+        assert!(!is_rust_analyzer_version(""));
+        assert!(!is_rust_analyzer_version(
+            "error: 'rust-analyzer' is not installed for the toolchain 'stable-x86_64-pc-windows-msvc'\n"
+        ));
+    }
+
+    /// A project whose config turns on JSON targets passes the key on to
+    /// rust-analyzer's cargo — found in the root or in a linked firmware
+    /// crate — and one that does not passes nothing.
+    #[test]
+    fn json_targets_reach_rust_analyzer_s_cargo_only_when_asked_for() {
+        let plain = tempfile::tempdir().expect("tempdir");
+        std::fs::write(plain.path().join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        assert!(cargo_env(plain.path()).is_empty());
+
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let root = workspace.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\nexclude = [\"firmware\"]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("firmware/.cargo")).unwrap();
+        std::fs::write(
+            root.join("firmware/Cargo.toml"),
+            "[package]\nname = \"f\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("firmware/.cargo/config.toml"),
+            "[unstable]\nbuild-std = [\"core\"]\njson-target-spec = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cargo_env(root),
+            [(
+                "CARGO_UNSTABLE_JSON_TARGET_SPEC".to_string(),
+                "true".to_string()
+            )]
+        );
+    }
+
+    /// The layout this exists for: a workspace whose firmware is excluded
+    /// because it cross-compiles. Without the link, every file under it comes
+    /// back "not included in any crates" and the editor is inert in exactly
+    /// the half of the repository this workbench is for.
+    #[test]
+    fn an_excluded_firmware_crate_is_linked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"core\"]\nexclude = [\"firmware\"]\n",
+        )
+        .expect("root manifest");
+        std::fs::create_dir(root.join("firmware")).expect("mkdir");
+        std::fs::write(
+            root.join("firmware/Cargo.toml"),
+            "[package]\nname = \"fw\"\n",
+        )
+        .expect("firmware manifest");
+
+        let linked = linked_projects(root);
+        assert_eq!(linked.len(), 1, "{linked:?}");
+        assert!(linked[0].ends_with("Cargo.toml"));
+        assert!(linked[0].contains("firmware"));
+    }
+
+    /// An excluded directory that is not a crate — a fixture tree, a vendored
+    /// copy — must not be handed to rust-analyzer as a project. It would fail
+    /// to load and the failure reads as the server being broken.
+    #[test]
+    fn an_excluded_directory_with_no_manifest_is_not_linked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nexclude = [\"fixtures\"]\n",
+        )
+        .expect("root manifest");
+        std::fs::create_dir(root.join("fixtures")).expect("mkdir");
+        assert!(linked_projects(root).is_empty());
+    }
+
+    /// An ordinary project excludes nothing, and must be left entirely alone:
+    /// naming `linkedProjects` at all changes how rust-analyzer discovers the
+    /// workspace, so the option has to stay absent rather than empty.
+    #[test]
+    fn a_plain_workspace_links_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"solo\"\n").expect("manifest");
+        assert!(linked_projects(root).is_empty());
+        assert!(linked_projects(Path::new("/nowhere-at-all")).is_empty());
+    }
+
+    /// `cargo tauri dev` runs under the rustup shim, which exports the
+    /// toolchain it picked for *rusty's* build. Passed on, rust-analyzer's
+    /// own `cargo metadata` would read an esp-pinned project with stable.
+    #[test]
+    fn the_shims_toolchain_does_not_leak_into_the_server() {
+        let command = command_for(Path::new("rust-analyzer"), Path::new("."));
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == "RUSTUP_TOOLCHAIN" && value.is_none()),
+            "RUSTUP_TOOLCHAIN must be removed, not inherited: {:?}",
+            command.get_envs().collect::<Vec<_>>(),
+        );
+    }
+}

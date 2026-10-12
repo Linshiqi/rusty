@@ -1,0 +1,48 @@
+[package]
+name = "rusty-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rusty-ai = { path = "../rusty-ai" }
+rusty-core = { path = "../rusty-core" }
+rusty-edit = { path = "../rusty-edit" }
+rusty-embed = { path = "../rusty-embed" }
+rusty-ipc = { path = "../rusty-ipc" }
+rusty-lsp = { path = "../rusty-lsp" }
+rusty-dbg = { path = "../rusty-dbg" }
+rusty-term = { path = "../rusty-term" }
+rusty-git = { path = "../rusty-git" }
+# An image in a diff crosses the wire as a `data:` URL; already in the tree.
+base64 = "0.22"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.7.2"
+# In-app updates: the check against latest.json, the signed download and
+# the install. Its endpoint and public key are `plugins.updater` in
+# tauri.conf.json; the private half lives in the repository's secrets.
+tauri-plugin-updater = "2.10"
+# A proxy URL for the updater's client, parsed once. Already in the tree.
+url = "2"
+# `sync` for the slots in `AppState`, `time` for the assistant's overall
+# budget — both were reaching this crate through other dependencies' feature
+# unification, which is not a way to depend on something.
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# The assistant's question is cancellable: a token in `AppState`, raced against
+# the agent loop. Already in the tree through reqwest.
+tokio-util = "0.7.19"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# A directory to watch, for the watcher-slot test.
+tempfile = "3.27.0"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }

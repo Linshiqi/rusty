@@ -1,0 +1,522 @@
+@import "tailwindcss";
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Design tokens.
+
+   Structure borrowed from macOS: a sidebar on its own material, a unified
+   toolbar, hairline separators rather than drawn borders, and a type scale with
+   a small number of steps. Body text is 13px because that is the macOS UI size
+   — denser than the web default, which suits a tool read at a glance.
+
+   Colour is rusty's own: iron oxide for the accent, copper patina for
+   "healthy". Both are what the name already implies, and neutrals are biased
+   warm (hue ~30) so grey reads as chosen rather than inherited. Apple's
+   discipline applies to how much of it gets used: greys carry the interface and
+   the accent marks one thing at a time.
+
+   Deliberately absent: backdrop-filter, window transparency, large animated
+   shadows. Those are unreliable on WebKitGTK, which is the Linux WebView, so
+   depth here comes from surface steps and hairlines instead. Linear and Raycast
+   read as modern without any of them.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces, back to front. */
+  --window: #ecebe8;
+  --sidebar: #f2f0ed;
+  --content: #ffffff;
+  --raised: #f7f6f4;
+  --sunken: #e8e6e2;
+
+  /* Hairlines. Alpha rather than a solid grey so they sit correctly on any
+     surface above. */
+  --line: rgb(0 0 0 / 0.11);
+  --line-strong: rgb(0 0 0 / 0.18);
+
+  --label: #1c1a17;
+  --label-2: rgb(28 26 23 / 0.62);
+  --label-3: rgb(28 26 23 / 0.42);
+  --label-4: rgb(28 26 23 / 0.26);
+
+  --rust: #bd4a1f;
+  --rust-fill: rgb(189 74 31 / 0.12);
+  --patina: #2b7466;
+  --patina-fill: rgb(43 116 102 / 0.12);
+  --amber: #96660a;
+  --amber-fill: rgb(150 102 10 / 0.13);
+  --crimson: #bf2f47;
+  --crimson-fill: rgb(191 47 71 / 0.11);
+  --slate: #3d6a93;
+  --slate-fill: rgb(61 106 147 / 0.11);
+
+  /* Selection in a sidebar is a filled rounded rect on macOS, not a rule. */
+  --selection: rgb(189 74 31 / 0.13);
+  --vim-block: rgb(189 74 31 / 0.42);
+  /* Text selected in the editor, behind the text — VS Code's, since a
+     selection is the one colour everybody already knows. */
+  --text-selection: #add6ff;
+  /* An inlay hint's shade: translucent, so a selection shows through it. */
+  --inlay: rgb(0 0 0 / 0.05);
+  --focus: rgb(189 74 31 / 0.45);
+
+  /* The 16 ANSI colours the terminal paints with. Themed rather than fixed:
+     a program that asks for "red" means the theme's red, and a palette baked
+     for a dark background is unreadable on a light one. Muted against the
+     canonical values, which were chosen for CRTs. */
+  --term-0: #3b3733;
+  --term-1: #b3341f;
+  --term-2: #3f7a34;
+  --term-3: #8a6510;
+  --term-4: #2f5f96;
+  --term-5: #8a4a8f;
+  --term-6: #217a70;
+  --term-7: #5a544d;
+  --term-8: #7d766d;
+  --term-9: #d3512f;
+  --term-10: #4f9a41;
+  --term-11: #b0821a;
+  --term-12: #3f7ac0;
+  --term-13: #a95fae;
+  --term-14: #2c9a8d;
+  --term-15: #1c1a17;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window: #191715;
+    --sidebar: #1f1d1a;
+    --content: #232020;
+    --raised: #2a2724;
+    --sunken: #151312;
+
+    --line: rgb(255 255 255 / 0.10);
+    --line-strong: rgb(255 255 255 / 0.17);
+
+    --label: #f0ebe5;
+    --label-2: rgb(240 235 229 / 0.64);
+    --label-3: rgb(240 235 229 / 0.44);
+    --label-4: rgb(240 235 229 / 0.26);
+
+    --rust: #e4703f;
+    --rust-fill: rgb(228 112 63 / 0.16);
+    --patina: #4faa9a;
+    --patina-fill: rgb(79 170 154 / 0.15);
+    --amber: #dda33c;
+    --amber-fill: rgb(221 163 60 / 0.15);
+    --crimson: #ef5570;
+    --crimson-fill: rgb(239 85 112 / 0.15);
+    --slate: #6ba3d6;
+    --slate-fill: rgb(107 163 214 / 0.15);
+
+    --selection: rgb(228 112 63 / 0.18);
+    --vim-block: rgb(228 112 63 / 0.5);
+    --text-selection: #264f78;
+    --inlay: rgb(255 255 255 / 0.07);
+    --focus: rgb(228 112 63 / 0.5);
+
+    /* The ANSI-and-syntax palette must flip with the surfaces. This block
+       once left it out, so a system-dark desktop rendered the light theme's
+       ink colours on a dark background — every token a mud tone, which is
+       how "the code is hard to read" reached the bug tracker. */
+    --term-0: #2a2724;
+    --term-1: #ef6b56;
+    --term-2: #92cf7b;
+    --term-3: #e2bb52;
+    --term-4: #7cb2e3;
+    --term-5: #d29ade;
+    --term-6: #5accbd;
+    --term-7: #b8b0a6;
+    --term-8: #6d665e;
+    --term-9: #ff8b74;
+    --term-10: #a2dd89;
+    --term-11: #f5cd6e;
+    --term-12: #9bc9f2;
+    --term-13: #dda6e2;
+    --term-14: #74d8cb;
+    --term-15: #f5f1eb;
+  }
+}
+
+/* An explicit choice overrides the system one. The attribute is set on <html>
+   by `theme.rs`; absent it, the media query above decides. Both directions have
+   to be spelled out — a user on a dark desktop who picks light needs the light
+   values to win, not merely to be defaults. */
+:root[data-theme="light"] {
+  --window: #ecebe8;
+  --sidebar: #f2f0ed;
+  --content: #ffffff;
+  --raised: #f7f6f4;
+  --sunken: #e8e6e2;
+  --line: rgb(0 0 0 / 0.11);
+  --line-strong: rgb(0 0 0 / 0.18);
+  --label: #1c1a17;
+  --label-2: rgb(28 26 23 / 0.62);
+  --label-3: rgb(28 26 23 / 0.42);
+  --label-4: rgb(28 26 23 / 0.26);
+  --rust: #bd4a1f;
+  --rust-fill: rgb(189 74 31 / 0.12);
+  --patina: #2b7466;
+  --patina-fill: rgb(43 116 102 / 0.12);
+  --amber: #96660a;
+  --amber-fill: rgb(150 102 10 / 0.13);
+  --crimson: #bf2f47;
+  --crimson-fill: rgb(191 47 71 / 0.11);
+  --slate: #3d6a93;
+  --slate-fill: rgb(61 106 147 / 0.11);
+  --selection: rgb(189 74 31 / 0.13);
+  --vim-block: rgb(189 74 31 / 0.42);
+  /* Text selected in the editor, behind the text — VS Code's, since a
+     selection is the one colour everybody already knows. */
+  --text-selection: #add6ff;
+  /* An inlay hint's shade: translucent, so a selection shows through it. */
+  --inlay: rgb(0 0 0 / 0.05);
+  --focus: rgb(189 74 31 / 0.45);
+
+  /* The mirror of the bug the dark media block had: choosing Light on a
+     dark desktop kept the media block's bright pastels for every token this
+     block did not name — pale ink on white. A theme block carries the whole
+     palette or it is not a theme. */
+  --term-0: #3b3733;
+  --term-1: #b3341f;
+  --term-2: #3f7a34;
+  --term-3: #8a6510;
+  --term-4: #2f5f96;
+  --term-5: #8a4a8f;
+  --term-6: #217a70;
+  --term-7: #5a544d;
+  --term-8: #7d766d;
+  --term-9: #d3512f;
+  --term-10: #4f9a41;
+  --term-11: #b0821a;
+  --term-12: #3f7ac0;
+  --term-13: #a95fae;
+  --term-14: #2c9a8d;
+  --term-15: #1c1a17;
+}
+
+:root[data-theme="dark"] {
+  --window: #191715;
+  --sidebar: #1f1d1a;
+  --content: #232020;
+  --raised: #2a2724;
+  --sunken: #151312;
+  --line: rgb(255 255 255 / 0.10);
+  --line-strong: rgb(255 255 255 / 0.17);
+  --label: #f0ebe5;
+  --label-2: rgb(240 235 229 / 0.64);
+  --label-3: rgb(240 235 229 / 0.44);
+  --label-4: rgb(240 235 229 / 0.26);
+  --rust: #e4703f;
+  --rust-fill: rgb(228 112 63 / 0.16);
+  --patina: #4faa9a;
+  --patina-fill: rgb(79 170 154 / 0.15);
+  --amber: #dda33c;
+  --amber-fill: rgb(221 163 60 / 0.15);
+  --crimson: #ef5570;
+  --crimson-fill: rgb(239 85 112 / 0.15);
+  --slate: #6ba3d6;
+  --slate-fill: rgb(107 163 214 / 0.15);
+  --selection: rgb(228 112 63 / 0.18);
+  --vim-block: rgb(228 112 63 / 0.5);
+  --text-selection: #264f78;
+  --inlay: rgb(255 255 255 / 0.07);
+  --focus: rgb(228 112 63 / 0.5);
+
+  --term-0: #2a2724;
+  --term-1: #ef6b56;
+  --term-2: #92cf7b;
+  --term-3: #e2bb52;
+  --term-4: #7cb2e3;
+  --term-5: #d29ade;
+  --term-6: #5accbd;
+  --term-7: #b8b0a6;
+  --term-8: #6d665e;
+  --term-9: #ff8b74;
+  --term-10: #a2dd89;
+  --term-11: #f5cd6e;
+  --term-12: #9bc9f2;
+  --term-13: #dda6e2;
+  --term-14: #74d8cb;
+  --term-15: #f5f1eb;
+}
+
+@theme inline {
+  --color-window: var(--window);
+  --color-sidebar: var(--sidebar);
+  --color-content: var(--content);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-label: var(--label);
+  --color-label-2: var(--label-2);
+  --color-label-3: var(--label-3);
+  --color-label-4: var(--label-4);
+
+  --color-rust: var(--rust);
+  --color-rust-fill: var(--rust-fill);
+  --color-patina: var(--patina);
+  --color-patina-fill: var(--patina-fill);
+  --color-amber: var(--amber);
+  --color-amber-fill: var(--amber-fill);
+  --color-crimson: var(--crimson);
+  --color-crimson-fill: var(--crimson-fill);
+  --color-slate: var(--slate);
+  --color-slate-fill: var(--slate-fill);
+  --color-selection: var(--selection);
+  --color-text-selection: var(--text-selection);
+  --color-inlay: var(--inlay);
+
+  /* System faces: SF Pro on macOS, Segoe UI Variable on Windows, whatever the
+     desktop uses on Linux — each platform looks native without shipping a font.
+     CJK fallbacks are listed because the UI is bilingual. */
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+
+  /* Apple's scale, trimmed to the steps this app actually needs. */
+  --text-title: 1.625rem; /* 26px — panel headline */
+  --text-title-line-height: 1.2;
+  --text-heading: 1.0625rem; /* 17px — section */
+  --text-heading-line-height: 1.35;
+  --text-strong: 0.9375rem; /* 15px — emphasised body */
+  --text-strong-line-height: 1.4;
+  --text-body: 0.8125rem; /* 13px — the macOS UI size */
+  --text-body-line-height: 1.45;
+  --text-callout: 0.75rem; /* 12px */
+  --text-callout-line-height: 1.4;
+  --text-footnote: 0.6875rem; /* 11px */
+  --text-footnote-line-height: 1.35;
+  --text-caption: 0.625rem; /* 10px — uppercase labels */
+  --text-caption-line-height: 1.3;
+
+  /* Apple's radii are larger than the web norm; controls stay tighter than
+     panels so a button never reads as a card. */
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-window: 12px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--window);
+  color: var(--label);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  /* A workbench is a fixed frame with scrolling panes, not a scrolling page. */
+  overflow: hidden;
+  /* Chrome is not text; selecting it is always accidental. Panels opt back in. */
+  user-select: none;
+}
+
+/* Digits in columns must not jitter as they update — the memory panel and the
+   feature matrix both rewrite these live. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A formula in a page is MathML, which the WebView draws itself — Chromium,
+   WebKit and Gecko all do now, so there is no KaTeX to ship or to load. The
+   engine picks the math font (Cambria Math on Windows); only the size is
+   ours, a touch over the prose so sub- and superscripts stay legible. */
+.md-math math {
+  font-size: 1.08em;
+}
+
+/* Apple's focus ring: a soft halo, not a hard outline.
+
+   Inside @layer base so an explicit `outline-none` utility can win. Unlayered,
+   this beat every utility regardless of order — the editor's textarea declared
+   outline-none and still wore the ring, which at full document height renders
+   as a mysterious rust line down the gutter with rounded ends. The caret is
+   the editor's focus indicator; buttons and rows keep the halo. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+    border-radius: var(--radius-control);
+  }
+}
+
+/* Overlay scrollbars, sized like the platform's. */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--label-4);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--label-3);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+/* Where two scrollbars meet: unstyled, it is a white square in the editor's
+   corner whenever a long line brings the second one in. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Syntax colours. Semantic classes rather than inline styles, because the
+   highlighter sends what a run *means* and the theme decides how it looks —
+   the same reason the terminal's indexed colours stay indexed. */
+.tok-keyword { color: var(--term-5); }
+.tok-string { color: var(--term-2); }
+.tok-number { color: var(--term-3); }
+/* One shade brighter than it was: at --label-3 a comment sat close enough to
+   the background that reading it was work, and comments are meant to be read. */
+.tok-comment { color: var(--label-2); font-style: italic; }
+.tok-type { color: var(--term-6); }
+.tok-function { color: var(--term-4); }
+/* The function family's yellow, as VSCode taught — red made every
+   #[attribute] block read as an error. */
+.tok-macro { color: var(--term-11); }
+/* Full brightness, like VSCode: braces and semicolons are the skeleton of the
+   line, and at 64% they made whole blocks read as faded. */
+.tok-punctuation { color: var(--label); }
+/* Semantic tokens only — the lexical pass never produces Variable. The hue
+   matches what VSCode dark+ taught everyone a local means. */
+.tok-variable { color: var(--term-12); }
+/* Semantic only. A shade back: the path prefix is the least important part
+   of the line, and at full brightness it was the loudest. */
+.tok-namespace { color: var(--label-2); }
+
+/* Diagnostic underlines. In the text flow rather than overlaid, so they stay
+   glued to their glyphs whatever width those glyphs are. */
+.diag-error {
+  text-decoration: underline wavy var(--crimson);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.diag-warning {
+  text-decoration: underline wavy var(--amber);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.diag-hint {
+  text-decoration: underline dotted var(--slate);
+  text-underline-offset: 3px;
+}
+/* A name Ctrl is held over, when it has a definition to go to: a link, as
+   VS Code draws it. After the token colours, so its colour wins. */
+.editor-link {
+  color: var(--slate);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Modal editing's block cursor, drawn by the editor (`surface.rs`).
+ *
+ * Not the textarea's caret. It was, through `caret-shape: block`, until the
+ * read-only guard on normal and visual mode actually took effect — and a
+ * browser paints no caret at all in a read-only field, so normal mode lost
+ * its cursor entirely. An element also lands on an empty line and past the
+ * last character, where a selection-based cursor cannot: there is no
+ * character there to select.
+ *
+ * It blinks, which matters more than it sounds: an idle cursor that still
+ * says NORMAL is the mode indicator you look at without meaning to. Two
+ * identical animations, because changing the name is what restarts one: the
+ * editor swaps them on every move, so a cursor that moved shows at once, as a
+ * caret does, instead of arriving mid-blink.
+ *
+ * Shown only while the textarea has focus, as a caret is. Translucent,
+ * because the textarea's glyphs are transparent by design and the visible
+ * text is the `<pre>` underneath — an opaque block would hide the character
+ * it points at.
+ */
+.vim-cursor {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  background: var(--vim-block);
+  animation-duration: 1.06s;
+  animation-timing-function: step-end;
+  animation-iteration-count: infinite;
+}
+textarea:focus ~ .vim-cursor {
+  display: block;
+}
+/* Every cursor's caret, the textarea's own included (`selection.rs`): two
+ * pixels, as VS Code's, and shown only while the textarea has focus, as a
+ * caret is. The textarea's own is hidden (`caret-transparent`), because it is
+ * laid out without the inlay hints the echo draws inside a line and would
+ * stand a hint's width left of the text after one. Two identical blinks, the
+ * vim cursor's trick: the editor swaps them on every move, so a caret that
+ * moved shows at once. */
+.editor-carets {
+  display: none;
+}
+textarea:focus ~ .editor-carets {
+  display: block;
+}
+.editor-caret {
+  position: absolute;
+  width: 2px;
+  pointer-events: none;
+  background: var(--rust);
+  animation-duration: 1.06s;
+  animation-timing-function: step-end;
+  animation-iteration-count: infinite;
+}
+@keyframes caret-blink-a {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes caret-blink-b {
+  50% {
+    opacity: 0;
+  }
+}
+/* The textarea's own selection, hidden for the caret's reason: it is washed
+ * behind the text where the text is instead. */
+.editor-input::selection {
+  background: transparent;
+  color: transparent;
+}
+/* An inlay hint, in its line (`highlight.rs`): quieter than the code, on a
+ * shade of its own. No padding and no margin — its width is its text's,
+ * exactly as `hints.rs` measures it, or everything after it on the line would
+ * sit off its glyph. */
+.inlay-hint {
+  color: var(--label-3);
+  background: var(--inlay);
+  border-radius: 3px;
+}
+@keyframes vim-cursor-a {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes vim-cursor-b {
+  50% {
+    opacity: 0;
+  }
+}

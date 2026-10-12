@@ -1,0 +1,25 @@
+# A workspace with a target of every kind, for the disk scan's yardstick.
+# rustc names an incremental cache after the crate it compiled, and a crate is
+# a *target*, not a package: an example, an integration test, a bench, a
+# binary named apart from its package and a build script each leave caches
+# under a name no package carries. Nothing here is ever compiled by the tests
+# — `cargo metadata` only reads manifests — and nothing comes from a registry,
+# so resolving it needs no network.
+#
+# The shape under test:
+#   - `src/lib.rs` and `src/main.rs` are two targets under one crate name
+#   - `lab-tool`, `demo-run`, `smoke` and `speed` are crates no package names
+#   - `lab-helper` is a path dependency outside the workspace with a build
+#     script of its own, so two packages compile a `build_script_build`
+
+[workspace]
+exclude = ["helper"]
+
+[package]
+name = "target-lab"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+lab-helper = { path = "helper" }

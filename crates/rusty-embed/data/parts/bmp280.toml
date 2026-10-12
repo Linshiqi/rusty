@@ -1,0 +1,60 @@
+# Bosch's barometer.
+#
+# `quirk` is the one thing a file cannot declare and only code can be:
+# Bosch compensates its converter with a polynomial over a calibration blob
+# in the part's own memory, which no `raw = (value - offset) * lsb` is going
+# to be. The channels, the addresses and the identity registers are ordinary
+# declarations; where the readings sit and how they are encoded belongs to
+# `sensor::bosch`, together with the calibration it is meaningless without.
+#
+# A part declared in a project may not name a quirk — a quirk is code, and
+# the reader refuses one by name rather than half-answering for a part.
+
+name = "BMP280"
+# SDO low, then SDO high.
+addresses = [0x76, 0x77]
+quirk = "bmp280"
+
+# The chip id, which every driver refuses on.
+[[fixed]]
+at = 0xd0
+bytes = [0x58]
+
+# STATUS: not measuring, nothing being copied from NVM.
+[[fixed]]
+at = 0xf3
+bytes = [0x00]
+
+[[channel]]
+key = "temp"
+unit = "°C"
+min = -40.0
+max = 85.0
+rest = 24.0
+
+[[channel]]
+key = "pressure"
+unit = "hPa"
+min = 300.0
+max = 1100.0
+rest = 1013.25
+
+# Forced mode is one measurement and then back to sleep. The measurement is
+# always ready here, so the part is asleep again as soon as anybody looks —
+# `11` is normal mode and stays, which is why the field is named rather than
+# the two bits merely masked.
+[[clear]]
+at = 0xf4
+mask = 0x03
+only = [1, 2]
+
+# Soft reset: the control registers return to zero and the reset register
+# reads as zero, as the part's do.
+[[reset]]
+at = 0xe0
+equals = 0xb6
+restores = [
+    { at = 0xe0, bytes = [0x00] },
+    { at = 0xf4, bytes = [0x00] },
+    { at = 0xf5, bytes = [0x00] },
+]

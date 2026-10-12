@@ -1,0 +1,14 @@
+[package]
+name = "rusty-draw"
+description = "Draw vectors, points and frames into rusty's 3-D view, and trace signals into its Signals tab, from Rust code"
+version = "0.1.1"
+edition = "2021"
+
+[features]
+# `Scene` and `Trace`, which print themselves; without it only `SceneOn` and
+# `TraceOn`, which write to whatever `fmt::Write` they are handed — a UART,
+# esp-println's `Printer`.
+default = ["std"]
+std = []
+
+[dependencies]

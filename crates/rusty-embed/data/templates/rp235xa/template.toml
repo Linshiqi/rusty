@@ -1,0 +1,35 @@
+# A Raspberry Pi Pico 2: embassy-rp on the RP2350's Arm cores blinking
+# GPIO25, faster while a button from GPIO15 to ground is held, logging defmt
+# over a debug probe. Built for thumbv8m.main-none-eabihf with stable Rust
+# (the image carries the boot ROM's image definition); not run on a board
+# here. The RP2350B's project is written from it too.
+
+chip = "rp235xa"
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "Cargo.lock.in"
+
+[[file]]
+path = "build.rs"
+from = "build.rs.in"
+
+[[file]]
+path = "rust-toolchain.toml"
+from = "rust-toolchain.toml.in"
+
+[[file]]
+path = ".cargo/config.toml"
+from = "cargo-config.toml.in"
+
+[[file]]
+path = "memory.x"
+from = "memory.x.in"
+
+[[file]]
+path = "src/main.rs"
+from = "main.rs.in"

@@ -1,0 +1,476 @@
+//! Running an external tool and streaming what it says.
+//!
+//! Lived in `flash.rs` until four callers wanted it — flashing, monitoring,
+//! generating a project, and the terminal. None of those is about flashing, and
+//! a module named for one of its callers is a module the next caller has to
+//! justify importing.
+//!
+//! rusty drives other people's tools rather than reimplementing them: espflash,
+//! probe-rs, esp-generate and cargo are what the ecosystem maintains, so a
+//! user's existing knowledge and existing bug reports still apply.
+
+use std::{
+    ffi::OsStr,
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Receiver},
+    },
+    thread,
+};
+
+use crate::{
+    error::{Error, Result},
+    model::{CommandPlan, LogLevel, LogLine, LogStream},
+};
+
+/// A command for one of the tools rusty drives, with the three policies every
+/// spawn in this crate needs already applied.
+///
+/// One place for them because they were three places with three different
+/// subsets: `spawn` had all three, the version probes had only the window flag,
+/// the registry query spelled the flag inline, and `cargo metadata` had none.
+/// Every `cargo` and `rustc` that ran without the flag flashed a console over
+/// the window; every `rustup` that ran with `RUSTUP_TOOLCHAIN` still set
+/// answered for rusty's own toolchain instead of the project's.
+///
+/// - **`RUSTUP_TOOLCHAIN` is removed.** Launched from `cargo tauri dev`, this
+///   process inherits the variable the rustup shim set for *rusty's own* build,
+///   and rustup lets it outrank the project's `rust-toolchain.toml`. A spawned
+///   `cargo build` then compiles an esp-pinned Xtensa project with stable,
+///   which dies with "can't find crate for core"; a spawned `rustup target
+///   list` answers for the wrong toolchain. The project's own pin must decide.
+/// - **No console window** on Windows. Without it every probe blinks a black
+///   rectangle over the UI, and the toolchain panel probes six tools on open.
+/// - **Rusty's tool directories, and espup's, on PATH**, appended. `cc`
+///   invokes the cross compiler *by name*, so a toolchain rusty unpacked into
+///   its own directory is one `cargo build` cannot find however correctly the
+///   panel reports it. And the Xtensa linker espup installs is reachable only
+///   through an environment espup writes for *new* processes (`esp_env.rs`):
+///   rusty, already running when its setup sheet ran espup, never had it, and
+///   the first `cargo build` on a fresh machine died with `linker
+///   xtensa-esp32-elf-gcc not found`. Appended rather than prepended: a
+///   compiler the user put on PATH themselves is the one they meant. (Which
+///   binary *rusty* runs is the other question, and `tools::find` answers it
+///   the other way round — see there.)
+/// - **`LIBCLANG_PATH`** from espup's environment when the user's has none:
+///   bindgen needs it for `esp-idf-sys`, and espup set it for shells that were
+///   not this process.
+pub fn command(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.env_remove("RUSTUP_TOOLCHAIN");
+
+    let esp = crate::esp_env::esp_env();
+    let mut extra = crate::tools::tool_bin_dirs();
+    extra.extend(esp.path_dirs);
+    if let Some(existing) = std::env::var_os("PATH")
+        && let Some(joined) = child_path(&existing, extra)
+    {
+        command.env("PATH", joined);
+    }
+    if std::env::var_os("LIBCLANG_PATH").is_none()
+        && let Some(libclang) = esp.libclang
+    {
+        command.env("LIBCLANG_PATH", libclang);
+    }
+
+    no_console_window(&mut command);
+    command
+}
+
+/// Whether a planned program is git, by its file name: `git`, `git.exe`, or
+/// a path ending in either.
+fn is_git(program: &str) -> bool {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    name.eq_ignore_ascii_case("git") || name.eq_ignore_ascii_case("git.exe")
+}
+
+/// A child's PATH: the parent's, then every directory in `extra` it does not
+/// already carry, in order. Appended, not prepended — see [`command`].
+fn child_path(existing: &OsStr, extra: Vec<PathBuf>) -> Option<std::ffi::OsString> {
+    let mut paths: Vec<PathBuf> = std::env::split_paths(existing).collect();
+    for dir in extra {
+        if !paths.contains(&dir) {
+            paths.push(dir);
+        }
+    }
+    std::env::join_paths(paths).ok()
+}
+
+/// Keep a child process from flashing a console window.
+///
+/// Part of [`command`]; on its own only for the one caller that builds its
+/// `Command` some other way.
+#[cfg(windows)]
+pub(crate) fn no_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+pub(crate) fn no_console_window(_command: &mut Command) {}
+
+/// A running child process — or something that behaves as one.
+///
+/// stdout and stderr are read on their own threads and merged into one ordered
+/// channel: espflash writes progress to one and errors to the other, and a UI
+/// that showed them in separate panes would split the story of a failed flash
+/// down the middle.
+///
+/// A session is its lines, its input, a way to end it and a way to wait for
+/// it, and nothing about a process beyond that: the CH32V003 emulator runs
+/// on a thread of this one (`simulate::mcu`), and every caller that reads a
+/// run's output, types into it and stops it does the same to both.
+pub struct Session {
+    lines: Receiver<LogLine>,
+    input: Input,
+    stopper: Stopper,
+    waiter: Arc<dyn Fn() -> Option<i32> + Send + Sync>,
+}
+
+impl Session {
+    /// The next line, or `None` once the process has exited and both streams
+    /// are drained.
+    pub fn recv(&self) -> Option<LogLine> {
+        self.lines.recv().ok()
+    }
+
+    /// A handle that can write to the child's stdin from another thread.
+    pub fn input(&self) -> Input {
+        self.input.clone()
+    }
+
+    /// A handle that can end this session from another thread.
+    ///
+    /// Separate from the session itself because the reader loop blocks on
+    /// `recv`: whoever wants to stop a monitor cannot be the thread that is
+    /// sitting inside it.
+    pub fn stopper(&self) -> Stopper {
+        self.stopper.clone()
+    }
+
+    /// Wait for the process and return its exit code.
+    ///
+    /// Call after `recv` returns `None`, which is when both streams are drained.
+    pub fn wait(&self) -> Option<i32> {
+        (self.waiter)()
+    }
+
+    /// A session that is not a child process: `lines` closes when it ends,
+    /// `stopper` ends it, and `wait` says how it ended.
+    pub fn from_parts(
+        lines: Receiver<LogLine>,
+        input: Input,
+        stopper: Stopper,
+        wait: impl Fn() -> Option<i32> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            lines,
+            input,
+            stopper,
+            waiter: Arc::new(wait),
+        }
+    }
+
+    fn of_child(child: Child, lines: Receiver<LogLine>, input: Input) -> Self {
+        let child = Arc::new(Mutex::new(child));
+        let stopper = Stopper::new({
+            let child = Arc::clone(&child);
+            move || {
+                let mut child = child.lock().expect("session lock");
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        });
+        Self::from_parts(lines, input, stopper, move || {
+            let mut child = child.lock().expect("session lock");
+            child.wait().ok().and_then(|status| status.code())
+        })
+    }
+}
+
+/// Writes into whatever the running session listens on. Cloneable.
+///
+/// Boxed rather than typed to `ChildStdin` because the two things a board
+/// listens on are not the same type: QEMU's stdin, and a serial port rusty
+/// holds open itself. The panels that send — buttons, pots, tunables — should
+/// not have to know which is on the other end.
+#[derive(Clone)]
+pub struct Input {
+    sink: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
+}
+
+impl Input {
+    /// Wrap anything writable. `None` is a session that listens to nothing,
+    /// which is not an error: a flash has no input.
+    pub fn new(sink: Option<Box<dyn std::io::Write + Send>>) -> Self {
+        Self {
+            sink: Arc::new(Mutex::new(sink)),
+        }
+    }
+
+    /// Send one line. A dead or closed child is not an error worth surfacing
+    /// — the press simply lands nowhere, like clicking a board that is off.
+    pub fn send_line(&self, text: &str) {
+        use std::io::Write;
+        if let Ok(mut guard) = self.sink.lock()
+            && let Some(stdin) = guard.as_mut()
+        {
+            let _ = stdin.write_all(text.as_bytes());
+            let _ = stdin.write_all(b"\n");
+            let _ = stdin.flush();
+        }
+    }
+}
+
+/// Ends a session from outside its reader loop.
+///
+/// A closure rather than a child handle: a serial link rusty holds itself has
+/// no process to kill, and the one thing every session has in common is that
+/// something outside it must be able to end it.
+#[derive(Clone)]
+pub struct Stopper {
+    end: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl Stopper {
+    pub fn new(end: impl Fn() + Send + Sync + 'static) -> Self {
+        Self { end: Arc::new(end) }
+    }
+
+    /// A monitor session runs until the user leaves, so this is the normal way
+    /// one ends, not an error path. Stopping an already-exited process is
+    /// success — the caller wanted it stopped, and it is.
+    pub fn stop(&self) {
+        (self.end)();
+    }
+}
+
+/// Start the planned command.
+pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> {
+    let mut command = command(&plan.program);
+    // A `git` the dock runs has nobody to type into an editor or a password
+    // prompt. A merge, rebase or cherry-pick continued from the Git panel
+    // would otherwise open `$GIT_EDITOR` on a pipe and wait for ever, and an
+    // HTTPS remote with no credential helper would wait on a terminal prompt
+    // nobody can see. `true` as the editor keeps the message git prepared; a
+    // credential helper with a window of its own still asks.
+    if is_git(&plan.program) {
+        command
+            .env("GIT_EDITOR", "true")
+            .env("GIT_TERMINAL_PROMPT", "0");
+    }
+    command
+        .args(&plan.args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Piped, not null: the simulator injects button presses through the
+        // child's stdin (QEMU's `-serial mon:stdio` reads it as UART RX).
+        // Tools that never read stdin just ignore an empty pipe.
+        .stdin(Stdio::piped());
+
+    if let Some(dir) = working_dir {
+        command.current_dir(dir);
+    }
+
+    let mut child = command.spawn().map_err(|source| Error::Spawn {
+        tool: plan.program.clone(),
+        source,
+    })?;
+
+    let (tx, lines) = mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        pump(stdout, LogStream::Stdout, tx.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        pump(stderr, LogStream::Stderr, tx);
+    }
+    let input = Input::new(
+        child
+            .stdin
+            .take()
+            .map(|stdin| Box::new(stdin) as Box<dyn std::io::Write + Send>),
+    );
+
+    Ok(Session::of_child(child, lines, input))
+}
+
+/// Read a stream into ordered [`LogLine`]s on its own thread.
+///
+/// Shared with [`crate::serial`]: a port and a pipe differ in how they end and
+/// in nothing else, and the carriage-return handling and level parsing below
+/// are wanted on both.
+pub(crate) fn pump<R: std::io::Read + Send + 'static>(
+    reader: R,
+    stream: LogStream,
+    tx: mpsc::Sender<LogLine>,
+) {
+    thread::spawn(move || {
+        // Not `lines()`: espflash draws a progress bar with carriage returns
+        // and no newline, so a line-based reader would show nothing at all
+        // until the flash finished.
+        let mut reader = BufReader::new(reader);
+        let mut buffer = Vec::new();
+        loop {
+            buffer.clear();
+            match read_record(&mut reader, &mut buffer) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let text = String::from_utf8_lossy(&buffer).trim_end().to_string();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let level = parse_level(&text);
+                    if tx
+                        .send(LogLine {
+                            stream,
+                            text,
+                            level,
+                        })
+                        .is_err()
+                    {
+                        // Receiver gone: the user closed the panel.
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+/// Read up to the next `\n` or `\r`, whichever comes first.
+fn read_record<R: BufRead>(reader: &mut R, buffer: &mut Vec<u8>) -> std::io::Result<usize> {
+    let mut total = 0;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            return Ok(total);
+        }
+        match available.iter().position(|b| *b == b'\n' || *b == b'\r') {
+            Some(at) => {
+                buffer.extend_from_slice(&available[..at]);
+                reader.consume(at + 1);
+                return Ok(total + at + 1);
+            }
+            None => {
+                buffer.extend_from_slice(available);
+                let len = available.len();
+                reader.consume(len);
+                total += len;
+            }
+        }
+    }
+}
+
+/// Severity from the shapes these tools actually emit.
+///
+/// Three formats reach this: defmt through probe-rs (`INFO  message`), the
+/// `log` crate through esp-println (`INFO - message`), and ESP-IDF's own
+/// (`I (1234) tag: message`). Missing the third would leave every std project's
+/// logs unlevelled.
+fn parse_level(line: &str) -> Option<LogLevel> {
+    let trimmed = line.trim_start();
+
+    // ESP-IDF: a single letter, then a timestamp in parentheses.
+    if let Some(rest) = trimmed.get(1..2)
+        && rest.starts_with(" ")
+        && trimmed.get(2..3) == Some("(")
+    {
+        return match trimmed.as_bytes().first() {
+            Some(b'V') => Some(LogLevel::Trace),
+            Some(b'D') => Some(LogLevel::Debug),
+            Some(b'I') => Some(LogLevel::Info),
+            Some(b'W') => Some(LogLevel::Warn),
+            Some(b'E') => Some(LogLevel::Error),
+            _ => None,
+        };
+    }
+
+    let first = trimmed.split_whitespace().next()?;
+    match first
+        .trim_end_matches([':', '-'])
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "TRACE" => Some(LogLevel::Trace),
+        "DEBUG" => Some(LogLevel::Debug),
+        "INFO" => Some(LogLevel::Info),
+        "WARN" | "WARNING" => Some(LogLevel::Warn),
+        "ERROR" => Some(LogLevel::Error),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_levels_are_parsed_from_all_three_formats_in_use() {
+        // defmt via probe-rs
+        assert_eq!(parse_level("INFO  boot complete"), Some(LogLevel::Info));
+        // log crate via esp-println
+        assert_eq!(parse_level("WARN - low battery"), Some(LogLevel::Warn));
+        assert_eq!(parse_level("ERROR: i2c nack"), Some(LogLevel::Error));
+        // ESP-IDF's own format, which none of the above patterns match
+        assert_eq!(
+            parse_level("I (1234) wifi: connected"),
+            Some(LogLevel::Info)
+        );
+        assert_eq!(parse_level("E (99) heap: no mem"), Some(LogLevel::Error));
+        assert_eq!(parse_level("V (7) trace: tick"), Some(LogLevel::Trace));
+
+        assert_eq!(parse_level("Hello, world!"), None);
+        assert_eq!(parse_level(""), None);
+    }
+
+    /// The directories a child gets are appended, once each: a directory the
+    /// parent's PATH already names is not repeated, and one it lacks lands
+    /// after everything the user chose.
+    #[test]
+    fn a_childs_path_appends_what_the_parent_lacks_and_nothing_twice() {
+        let user = [PathBuf::from("/usr/bin"), PathBuf::from("/opt/mine/bin")];
+        let existing = std::env::join_paths(user.iter()).unwrap();
+        let child = child_path(
+            &existing,
+            vec![PathBuf::from("/opt/mine/bin"), PathBuf::from("/esp/bin")],
+        )
+        .unwrap();
+        let expected = std::env::join_paths([
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/opt/mine/bin"),
+            PathBuf::from("/esp/bin"),
+        ])
+        .unwrap();
+        assert_eq!(child, expected);
+    }
+
+    #[test]
+    fn progress_bars_are_split_on_carriage_returns() {
+        // espflash redraws its progress bar with \r and no newline. A
+        // line-based reader would show nothing until the flash finished.
+        let input = b"Writing 10%\rWriting 55%\rWriting 100%\nDone\n";
+        let mut reader = BufReader::new(&input[..]);
+        let mut records = Vec::new();
+        loop {
+            let mut buffer = Vec::new();
+            match read_record(&mut reader, &mut buffer) {
+                Ok(0) => break,
+                Ok(_) => records.push(String::from_utf8(buffer).unwrap()),
+                Err(_) => break,
+            }
+        }
+        assert_eq!(
+            records,
+            vec!["Writing 10%", "Writing 55%", "Writing 100%", "Done"]
+        );
+    }
+}

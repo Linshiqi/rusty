@@ -1,0 +1,35 @@
+# The same example on PB12 and PB1, for a target rustup ships and stable
+# Rust, proven in the same emulator. The lockfile and build script are the
+# V003's: ch32-hal's dependencies do not change with the part, and cargo
+# writes the same lock for either.
+
+chip = "ch32x035f8u6"
+playground = 4
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "../ch32v003j4m6/Cargo.lock.in"
+
+[[file]]
+path = "build.rs"
+from = "../ch32v003j4m6/build.rs.in"
+
+[[file]]
+path = "rust-toolchain.toml"
+from = "rust-toolchain.toml.in"
+
+[[file]]
+path = ".cargo/config.toml"
+from = "cargo-config.toml.in"
+
+[[file]]
+path = "src/main.rs"
+from = "main.rs.in"
+
+[[file]]
+path = ".rusty/sim.toml"
+from = "sim.toml.in"

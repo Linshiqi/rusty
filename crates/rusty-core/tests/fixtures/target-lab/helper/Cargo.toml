@@ -1,0 +1,9 @@
+# A path dependency the workspace above excludes, so the graph has a local
+# package that is not a member — and a second build script, which rustc
+# compiles under the same crate name as the first.
+
+[package]
+name = "lab-helper"
+version = "0.1.0"
+edition = "2021"
+publish = false

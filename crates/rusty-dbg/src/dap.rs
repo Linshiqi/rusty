@@ -1,0 +1,1706 @@
+//! A debug adapter, driven — the second debugger backend.
+//!
+//! gdb cannot read every platform's debug information. On Windows, Rust's
+//! default `-msvc` target emits a PDB, and gdb reads DWARF: pointed at one it
+//! loads, sets breakpoints that never hit, and shows addresses where source
+//! lines should be. LLDB reads PDB correctly, and LLDB's machine interface is
+//! not MI — it is the Debug Adapter Protocol, spoken by `lldb-dap` and by
+//! CodeLLDB's `codelldb`. So this module is to [`crate::session`] what DAP is
+//! to MI: the same [`DebugState`] out, a different protocol in.
+//!
+//! **Over a socket, never over the adapter's stdin.** Both adapters hand the
+//! debuggee their own stdout, so a test's `running 1 test` lands in the middle
+//! of a DAP frame and every frame after it is garbage — measured, not feared.
+//! Driven over TCP the two streams separate: the socket carries the protocol
+//! and the adapter's stdout carries only the program's own output, which is
+//! exactly what the dock wants to show.
+//!
+//! **A board is the same protocol, a different adapter.** probe-rs ships a
+//! DAP server (`probe-rs dap-server`) that flashes an image through a debug
+//! probe and debugs it on the part — every Cortex-M part the catalogue
+//! names, and the RISC-V ones probe-rs reaches — with no cross gdb at all.
+//! [`Board`] is what it needs beyond a program: probe-rs's name for the part
+//! and which probe. The launch request is probe-rs's own `SessionConfig`,
+//! read off its source (`probe-rs-tools` 0.32, `dap_server/server/
+//! configuration.rs`), and what the firmware prints arrives through RTT as
+//! probe-rs's own events, not `output`: `probe-rs-rtt-channel-config` names a
+//! channel, the client answers `rttWindowOpened` — probe-rs does not poll a
+//! channel until a window says it is open, so nothing is lost before anyone
+//! is reading — and `probe-rs-rtt-data` carries the text, already decoded
+//! from defmt where the image uses it.
+//!
+//! **Every request is fire-and-forget and every answer is dispatched by its
+//! `command`.** A reader that blocked waiting for its own reply would
+//! deadlock, because the reply arrives on the thread doing the blocking. The
+//! stop sequence is therefore a small chain in the reader: `stopped` asks for
+//! the stack, the stack's answer asks for the frame's scopes, and the scopes'
+//! answer asks for its variables.
+
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::model::{Breakpoint, DebugState, StackFrame, StopReason, Variable};
+use crate::placement::placed_line;
+use crate::session::{Error, Events, Result, publish, push_line, relative};
+
+/// How long the adapter has to answer `initialized`. Generous: the first
+/// launch loads the target's symbols, and a Rust test binary with its whole
+/// dependency graph is not small.
+const READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long it has to start *listening*, which is a different question and a
+/// much shorter one. An adapter that works opens its port at once; one that
+/// is going to do nothing at all — LLVM ships builds that answer neither
+/// stdio nor a socket — does nothing quickly. Short, because the caller has
+/// another candidate to try and waiting out a broken one is time the person
+/// spends looking at a frozen button.
+const LISTEN_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// How long probe-rs has to answer `initialized`. It flashes the image
+/// before it says so, and a large image over a slow probe takes minutes.
+const FLASH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A board, debugged through probe-rs: what the launch needs beyond the
+/// image.
+#[derive(Debug, Clone)]
+pub struct Board {
+    /// probe-rs's name for the part (`STM32F411CEUx`), the catalogue's
+    /// `probe_rs_target`.
+    pub chip: String,
+    /// Which probe, in probe-rs's selector form (`VID:PID[:SERIAL]`), or
+    /// `None` for the one probe plugged in — which probe-rs refuses by
+    /// name when there are several.
+    pub probe: Option<String>,
+}
+
+/// What to debug, and with which adapter.
+#[derive(Debug, Clone)]
+pub struct DapLaunch {
+    /// `lldb-dap` or `codelldb` for a program on this machine; `probe-rs`
+    /// for a board.
+    pub adapter: PathBuf,
+    /// The program to run, or for a board the image to flash and debug.
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// Where the program runs, and what source paths are relative to.
+    pub root: PathBuf,
+    /// The breakpoints standing when the session starts, project-relative and
+    /// zero-based.
+    ///
+    /// Passed in rather than placed afterwards, because DAP only accepts
+    /// breakpoints between `initialized` and `configurationDone` — after that
+    /// the program is already running, and a breakpoint placed then is one the
+    /// test may have run past. The frontend holds the list, so it sends it.
+    pub breakpoints: Vec<(String, u32)>,
+    /// A board through probe-rs rather than a program on this machine.
+    pub board: Option<Board>,
+}
+
+/// `Content-Length: N` out of a frame's header block, ignoring any other
+/// header and tolerating the casing adapters actually use.
+fn content_length(header: &str) -> Option<usize> {
+    header
+        .split("\r\n")
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse().ok())
+}
+
+/// DAP counts lines from one and this side counts from zero, as everywhere
+/// that crosses this boundary.
+fn zero_based(line: i64) -> u32 {
+    u32::try_from(line.max(1) - 1).unwrap_or(0)
+}
+
+/// One frame of a `stackTrace` body, in this workbench's terms.
+fn frame_of(level: u32, frame: &Value, root: &Path) -> StackFrame {
+    let file = frame
+        .get("source")
+        .and_then(|s| s.get("path"))
+        .and_then(Value::as_str)
+        .map(|path| relative(path, root));
+    StackFrame {
+        level,
+        function: frame
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("??")
+            .to_string(),
+        file,
+        line: frame.get("line").and_then(Value::as_i64).map(zero_based),
+        address: frame
+            .get("instructionPointerReference")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+/// One entry of a `variables` body.
+///
+/// `variablesReference` is non-zero when the value can be expanded; the panel
+/// only needs to know *that* it can, which is what `children` says.
+fn variable_of(item: &Value) -> Option<Variable> {
+    Some(Variable {
+        name: item.get("name").and_then(Value::as_str)?.to_string(),
+        value: item
+            .get("value")
+            .and_then(Value::as_str)
+            .unwrap_or("<unreadable>")
+            .to_string(),
+        kind: item.get("type").and_then(Value::as_str).map(str::to_string),
+        handle: None,
+        children: u32::from(
+            item.get("variablesReference")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                != 0,
+        ),
+    })
+}
+
+/// DAP's stop reasons, in the model's terms. The strings are the protocol's
+/// own; anything else a particular adapter invents lands on `Other` rather
+/// than being guessed at.
+fn reason_of(reason: &str) -> StopReason {
+    match reason {
+        "breakpoint" | "function breakpoint" | "data breakpoint" => StopReason::Breakpoint,
+        "step" => StopReason::Step,
+        "pause" => StopReason::Pause,
+        "exception" | "signal" => StopReason::Signal,
+        "exited" => StopReason::Exited,
+        _ => StopReason::Other,
+    }
+}
+
+/// The write half, shared with the reader thread so a stop can ask its own
+/// follow-up questions.
+struct Wire {
+    socket: Mutex<Option<TcpStream>>,
+    seq: AtomicI64,
+}
+
+impl Wire {
+    fn send(&self, command: &str, arguments: Value) -> Result<i64> {
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        let message = json!({
+            "seq": seq,
+            "type": "request",
+            "command": command,
+            "arguments": arguments,
+        });
+        let body = serde_json::to_vec(&message).map_err(|_| Error::Closed)?;
+        let mut slot = self.socket.lock().expect("dap socket");
+        let socket = slot.as_mut().ok_or(Error::Closed)?;
+        socket
+            .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
+            .map_err(|_| Error::Closed)?;
+        socket.write_all(&body).map_err(|_| Error::Closed)?;
+        socket.flush().map_err(|_| Error::Closed)?;
+        Ok(seq)
+    }
+}
+
+/// Where the session's states go: the channel's only sender, in a slot the
+/// reader and the console thread share.
+///
+/// The reader empties the slot as the session's last state goes, so the
+/// channel closes behind it — which is how whoever reads the stream learns
+/// the session is over when there is no exit code to say so. A console line
+/// still on its way then finds the slot empty and is dropped, rather than
+/// arriving after the state that said the session had ended.
+type Outlet = Arc<Mutex<Option<Sender<DebugState>>>>;
+
+/// The lines one `setBreakpoints` was sent for, as they were clicked and in
+/// the order the request listed them: the answer lists its breakpoints in
+/// that same order, and says only where each one landed.
+struct Asked {
+    file: String,
+    clicked: Vec<u32>,
+}
+
+/// Every `setBreakpoints` still waiting for its answer, by the request's
+/// `seq`, which the answer carries back as `request_seq`.
+type Pending = Arc<Mutex<HashMap<i64, Asked>>>;
+
+/// A live debug adapter.
+pub struct DapSession {
+    child: Mutex<Child>,
+    wire: Arc<Wire>,
+    state: Arc<Mutex<DebugState>>,
+    /// The whole list per file, as clicked: `setBreakpoints` replaces a
+    /// source's breakpoints rather than adding one, so the client owns the
+    /// set. Where each is placed is `placement`'s to say, when it is sent.
+    placed: Mutex<HashMap<String, Vec<u32>>>,
+    pending: Pending,
+    /// The thread the last stop named — every control request needs it.
+    thread: Arc<Mutex<i64>>,
+    /// Frame ids by level, from the last `stackTrace`: the panel selects a
+    /// level and DAP wants the adapter's own id.
+    frames: Arc<Mutex<Vec<i64>>>,
+    root: PathBuf,
+    running: Arc<AtomicBool>,
+    /// Whether `stop` has run. It runs once, whether asked for or on drop.
+    stopped: AtomicBool,
+}
+
+impl DapSession {
+    /// Start the adapter, launch the program, and place the standing
+    /// breakpoints before it runs.
+    pub fn start(launch: &DapLaunch) -> Result<(Self, Events)> {
+        let port = free_port()?;
+        let adapter = spawn_adapter(launch, port)?;
+        Self::with_adapter(adapter, port, launch)
+    }
+
+    /// Everything after the spawn, over an adapter told to listen on `port`.
+    ///
+    /// The session owns the adapter from its first line. Every step from
+    /// here can fail — the connection, a second handle on it, each request
+    /// of the handshake — and a failure drops the session, which stops its
+    /// adapter. Only the wait for `initialized` used to stop it: every other
+    /// failure returned with the adapter still running and nothing left that
+    /// could reach it.
+    fn with_adapter(adapter: Child, port: u16, launch: &DapLaunch) -> Result<(Self, Events)> {
+        let session = Self {
+            child: Mutex::new(adapter),
+            wire: Arc::new(Wire {
+                socket: Mutex::new(None),
+                seq: AtomicI64::new(1),
+            }),
+            state: Arc::new(Mutex::new(DebugState::default())),
+            placed: Mutex::new(HashMap::new()),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            thread: Arc::new(Mutex::new(0)),
+            frames: Arc::new(Mutex::new(Vec::new())),
+            root: launch.root.clone(),
+            running: Arc::new(AtomicBool::new(false)),
+            stopped: AtomicBool::new(false),
+        };
+        let socket = {
+            let mut adapter = session.child.lock().expect("dap adapter");
+            connect(port, &mut adapter, &launch.adapter)
+        }?;
+        let reader_half = socket.try_clone().map_err(|source| Error::Spawn {
+            gdb: launch.adapter.display().to_string(),
+            source,
+        })?;
+        *session.wire.socket.lock().expect("dap socket") = Some(socket);
+
+        let (sender, receiver) = channel();
+        let outlet: Outlet = Arc::new(Mutex::new(Some(sender)));
+        let (ready_tx, ready_rx) = channel();
+        let reader = Reader {
+            rtt: Mutex::new(String::new()),
+            state: Arc::clone(&session.state),
+            wire: Arc::clone(&session.wire),
+            outlet: Arc::clone(&outlet),
+            root: launch.root.clone(),
+            thread: Arc::clone(&session.thread),
+            frames: Arc::clone(&session.frames),
+            running: Arc::clone(&session.running),
+            pending: Arc::clone(&session.pending),
+            ready: ready_tx,
+        };
+        std::thread::spawn(move || reader.pump(reader_half));
+
+        // The program's console, on its own thread. Lines rather than frames:
+        // this pipe is plain text.
+        let console = session.child.lock().expect("dap adapter").stdout.take();
+        if let Some(stdout) = console {
+            let state = Arc::clone(&session.state);
+            let outlet = Arc::clone(&outlet);
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout)
+                    .lines()
+                    .map_while(std::result::Result::ok)
+                {
+                    if !console_line(&outlet, &state, line) {
+                        return;
+                    }
+                }
+            });
+        }
+
+        session.handshake(launch, &ready_rx)?;
+
+        // Attached, and running: the program starts the moment configuration
+        // is done. The panel's first resume is therefore a no-op rather than
+        // an error about a program that is already going. Unless the session
+        // is already over — the adapter gone the moment it was configured —
+        // in which case its last state has been sent and nothing follows it.
+        session.running.store(true, Ordering::SeqCst);
+        if let Some(sender) = outlet.lock().expect("dap outlet").as_ref() {
+            let mut state = session.state.lock().expect("dap state");
+            state.attached = true;
+            state.running = true;
+            publish(&mut state, sender);
+        }
+
+        Ok((session, Events::new(receiver)))
+    }
+
+    /// `initialize` and `launch`, then — once the adapter says it will take
+    /// configuration — the standing breakpoints and `configurationDone`. An
+    /// adapter that never says so is an error, and like every error here it
+    /// drops the session, which stops the adapter.
+    fn handshake(&self, launch: &DapLaunch, ready: &Receiver<Ready>) -> Result<()> {
+        self.wire.send(
+            "initialize",
+            json!({
+                "adapterID": if launch.board.is_some() { "probe-rs-debug" } else { "lldb" },
+                "clientID": "rusty",
+                "linesStartAt1": true,
+                "columnsStartAt1": true,
+                "pathFormat": "path",
+                // Not declared, deliberately: with it the adapter asks the
+                // client to open a terminal for the debuggee, and there is no
+                // terminal here to open. Without it the adapter runs the
+                // program itself, which is what the console thread reads.
+                "supportsRunInTerminalRequest": false,
+            }),
+        )?;
+        self.wire.send("launch", launch_arguments(launch))?;
+
+        // `initialized` is the adapter saying it will take configuration now.
+        // Its `launch` reply does not come until after `configurationDone`, so
+        // waiting on that instead would deadlock the handshake. A launch the
+        // adapter refuses — no probe plugged in, a part probe-rs does not
+        // know — wakes the wait with its reason rather than leaving it to
+        // time out minutes later.
+        let timeout = if launch.board.is_some() {
+            FLASH_TIMEOUT
+        } else {
+            READY_TIMEOUT
+        };
+        match ready.recv_timeout(timeout) {
+            Ok(Ok(())) => {}
+            Ok(Err(reason)) => return Err(Error::Refused(reason)),
+            Err(_) => {
+                return Err(Error::Spawn {
+                    gdb: launch.adapter.display().to_string(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "the debug adapter never reported itself ready",
+                    ),
+                });
+            }
+        }
+
+        self.place_all(&launch.breakpoints)?;
+        self.wire.send("configurationDone", json!({}))?;
+        Ok(())
+    }
+
+    /// The state as it stands, for a caller that missed the last push.
+    pub fn state(&self) -> DebugState {
+        self.state.lock().expect("dap state").clone()
+    }
+
+    /// Send every file's list. DAP replaces a source's breakpoints wholesale.
+    fn place_all(&self, breakpoints: &[(String, u32)]) -> Result<()> {
+        {
+            let mut placed = self.placed.lock().expect("dap breakpoints");
+            placed.clear();
+            for (file, line) in breakpoints {
+                placed.entry(file.clone()).or_default().push(*line);
+            }
+        }
+        let files: Vec<String> = self
+            .placed
+            .lock()
+            .expect("dap breakpoints")
+            .keys()
+            .cloned()
+            .collect();
+        for file in files {
+            self.send_source(&file)?;
+        }
+        Ok(())
+    }
+
+    /// One source's whole breakpoint list, each where `placement` puts it
+    /// — read off the file as saved, which is what was built — and what was
+    /// clicked kept for the answer, which says only where each one landed.
+    fn send_source(&self, file: &str) -> Result<()> {
+        let clicked = self
+            .placed
+            .lock()
+            .expect("dap breakpoints")
+            .get(file)
+            .cloned()
+            .unwrap_or_default();
+        let absolute = self.root.join(file);
+        let source = std::fs::read_to_string(&absolute).ok();
+        let lines: Vec<u32> = clicked
+            .iter()
+            .map(|&line| {
+                source
+                    .as_deref()
+                    .map_or(line, |source| placed_line(source, line))
+            })
+            .collect();
+        // Held across the send, so an answer the reader has already taken
+        // off the socket waits here for what it answers rather than finding
+        // nothing.
+        let mut pending = self.pending.lock().expect("dap pending");
+        let seq = self.wire.send(
+            "setBreakpoints",
+            json!({
+                "source": { "path": absolute.to_string_lossy() },
+                "breakpoints": lines.iter().map(|l| json!({"line": l + 1})).collect::<Vec<_>>(),
+            }),
+        )?;
+        pending.insert(
+            seq,
+            Asked {
+                file: file.to_string(),
+                clicked,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn add_breakpoint(&self, file: &str, line: u32) -> Result<()> {
+        {
+            let mut placed = self.placed.lock().expect("dap breakpoints");
+            let lines = placed.entry(file.to_string()).or_default();
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+        self.send_source(file)
+    }
+
+    /// DAP has no "delete by number", so the number is resolved back to its
+    /// file and line and that source is sent again without it.
+    pub fn remove_breakpoint(&self, number: u32) -> Result<()> {
+        let found = self
+            .state
+            .lock()
+            .expect("dap state")
+            .breakpoints
+            .iter()
+            .find(|b| b.number == Some(number))
+            .map(|b| (b.file.clone(), b.requested.unwrap_or(b.line)));
+        let Some((file, line)) = found else {
+            return Ok(());
+        };
+        {
+            let mut placed = self.placed.lock().expect("dap breakpoints");
+            if let Some(lines) = placed.get_mut(&file) {
+                lines.retain(|l| *l != line);
+            }
+        }
+        self.state
+            .lock()
+            .expect("dap state")
+            .breakpoints
+            .retain(|b| b.number != Some(number));
+        self.send_source(&file)
+    }
+
+    /// Continue — or nothing, when the program is already going.
+    ///
+    /// The panel resumes once on attach, as it must for a target frozen at
+    /// reset. A launched program is not frozen, and `continue` against a
+    /// running one is an adapter error on the one button that has to work.
+    pub fn resume(&self) -> Result<()> {
+        if self.running.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.control("continue")
+    }
+
+    pub fn pause(&self) -> Result<()> {
+        self.control("pause")
+    }
+
+    pub fn step_over(&self) -> Result<()> {
+        self.control("next")
+    }
+
+    pub fn step_into(&self) -> Result<()> {
+        self.control("stepIn")
+    }
+
+    pub fn step_out(&self) -> Result<()> {
+        self.control("stepOut")
+    }
+
+    fn control(&self, command: &str) -> Result<()> {
+        let thread = *self.thread.lock().expect("dap thread");
+        self.wire.send(command, json!({ "threadId": thread }))?;
+        Ok(())
+    }
+
+    /// Select a frame and read its variables. The panel counts levels; the
+    /// adapter counts its own frame ids.
+    ///
+    /// The marker moves once the adapter has been asked about the frame, as
+    /// gdb's does: not to a level the last stack did not list, whose
+    /// variables nobody will send, and not when the request could not go.
+    /// It used to move first, and either case left it beside another
+    /// frame's variables.
+    pub fn refresh(&self, frame: u32) -> Result<()> {
+        let id = self
+            .frames
+            .lock()
+            .expect("dap frames")
+            .get(frame as usize)
+            .copied();
+        let Some(id) = id else {
+            return Ok(());
+        };
+        self.wire.send("scopes", json!({ "frameId": id }))?;
+        self.state.lock().expect("dap state").frame = frame;
+        Ok(())
+    }
+
+    /// Not offered here, and saying so beats answering with zeroes.
+    ///
+    /// The register view reads a peripheral block from a chip through its
+    /// SVD; a host process has no such thing, and an adapter's `readMemory`
+    /// would answer about this machine's address space instead.
+    pub fn read_memory(&self, _address: u64, _bytes: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// End the session and the program with it — once: a session stopped
+    /// and then dropped is not stopped again.
+    pub fn stop(&self) {
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // The adapter is given a moment to take the program down cleanly;
+        // killing it first orphans the debuggee, which then holds the test
+        // binary open and the next `cargo test` fails to link. An adapter
+        // that could not be told — never connected, or already gone — was
+        // asked for nothing, and nothing is waited for.
+        if self
+            .wire
+            .send("disconnect", json!({ "terminateDebuggee": true }))
+            .is_ok()
+        {
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        *self.wire.socket.lock().expect("dap socket") = None;
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// A session let go of without `stop` stops its adapter all the same. The
+/// app lets go of one when its stream ends, and a start that fails lets go
+/// of the one it was building; nothing stopped the adapter either time, so
+/// it was left to end itself, or not, and nobody waited for it.
+impl Drop for DapSession {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// A port of our own. Bound and released so the adapter can take it — "ask
+/// the adapter which port it chose" is not something both adapters agree
+/// on — and so taken from below the range the system gives outgoing
+/// connections their source ports from (32768 up on Linux, 49152 up on
+/// Windows and macOS). From inside it, `bind(0)`'s, the released port was
+/// the likeliest source port for the next connection made on the machine —
+/// this loop's own, while the adapter starts, among them — and the adapter
+/// then could not listen. rusty-embed's `simulate::free_port` is the same
+/// walk and says how it was measured; this crate does not depend on it.
+fn free_port() -> Result<u16> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static STEP: AtomicU32 = AtomicU32::new(0);
+    const QUIET: std::ops::Range<u16> = 20_000..32_000;
+    let span = u32::from(QUIET.end - QUIET.start);
+    let start = std::process::id().wrapping_mul(2_654_435_761);
+    for _ in 0..256 {
+        let step = STEP.fetch_add(1, Ordering::Relaxed);
+        let port = QUIET.start + (start.wrapping_add(step.wrapping_mul(7919)) % span) as u16;
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return Ok(port);
+        }
+    }
+    let refused = |source| Error::Spawn {
+        gdb: "a local port".to_string(),
+        source,
+    };
+    let probe = TcpListener::bind(("127.0.0.1", 0)).map_err(refused)?;
+    Ok(probe.local_addr().map_err(refused)?.port())
+}
+
+/// The adapter, told to listen on `port`.
+/// The `launch` request's arguments: a program for LLDB, or for probe-rs
+/// its own `SessionConfig` — the part, the probe, flashing on, one core with
+/// its image and RTT.
+fn launch_arguments(launch: &DapLaunch) -> Value {
+    match &launch.board {
+        None => json!({
+            "program": launch.program.to_string_lossy(),
+            "args": launch.args,
+            "cwd": launch.root.to_string_lossy(),
+            "stopOnEntry": false,
+        }),
+        Some(board) => {
+            let mut config = json!({
+                "chip": board.chip,
+                "cwd": launch.root.to_string_lossy(),
+                "flashingConfig": { "flashingEnabled": true },
+                "coreConfigs": [{
+                    "coreIndex": 0,
+                    "programBinary": launch.program.to_string_lossy(),
+                    "rttEnabled": true,
+                }],
+            });
+            if let Some(probe) = &board.probe {
+                config["probe"] = json!(probe);
+            }
+            config
+        }
+    }
+}
+
+fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
+    let mut command = Command::new(&launch.adapter);
+    if launch.board.is_some() {
+        // One session and then gone, as an IDE expects of an adapter it
+        // started; without it probe-rs waits for the next client for ever.
+        command.args(["dap-server", "--single-session"]);
+    }
+    command
+        .arg("--port")
+        .arg(port.to_string())
+        .current_dir(&launch.root)
+        .stdin(Stdio::null())
+        // The debuggee's own console. Read on its own thread and forwarded
+        // as `output`, which is the whole reason for driving the protocol
+        // over a socket instead of this pipe.
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    command.env_remove("RUSTUP_TOOLCHAIN");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command.spawn().map_err(|source| Error::Spawn {
+        gdb: launch.adapter.display().to_string(),
+        source,
+    })
+}
+
+/// Why the adapter refused a request, in its own words.
+///
+/// DAP's `message` is a short code as often as a reason — probe-rs answers
+/// a launch it cannot carry out with `cancelled` — and the reason proper is
+/// the error body's `format`, its `{variables}` filled in: `Invalid program
+/// binary file specified …`, `No connected probes were found`.
+fn refusal(message: &Value) -> String {
+    let error = message.get("body").and_then(|body| body.get("error"));
+    if let Some(format) = error.and_then(|e| e.get("format")).and_then(Value::as_str) {
+        let mut text = format.to_string();
+        if let Some(variables) = error
+            .and_then(|e| e.get("variables"))
+            .and_then(Value::as_object)
+        {
+            for (name, value) in variables {
+                if let Some(value) = value.as_str() {
+                    text = text.replace(&format!("{{{name}}}"), value);
+                }
+            }
+        }
+        if !text.trim().is_empty() {
+            return text;
+        }
+    }
+    message
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("the debug adapter refused the request")
+        .to_string()
+}
+
+/// The whole lines in `held` once `text` is added, `held` keeping what
+/// follows the last line break.
+fn complete_lines(held: &mut String, text: &str) -> Vec<String> {
+    held.push_str(text);
+    let Some(end) = held.rfind('\n') else {
+        return Vec::new();
+    };
+    let rest = held.split_off(end + 1);
+    let lines = held.lines().map(str::to_string).collect();
+    *held = rest;
+    lines
+}
+
+/// Connect to the adapter, retrying while it starts listening.
+fn connect(port: u16, child: &mut Child, adapter: &Path) -> Result<TcpStream> {
+    let deadline = Instant::now() + LISTEN_TIMEOUT;
+    let mut last = std::io::Error::new(std::io::ErrorKind::TimedOut, "never listened");
+    while Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(Error::Spawn {
+                gdb: adapter.display().to_string(),
+                source: std::io::Error::other(format!(
+                    "the debug adapter exited before listening ({status})"
+                )),
+            });
+        }
+        match TcpStream::connect(("127.0.0.1", port)) {
+            // A port `free_port` let go of can come back as this very
+            // connection's source port, and with the adapter not listening
+            // yet the socket joins itself: connected, and every answer its
+            // own request. rusty-embed's `connect_local` measured it.
+            Ok(socket) if socket.local_addr().ok() == socket.peer_addr().ok() => {
+                last = std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "connected to itself; the adapter is not listening yet",
+                );
+            }
+            Ok(socket) => return Ok(socket),
+            Err(e) => last = e,
+        }
+        std::thread::sleep(Duration::from_millis(80));
+    }
+    Err(Error::Spawn {
+        gdb: adapter.display().to_string(),
+        source: last,
+    })
+}
+
+/// One line of the program's console, out through the outlet. False once
+/// the session is over or nobody is listening, and the console thread
+/// stops there.
+fn console_line(outlet: &Outlet, state: &Mutex<DebugState>, line: String) -> bool {
+    let outlet = outlet.lock().expect("dap outlet");
+    match outlet.as_ref() {
+        Some(sender) => push_line(state, sender, line),
+        None => false,
+    }
+}
+
+/// The reader thread's half of the session: everything a message from the
+/// adapter can change, the wire its follow-up questions go out on, and the
+/// outlet the states go down.
+struct Reader {
+    state: Arc<Mutex<DebugState>>,
+    wire: Arc<Wire>,
+    outlet: Outlet,
+    root: PathBuf,
+    thread: Arc<Mutex<i64>>,
+    frames: Arc<Mutex<Vec<i64>>>,
+    running: Arc<AtomicBool>,
+    /// What each `setBreakpoints` still unanswered was clicked on.
+    pending: Pending,
+    /// Told when the adapter says it will take configuration, or that it
+    /// refused the launch.
+    ready: Sender<Ready>,
+    /// RTT text received after its last line break: probe-rs sends what the
+    /// channel held, which need not end at a line.
+    rtt: Mutex<String>,
+}
+
+/// The adapter's answer to "will you take configuration": yes, or why not.
+type Ready = std::result::Result<(), String>;
+
+impl Reader {
+    /// Read the adapter for the life of the session.
+    fn pump(self, socket: TcpStream) {
+        let mut socket = BufReader::new(socket);
+        while let Some(message) = read_frame(&mut socket) {
+            if !self.handle(&message) {
+                break;
+            }
+        }
+        self.finish();
+    }
+
+    /// Fold one message in, and send the state if it changed. False once
+    /// there is nothing more to read: the program exited, the adapter ended
+    /// the session, or nobody is listening.
+    fn handle(&self, message: &Value) -> bool {
+        if self.apply(message) && !self.send_state() {
+            return false;
+        }
+        let terminated = message.get("event").and_then(Value::as_str) == Some("terminated");
+        !terminated && self.state.lock().expect("dap state").exited.is_none()
+    }
+
+    /// The state as it stands, out through the outlet — with whatever the
+    /// program printed that has not gone yet. False once nobody is
+    /// listening, or the session is over.
+    fn send_state(&self) -> bool {
+        let outlet = self.outlet.lock().expect("dap outlet");
+        let Some(sender) = outlet.as_ref() else {
+            return false;
+        };
+        publish(&mut self.state.lock().expect("dap state"), sender)
+    }
+
+    /// Say once that the session is over, and close the channel behind it.
+    ///
+    /// An adapter that ended the session without an `exited` event — or went
+    /// away altogether, the connection closing under the reader — has not
+    /// said how the program ended, and that is not a program that exited
+    /// cleanly. Inventing `Some(0)` here read a crashed adapter as a test
+    /// that finished normally, the mistake gdb's reader had already stopped
+    /// making; this says it the way gdb's does. What the adapter did report
+    /// stands: the code of an exit, or the words it refused something in.
+    ///
+    /// The last state takes the sender with it, so the channel closes as it
+    /// goes: with no exit code to stop on, its end is what says the session
+    /// is over.
+    fn finish(&self) {
+        let Some(sender) = self.outlet.lock().expect("dap outlet").take() else {
+            return;
+        };
+        let mut state = self.state.lock().expect("dap state");
+        state.running = false;
+        state.attached = false;
+        if state.exited.is_none() && state.error.is_none() {
+            state.error =
+                Some("the debug adapter ended the session without reporting an exit".to_string());
+        }
+        publish(&mut state, &sender);
+    }
+
+    /// Fold one message into the state. Returns whether anything changed.
+    fn apply(&self, message: &Value) -> bool {
+        match message.get("type").and_then(Value::as_str) {
+            Some("event") => self.on_event(message),
+            Some("response") => self.on_response(message),
+            _ => false,
+        }
+    }
+
+    /// Something the adapter says happened: the program stopped, went on,
+    /// printed or ended, or a breakpoint moved.
+    fn on_event(&self, message: &Value) -> bool {
+        let body = message.get("body").cloned().unwrap_or(Value::Null);
+        match message.get("event").and_then(Value::as_str).unwrap_or("") {
+            "initialized" => {
+                let _ = self.ready.send(Ok(()));
+                false
+            }
+            // probe-rs names an RTT channel and waits to be told a window is
+            // open before it reads it.
+            "probe-rs-rtt-channel-config" => {
+                if let Some(channel) = body.get("channelNumber").and_then(Value::as_u64) {
+                    let _ = self.wire.send(
+                        "rttWindowOpened",
+                        json!({ "channelNumber": channel, "windowIsOpen": true }),
+                    );
+                }
+                false
+            }
+            "probe-rs-rtt-data" => {
+                let Some(text) = body.get("data").and_then(Value::as_str) else {
+                    return false;
+                };
+                let lines = complete_lines(&mut self.rtt.lock().expect("dap rtt"), text);
+                if lines.is_empty() {
+                    return false;
+                }
+                self.state.lock().expect("dap state").output.extend(lines);
+                true
+            }
+            // What probe-rs would put in a dialog — a flash that failed, a
+            // probe it could not open — is said in the dock instead.
+            "probe-rs-show-message" => {
+                let Some(text) = body.get("message").and_then(Value::as_str) else {
+                    return false;
+                };
+                let mut state = self.state.lock().expect("dap state");
+                state.output.extend(text.lines().map(str::to_string));
+                true
+            }
+            "stopped" => {
+                if let Some(id) = body.get("threadId").and_then(Value::as_i64) {
+                    *self.thread.lock().expect("dap thread") = id;
+                }
+                self.running.store(false, Ordering::SeqCst);
+                self.state.lock().expect("dap state").halted(reason_of(
+                    body.get("reason").and_then(Value::as_str).unwrap_or(""),
+                ));
+                // The stop names one thread and nothing else; the stack is
+                // a separate question, and asking it here is what makes
+                // the panel complete the moment it appears.
+                let id = *self.thread.lock().expect("dap thread");
+                let _ = self
+                    .wire
+                    .send("stackTrace", json!({ "threadId": id, "levels": 64 }));
+                true
+            }
+            "continued" => {
+                self.running.store(true, Ordering::SeqCst);
+                self.state.lock().expect("dap state").resumed();
+                true
+            }
+            "exited" => {
+                let code = body.get("exitCode").and_then(Value::as_i64).unwrap_or(0);
+                let mut state = self.state.lock().expect("dap state");
+                state.exited = Some(i32::try_from(code).unwrap_or(-1));
+                state.running = false;
+                state.reason = Some(StopReason::Exited);
+                true
+            }
+            // The adapter ending the session, which is not an exit: an
+            // `exited` event carries the code, and when one came first the
+            // reading has already stopped. `handle` stops on this one too,
+            // and `finish` says what is known.
+            "terminated" => false,
+            "output" => {
+                let Some(text) = body.get("output").and_then(Value::as_str) else {
+                    return false;
+                };
+                // The adapter's own narration — "Launched process 1234" —
+                // is not the program's output and would read as the test
+                // printing it. Only the debuggee's streams are forwarded.
+                let category = body
+                    .get("category")
+                    .and_then(Value::as_str)
+                    .unwrap_or("console");
+                if category != "stdout" && category != "stderr" {
+                    return false;
+                }
+                // Waiting for the next state to go, which takes them with it.
+                let mut state = self.state.lock().expect("dap state");
+                state.output.extend(text.lines().map(str::to_string));
+                true
+            }
+            "breakpoint" => {
+                let Some(bkpt) = body.get("breakpoint") else {
+                    return false;
+                };
+                let mut state = self.state.lock().expect("dap state");
+                upsert_breakpoint(&mut state, bkpt, &self.root, None);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The adapter's answer to one of this session's requests, told apart
+    /// by the `command` it answers.
+    fn on_response(&self, message: &Value) -> bool {
+        let command = message.get("command").and_then(Value::as_str).unwrap_or("");
+        let body = message.get("body").cloned().unwrap_or(Value::Null);
+        // What a `setBreakpoints` was clicked on, answered or refused alike:
+        // taken either way, so nothing waits for an answer that came.
+        let asked = (command == "setBreakpoints")
+            .then(|| message.get("request_seq").and_then(Value::as_i64))
+            .flatten()
+            .and_then(|seq| self.pending.lock().expect("dap pending").remove(&seq));
+        if message.get("success").and_then(Value::as_bool) == Some(false) {
+            // `pause` on an already-stopped program and `continue` on a
+            // running one are races the panel can lose harmlessly; the
+            // rest is worth showing.
+            if matches!(
+                command,
+                "pause" | "continue" | "next" | "stepIn" | "stepOut"
+            ) {
+                return false;
+            }
+            let detail = refusal(message);
+            if matches!(command, "initialize" | "launch") {
+                let _ = self.ready.send(Err(detail.clone()));
+            }
+            self.state.lock().expect("dap state").error = Some(detail);
+            return true;
+        }
+        match command {
+            "stackTrace" => {
+                let listed = body
+                    .get("stackFrames")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut ids = Vec::with_capacity(listed.len());
+                let mut stack = Vec::with_capacity(listed.len());
+                for (level, frame) in listed.iter().enumerate() {
+                    ids.push(frame.get("id").and_then(Value::as_i64).unwrap_or(0));
+                    stack.push(frame_of(level as u32, frame, &self.root));
+                }
+                *self.frames.lock().expect("dap frames") = ids.clone();
+                self.state.lock().expect("dap state").stack = stack;
+                if let Some(first) = ids.first() {
+                    let _ = self.wire.send("scopes", json!({ "frameId": first }));
+                }
+                true
+            }
+            "scopes" => {
+                // The first scope is the frame's locals in both adapters;
+                // the rest are registers and globals, which this panel
+                // does not show.
+                let reference = body
+                    .get("scopes")
+                    .and_then(Value::as_array)
+                    .and_then(|scopes| scopes.first())
+                    .and_then(|scope| scope.get("variablesReference"))
+                    .and_then(Value::as_i64);
+                if let Some(reference) = reference {
+                    let _ = self
+                        .wire
+                        .send("variables", json!({ "variablesReference": reference }));
+                }
+                false
+            }
+            "variables" => {
+                let listed = body
+                    .get("variables")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                self.state.lock().expect("dap state").variables =
+                    listed.iter().filter_map(variable_of).collect();
+                true
+            }
+            "setBreakpoints" => {
+                let listed = body
+                    .get("breakpoints")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut state = self.state.lock().expect("dap state");
+                // In the order they were asked for, which is how each is
+                // told apart from the line it landed on.
+                for (index, bkpt) in listed.iter().enumerate() {
+                    let clicked = asked.as_ref().and_then(|asked| {
+                        let line = asked.clicked.get(index)?;
+                        Some((asked.file.as_str(), *line))
+                    });
+                    upsert_breakpoint(&mut state, bkpt, &self.root, clicked);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// One `Content-Length` framed JSON message, or `None` at the end.
+fn read_frame(reader: &mut BufReader<TcpStream>) -> Option<Value> {
+    let mut header = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        if line == "\r\n" || line == "\n" {
+            break;
+        }
+        header.push_str(&line);
+    }
+    let length = content_length(&header)?;
+    let mut body = vec![0u8; length];
+    reader.read_exact(&mut body).ok()?;
+    serde_json::from_slice(&body).ok()
+}
+
+/// Add or update one breakpoint, keyed by the adapter's id. `clicked` is
+/// the file and line it was asked for on, when this is the answer to the
+/// request that asked: the adapter says where a breakpoint landed, which is
+/// not always the line clicked (`placement`, or a line with no code).
+fn upsert_breakpoint(
+    state: &mut DebugState,
+    bkpt: &Value,
+    root: &Path,
+    clicked: Option<(&str, u32)>,
+) {
+    let number = bkpt
+        .get("id")
+        .and_then(Value::as_i64)
+        .and_then(|id| u32::try_from(id).ok());
+    let line = bkpt.get("line").and_then(Value::as_i64).map(zero_based);
+    let file = bkpt
+        .get("source")
+        .and_then(|s| s.get("path"))
+        .and_then(Value::as_str)
+        .map(|path| relative(path, root))
+        .or_else(|| clicked.map(|(file, _)| file.to_string()));
+
+    let previous = state
+        .breakpoints
+        .iter()
+        .find(|b| b.number.is_some() && b.number == number)
+        .cloned();
+    state.record_breakpoint(Breakpoint {
+        number,
+        file: file
+            .or_else(|| previous.as_ref().map(|b| b.file.clone()))
+            .unwrap_or_default(),
+        line: line
+            .or_else(|| previous.as_ref().map(|b| b.line))
+            .unwrap_or(0),
+        // Where it was asked for, kept across updates so the margin can move
+        // its dot to where the adapter actually put it. Taken as the line of
+        // the first report without a request to read it from — the adapter
+        // re-reporting one it has resolved.
+        requested: clicked
+            .map(|(_, line)| line)
+            .or_else(|| previous.as_ref().and_then(|b| b.requested))
+            .or_else(|| previous.as_ref().map(|b| b.line))
+            .or(line),
+        verified: bkpt
+            .get("verified")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reason: bkpt
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        enabled: true,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc::TryRecvError;
+
+    use super::*;
+    use crate::session::tests::{ended, stand_in};
+
+    fn root() -> PathBuf {
+        PathBuf::from(r"E:\CodeBase\proj")
+    }
+
+    /// The reader thread's half of a session with nothing at the other end
+    /// of its wire, and the stream its states go down.
+    fn unwired() -> (Reader, Receiver<DebugState>) {
+        let (sender, states) = channel();
+        let (ready, _) = channel();
+        let reader = Reader {
+            state: Arc::new(Mutex::new(DebugState::default())),
+            wire: Arc::new(Wire {
+                socket: Mutex::new(None),
+                seq: AtomicI64::new(1),
+            }),
+            outlet: Arc::new(Mutex::new(Some(sender))),
+            root: root(),
+            thread: Arc::new(Mutex::new(0)),
+            frames: Arc::new(Mutex::new(Vec::new())),
+            running: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            ready,
+            rtt: Mutex::new(String::new()),
+        };
+        (reader, states)
+    }
+
+    /// probe-rs's RTT text arrives as the channel held it, not a line at a
+    /// time: a line split across two events is one line in the dock, and a
+    /// line still unfinished waits for its break.
+    #[test]
+    fn rtt_text_from_probe_rs_reaches_the_dock_a_whole_line_at_a_time() {
+        let (reader, states) = unwired();
+        let data = |text: &str| {
+            event(
+                "probe-rs-rtt-data",
+                json!({ "channelNumber": 0, "data": text }),
+            )
+        };
+        assert!(reader.handle(&data("INFO  blink\nINFO  bl")));
+        assert!(reader.handle(&data("ink\nINFO  half")));
+        let sent: Vec<String> = states.try_iter().flat_map(|state| state.output).collect();
+        assert_eq!(sent, ["INFO  blink", "INFO  blink"]);
+        assert_eq!(*reader.rtt.lock().unwrap(), "INFO  half");
+    }
+
+    /// A launch probe-rs refuses — no probe plugged in — wakes the
+    /// handshake with the reason at once, rather than leaving it to wait
+    /// out the minutes a flash may take.
+    #[test]
+    fn a_refused_launch_wakes_the_handshake_with_its_reason() {
+        let (sender, _states) = channel();
+        let (ready, woken) = channel();
+        let (mut reader, _) = unwired();
+        reader.ready = ready;
+        reader.outlet = Arc::new(Mutex::new(Some(sender)));
+        // As probe-rs 0.32 sends it: the reason in the error body, and
+        // `cancelled` in the message.
+        let refused = json!({
+            "seq": 7, "type": "response", "command": "launch", "success": false,
+            "message": "cancelled", "request_seq": 2,
+            "body": { "error": {
+                "format": "{response_message}", "id": 0, "showUser": true,
+                "variables": { "response_message": "Invalid program binary file specified 'E:/nope.elf'" },
+            }},
+        });
+        reader.handle(&refused);
+        assert_eq!(
+            woken.try_recv().expect("the handshake was woken"),
+            Err("Invalid program binary file specified 'E:/nope.elf'".to_string())
+        );
+    }
+
+    /// probe-rs's own `SessionConfig`: the part, the probe when one was
+    /// picked, flashing on, and one core with its image and RTT.
+    #[test]
+    fn a_board_is_launched_as_probe_rs_reads_its_configuration() {
+        let mut board = launch();
+        board.program = PathBuf::from(r"E:\proj\target\thumbv7em-none-eabihf\release\blinky");
+        board.board = Some(Board {
+            chip: "STM32F411CEUx".to_string(),
+            probe: Some("0483:374b:066DFF".to_string()),
+        });
+        let config = launch_arguments(&board);
+        assert_eq!(config["chip"], "STM32F411CEUx");
+        assert_eq!(config["probe"], "0483:374b:066DFF");
+        assert_eq!(config["flashingConfig"]["flashingEnabled"], true);
+        assert_eq!(config["coreConfigs"][0]["coreIndex"], 0);
+        assert_eq!(config["coreConfigs"][0]["rttEnabled"], true);
+        assert!(
+            config["coreConfigs"][0]["programBinary"]
+                .as_str()
+                .unwrap()
+                .ends_with("blinky")
+        );
+        // A program on this machine is still LLDB's launch.
+        assert!(launch_arguments(&launch()).get("chip").is_none());
+    }
+
+    fn event(name: &str, body: Value) -> Value {
+        json!({ "seq": 1, "type": "event", "event": name, "body": body })
+    }
+
+    /// An adapter that ends the session without an `exited` event has not
+    /// said how the program ended. Read as a clean exit, a crashed adapter
+    /// was a test that finished normally — the mistake gdb's reader had
+    /// already stopped making. The session ends with the reason instead, and
+    /// the stream closes behind it, since there is no exit code to stop on.
+    #[test]
+    fn an_adapter_that_ends_without_an_exit_claims_none() {
+        let (reader, states) = unwired();
+        assert!(
+            !reader.handle(&event("terminated", json!({}))),
+            "the adapter ending the session ends the reading",
+        );
+        reader.finish();
+        let last = states.try_recv().expect("the session's last state");
+        assert_eq!(
+            last.exited, None,
+            "no exit was reported, so none is claimed"
+        );
+        assert_eq!(
+            last.error.as_deref(),
+            Some("the debug adapter ended the session without reporting an exit"),
+        );
+        assert!(!last.attached && !last.running);
+        assert_eq!(
+            states.try_recv(),
+            Err(TryRecvError::Disconnected),
+            "nothing follows the last state: the stream's end says the session is over",
+        );
+
+        // Gone without a word — the connection closed under the reader — is
+        // the same answer.
+        let (reader, states) = unwired();
+        reader.finish();
+        let last = states.try_recv().expect("the session's last state");
+        assert_eq!(last.exited, None);
+        assert!(last.error.is_some());
+    }
+
+    /// What the adapter did report stands: the code of an exit, with no
+    /// error beside it, and the words of a refusal rather than the general
+    /// sentence.
+    #[test]
+    fn what_the_adapter_reported_is_what_the_session_ends_with() {
+        let (reader, states) = unwired();
+        assert!(
+            !reader.handle(&event("exited", json!({ "exitCode": 101 }))),
+            "an exit ends the reading",
+        );
+        reader.finish();
+        let last = states.try_iter().last().expect("the session's last state");
+        assert_eq!(last.exited, Some(101));
+        assert_eq!(last.error, None);
+
+        let (reader, states) = unwired();
+        let refused = json!({
+            "seq": 2, "type": "response", "command": "launch", "success": false,
+            "message": "program not found",
+        });
+        assert!(reader.handle(&refused));
+        assert!(!reader.handle(&event("terminated", json!({}))));
+        reader.finish();
+        let last = states.try_iter().last().expect("the session's last state");
+        assert_eq!(last.exited, None);
+        assert_eq!(last.error.as_deref(), Some("program not found"));
+    }
+
+    /// A line the program printed goes out in exactly one state, whichever
+    /// thread sends it. An adapter's `output` event stayed in the state, so
+    /// every state after it carried its lines again and the dock printed
+    /// them once more at every step — and the console thread, clearing the
+    /// state after its own line, could take them before they were sent.
+    #[test]
+    fn a_printed_line_goes_out_once_and_never_again() {
+        let (reader, states) = unwired();
+        let printed = |category: &str, text: &str| {
+            event("output", json!({ "category": category, "output": text }))
+        };
+        assert!(reader.handle(&printed("stdout", "running 1 test\n")));
+        assert!(reader.handle(&event("continued", json!({ "threadId": 1 }))));
+
+        // The adapter's line is in the state and not yet sent when the
+        // console thread sends one of its own: that state carries both, and
+        // the reader's after it neither.
+        reader.apply(&printed("stderr", "from the adapter\n"));
+        assert!(console_line(
+            &reader.outlet,
+            &reader.state,
+            "from the console".to_string()
+        ));
+        assert!(reader.send_state());
+
+        let sent: Vec<Vec<String>> = states.try_iter().map(|state| state.output).collect();
+        assert_eq!(
+            sent.concat(),
+            ["running 1 test", "from the adapter", "from the console"],
+            "every line, once",
+        );
+        assert_eq!(
+            sent.iter().map(Vec::len).collect::<Vec<_>>(),
+            [1, 0, 2, 0],
+            "each in the first state to go after it was printed",
+        );
+    }
+
+    /// The adapter's end of the protocol, faked. It takes the session's
+    /// connection and, when it `answers`, says `initialized` once it is
+    /// asked to launch, then hands back every command it heard when the
+    /// session disconnects or hangs up. When it does not, it hangs up at
+    /// once.
+    fn fake_adapter(answers: bool) -> (u16, Receiver<Vec<String>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+        let port = listener.local_addr().expect("its address").port();
+        let (heard, commands) = channel();
+        std::thread::spawn(move || {
+            let Ok((socket, _)) = listener.accept() else {
+                return;
+            };
+            if !answers {
+                return;
+            }
+            let mut out = socket.try_clone().expect("a second handle");
+            let mut socket = BufReader::new(socket);
+            let mut said = Vec::new();
+            while let Some(message) = read_frame(&mut socket) {
+                let command = message["command"].as_str().unwrap_or_default().to_string();
+                if command == "launch" {
+                    let body = json!({ "seq": 1, "type": "event", "event": "initialized" });
+                    let body = body.to_string();
+                    let _ = write!(out, "Content-Length: {}\r\n\r\n{body}", body.len());
+                }
+                let disconnected = command == "disconnect";
+                said.push(command);
+                if disconnected {
+                    break;
+                }
+            }
+            let _ = heard.send(said);
+        });
+        (port, commands)
+    }
+
+    fn launch() -> DapLaunch {
+        DapLaunch {
+            adapter: PathBuf::from("stand-in"),
+            program: PathBuf::from("tests"),
+            args: Vec::new(),
+            root: root(),
+            breakpoints: Vec::new(),
+            board: None,
+        }
+    }
+
+    /// A start that fails once the adapter is running stops it. Only the
+    /// wait for `initialized` did: an adapter that never listened was left
+    /// running when the connection gave up, with nothing left that could
+    /// reach it. Slow by design — the connection gives up only once
+    /// `LISTEN_TIMEOUT` has passed.
+    #[test]
+    fn a_start_that_cannot_connect_stops_the_adapter_it_started() {
+        let (adapter, stderr) = stand_in();
+        // Port 0, where nothing can be listening. A port another listener
+        // had just let go of could be handed to a test running beside this
+        // one inside the eight seconds.
+        assert!(DapSession::with_adapter(adapter, 0, &launch()).is_err());
+        assert!(ended(stderr), "the adapter was stopped, not left running");
+    }
+
+    /// The same further in: an adapter that hangs up before it is ready.
+    #[test]
+    fn a_start_that_fails_in_the_handshake_stops_the_adapter_it_started() {
+        let (adapter, stderr) = stand_in();
+        let (port, _) = fake_adapter(false);
+        assert!(DapSession::with_adapter(adapter, port, &launch()).is_err());
+        assert!(ended(stderr), "the adapter was stopped, not left running");
+    }
+
+    /// A session let go of without `stop` stops its adapter as `stop` would:
+    /// told to take the program down, then killed and waited for. The app
+    /// lets go of a session when its stream ends, and nothing stopped the
+    /// adapter then.
+    #[test]
+    fn a_session_let_go_of_stops_its_adapter() {
+        let (adapter, stderr) = stand_in();
+        let (port, commands) = fake_adapter(true);
+        let (session, _states) = DapSession::with_adapter(adapter, port, &launch())
+            .expect("the fake adapter completes the handshake");
+        drop(session);
+        assert!(ended(stderr), "the adapter was stopped, not left running");
+        let heard = commands
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the fake adapter heard the session out");
+        assert_eq!(
+            heard.last().map(String::as_str),
+            Some("disconnect"),
+            "told to take the program down first: {heard:?}",
+        );
+    }
+
+    /// The marker on the stack moves once the adapter has been asked about
+    /// the frame: not to a level the last stack did not list, whose
+    /// variables nobody will send, and not when the request could not go.
+    #[test]
+    fn a_frame_is_selected_once_the_adapter_is_asked_about_it() {
+        let (adapter, _stderr) = stand_in();
+        let (port, commands) = fake_adapter(true);
+        let (session, _states) = DapSession::with_adapter(adapter, port, &launch())
+            .expect("the fake adapter completes the handshake");
+        *session.frames.lock().expect("frame ids") = vec![1000, 1001];
+
+        session.refresh(1).expect("the adapter is asked");
+        assert_eq!(session.state().frame, 1);
+        session
+            .refresh(5)
+            .expect("a level with no frame is no error");
+        assert_eq!(session.state().frame, 1, "a level the stack did not list");
+
+        session
+            .wire
+            .socket
+            .lock()
+            .expect("the socket")
+            .as_ref()
+            .expect("connected")
+            .shutdown(std::net::Shutdown::Write)
+            .expect("the write half shut");
+        assert!(session.refresh(0).is_err(), "the request cannot go");
+        assert_eq!(session.state().frame, 1, "a request that never went");
+
+        drop(session);
+        let heard = commands
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the fake adapter heard the session out");
+        assert_eq!(
+            heard.iter().filter(|command| *command == "scopes").count(),
+            1,
+            "one frame asked about: {heard:?}",
+        );
+    }
+
+    /// A stop is read at its innermost frame — the stack's answer asks for
+    /// frame 0's scopes — so the marker goes back there, whichever frame was
+    /// chosen at the last stop.
+    #[test]
+    fn a_stop_selects_the_innermost_frame() {
+        let (reader, _states) = unwired();
+        reader.state.lock().expect("the state").frame = 3;
+        let stopped = event("stopped", json!({ "reason": "step", "threadId": 1 }));
+        assert!(reader.handle(&stopped));
+        assert_eq!(reader.state.lock().expect("the state").frame, 0);
+    }
+
+    #[test]
+    fn a_header_block_yields_its_length_whatever_its_casing() {
+        assert_eq!(content_length("Content-Length: 42\r\n"), Some(42));
+        assert_eq!(content_length("content-length:7\r\n"), Some(7));
+        assert_eq!(
+            content_length("Content-Type: application/json\r\nContent-Length: 9\r\n"),
+            Some(9),
+            "another header before it is not a reason to miss it",
+        );
+        assert_eq!(content_length("X-Nothing: 1\r\n"), None);
+    }
+
+    /// The adapter counts lines from one. Off by one here is a breakpoint on
+    /// the wrong line, every time.
+    #[test]
+    fn lines_arrive_one_based_and_leave_zero_based() {
+        assert_eq!(zero_based(1), 0);
+        assert_eq!(zero_based(244), 243);
+        assert_eq!(zero_based(0), 0, "a bad line does not underflow");
+    }
+
+    /// A real `stackTrace` frame, as CodeLLDB answers it for a Rust test.
+    #[test]
+    fn a_frame_becomes_a_project_relative_position() {
+        let frame = json!({
+            "id": 1001,
+            "name": "cf_core::math::quaternion::tests::rotations_do_not_commute",
+            "source": { "path": r"E:\CodeBase\proj\core\src\math\quaternion.rs" },
+            "line": 244,
+            "instructionPointerReference": "0x7ff7b5c2d9b0",
+        });
+        let got = frame_of(0, &frame, &root());
+        assert_eq!(got.file.as_deref(), Some("core/src/math/quaternion.rs"));
+        assert_eq!(got.line, Some(243));
+        assert_eq!(got.level, 0);
+        assert_eq!(got.address, "0x7ff7b5c2d9b0");
+    }
+
+    /// A frame with no source — inside the standard library, or a thunk —
+    /// keeps its name and simply has nowhere to point.
+    #[test]
+    fn a_frame_without_a_source_still_names_its_function() {
+        let frame = json!({ "id": 7, "name": "ntdll!RtlUserThreadStart", "line": 0 });
+        let got = frame_of(3, &frame, &root());
+        assert_eq!(got.function, "ntdll!RtlUserThreadStart");
+        assert_eq!(got.file, None);
+    }
+
+    #[test]
+    fn a_variable_carries_its_type_and_whether_it_opens() {
+        let listed = json!({
+            "name": "roll",
+            "value": "{w:0.707106769, x:0.707106769}",
+            "type": "cf_core::math::quaternion::Quaternion",
+            "variablesReference": 12,
+        });
+        let got = variable_of(&listed).expect("a variable");
+        assert_eq!(got.name, "roll");
+        assert_eq!(
+            got.kind.as_deref(),
+            Some("cf_core::math::quaternion::Quaternion")
+        );
+        assert_eq!(got.children, 1, "a non-zero reference is something to open");
+
+        let leaf = json!({ "name": "n", "value": "3", "variablesReference": 0 });
+        assert_eq!(variable_of(&leaf).expect("a variable").children, 0);
+    }
+
+    #[test]
+    fn stop_reasons_map_to_the_model_and_strangers_land_on_other() {
+        assert_eq!(reason_of("breakpoint"), StopReason::Breakpoint);
+        assert_eq!(reason_of("step"), StopReason::Step);
+        assert_eq!(reason_of("pause"), StopReason::Pause);
+        assert_eq!(reason_of("exception"), StopReason::Signal);
+        assert_eq!(reason_of("goodness knows"), StopReason::Other);
+    }
+
+    /// The adapter re-reports a breakpoint once it resolves — verified first
+    /// with no location, then with one. The same id must update in place
+    /// rather than pile up, and the line it was asked for must survive.
+    #[test]
+    fn a_resolved_breakpoint_updates_in_place_and_keeps_what_was_asked() {
+        let mut state = DebugState::default();
+        upsert_breakpoint(
+            &mut state,
+            &json!({
+                "id": 1, "verified": true, "line": 244,
+                "message": "Resolved locations: 0",
+                "source": { "path": r"E:\CodeBase\proj\core\src\math\quaternion.rs" },
+            }),
+            &root(),
+            None,
+        );
+        assert_eq!(state.breakpoints.len(), 1);
+        assert_eq!(state.breakpoints[0].line, 243);
+        assert_eq!(state.breakpoints[0].file, "core/src/math/quaternion.rs");
+
+        upsert_breakpoint(
+            &mut state,
+            &json!({ "id": 1, "verified": true, "line": 246, "message": "Resolved locations: 1" }),
+            &root(),
+            None,
+        );
+        assert_eq!(state.breakpoints.len(), 1, "one id is one breakpoint");
+        assert_eq!(state.breakpoints[0].line, 245, "it moved to where code is");
+        assert_eq!(
+            state.breakpoints[0].requested,
+            Some(243),
+            "and the margin still knows which line was clicked",
+        );
+        assert_eq!(
+            state.breakpoints[0].file, "core/src/math/quaternion.rs",
+            "an update without a source keeps the one it had",
+        );
+    }
+
+    /// The answer to `setBreakpoints` says where each breakpoint landed, in
+    /// the order they were asked for, and nothing about what was clicked.
+    /// Taken as the line asked for, a breakpoint the adapter moved in its
+    /// first answer — a line with no code, or `placement`'s — left the dot
+    /// where nothing would stop. Paired with the request by `request_seq`,
+    /// each carries the line clicked, and the file when the answer has none.
+    #[test]
+    fn an_answer_is_read_against_the_lines_its_request_was_clicked_on() {
+        let (reader, states) = unwired();
+        reader.pending.lock().unwrap().insert(
+            7,
+            Asked {
+                file: "core/src/math/vector.rs".to_string(),
+                clicked: vec![138, 144],
+            },
+        );
+        let answer = json!({
+            "seq": 12, "type": "response", "request_seq": 7, "success": true,
+            "command": "setBreakpoints",
+            "body": { "breakpoints": [
+                { "id": 1, "verified": true, "line": 140 },
+                {
+                    "id": 2, "verified": true, "line": 145,
+                    "source": { "path": r"E:\CodeBase\proj\core\src\math\vector.rs" },
+                },
+            ] },
+        });
+        assert!(reader.handle(&answer));
+        let state = states.try_iter().last().expect("a state");
+        let placed: Vec<_> = state
+            .breakpoints
+            .iter()
+            .map(|b| (b.file.as_str(), b.requested, b.line))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                ("core/src/math/vector.rs", Some(138), 139),
+                ("core/src/math/vector.rs", Some(144), 144),
+            ],
+        );
+        assert!(
+            reader.pending.lock().unwrap().is_empty(),
+            "an answered request waits for nothing",
+        );
+
+        // A refusal answers its request too.
+        reader.pending.lock().unwrap().insert(
+            8,
+            Asked {
+                file: "core/src/lib.rs".to_string(),
+                clicked: vec![3],
+            },
+        );
+        let refused = json!({
+            "seq": 13, "type": "response", "request_seq": 8, "success": false,
+            "command": "setBreakpoints", "message": "no such file",
+        });
+        reader.handle(&refused);
+        assert!(reader.pending.lock().unwrap().is_empty());
+    }
+}

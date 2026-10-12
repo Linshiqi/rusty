@@ -1,0 +1,138 @@
+use serde::Serialize;
+
+/// What a failed command sends back to the UI.
+///
+/// The cause chain is carried separately rather than flattened into one string:
+/// for a broken workspace the outer message is generic ("could not read the
+/// Cargo workspace") while cargo's own diagnostic — the actionable part — is
+/// two levels down. The UI shows the head and lets the user expand the rest.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandError {
+    pub message: String,
+    pub causes: Vec<String>,
+    /// A stable name for the failure, when the frontend can act on which
+    /// failure it was — `not-a-repository` is the one the Git panel answers
+    /// with an Initialize button. The message is prose; this is the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+impl CommandError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            causes: Vec::new(),
+            kind: None,
+        }
+    }
+
+    /// Nothing has been opened yet. Common on a cold start, not a bug.
+    pub fn no_project() -> Self {
+        Self::new(
+            "No project is open. Choose a folder with a Cargo.toml, a platformio.ini or a \
+             CMakeLists.txt.",
+        )
+    }
+
+    /// A project is open but `cargo metadata` did not succeed for it.
+    ///
+    /// Distinct from [`Self::no_project`] on purpose: a misconfigured embedded
+    /// project opens fine and diagnoses fine, but has no dependency graph, and
+    /// conflating the two would send the user to reopen a folder that is
+    /// already open.
+    pub fn no_workspace() -> Self {
+        Self::new(
+            "This project has no resolved Cargo workspace — `cargo metadata` did not \
+             succeed. Check the Project panel for what is wrong.",
+        )
+    }
+
+    /// The assistant's question was stopped before the model finished — by
+    /// the panel's Stop, or by a newer question taking its place. Not a fault;
+    /// the frontend tells it from one by the shared constant.
+    pub fn cancelled() -> Self {
+        Self::new(rusty_ipc::ai::STOPPED)
+    }
+
+    fn from_source(error: &dyn std::error::Error) -> Self {
+        let mut causes = Vec::new();
+        let mut current = error.source();
+        while let Some(cause) = current {
+            causes.push(cause.to_string());
+            current = cause.source();
+        }
+        Self {
+            message: error.to_string(),
+            causes,
+            kind: None,
+        }
+    }
+}
+
+impl From<rusty_core::Error> for CommandError {
+    fn from(error: rusty_core::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+impl From<rusty_ai::Error> for CommandError {
+    fn from(error: rusty_ai::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+impl From<tauri_plugin_updater::Error> for CommandError {
+    fn from(error: tauri_plugin_updater::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+impl From<rusty_embed::Error> for CommandError {
+    fn from(error: rusty_embed::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+impl From<rusty_term::Error> for CommandError {
+    fn from(error: rusty_term::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+impl From<rusty_edit::Error> for CommandError {
+    fn from(error: rusty_edit::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+impl From<rusty_lsp::Error> for CommandError {
+    fn from(error: rusty_lsp::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+/// gdb failing to start carries the OS error underneath — "could not start
+/// xtensa-esp-elf-gdb" is the head and "file not found" is the cause. Flattened
+/// with `to_string()`, as it was, the cause was lost at every call site.
+impl From<rusty_dbg::Error> for CommandError {
+    fn from(error: rusty_dbg::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+impl From<rusty_git::Error> for CommandError {
+    fn from(error: rusty_git::Error) -> Self {
+        let mut command = Self::from_source(&error);
+        if matches!(error, rusty_git::Error::NotARepository { .. }) {
+            command.kind = Some("not-a-repository".to_string());
+        }
+        command
+    }
+}
+
+impl From<serde_json::Error> for CommandError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::from_source(&error)
+    }
+}

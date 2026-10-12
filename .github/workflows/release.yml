@@ -1,0 +1,323 @@
+# Tag → installers for every desktop → one GitHub Release.
+#
+# Push `v0.2.0` and three runners build: Windows NSIS, macOS universal DMG
+# (Intel + Apple Silicon in one image), Ubuntu deb + AppImage — plus the
+# headless rusty-cli for each. A final job publishes everything on one
+# Release, with the body taken from CHANGELOG.md — never generated from the
+# commit log, which is written for whoever maintains this rather than for
+# whoever downloads it.
+#
+# Upgrades: with the Tauri updater keypair in the repo secrets
+# (TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD, made once with
+# `cargo tauri signer generate`), each build also emits signed updater
+# artifacts and the publish job merges them into latest.json — the feed the
+# in-app updater polls. Without the secrets the release still ships.
+#
+# Everything installs as prebuilt binaries (binstall): a cold `cargo install
+# trunk tauri-cli` would cost ten minutes per platform for nothing.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            cli: rusty-cli.exe
+            cli_asset: rusty-cli-windows-x86_64.exe
+            tauri_args: "--bundles nsis"
+          - os: macos-latest
+            cli: rusty-cli
+            cli_asset: rusty-cli-macos-universal
+            tauri_args: "--target universal-apple-darwin --bundles app,dmg"
+          - os: ubuntu-22.04
+            cli: rusty-cli
+            cli_asset: rusty-cli-linux-x86_64
+            tauri_args: "--bundles deb,appimage"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri's own list, plus the two this workbench adds. Named explicitly
+      # even where a runner image happens to ship them: a dependency that
+      # comes from whatever the image includes is a dependency nobody chose,
+      # and an apt package already present costs a line and no time.
+      #
+      # libudev-dev: `serialport` enumerates ports through udev on Linux, and
+      #   it is what carries the USB identity — the VID/PID rusty matches
+      #   against the board catalogue to say "Espressif native USB" rather
+      #   than "some COM port". Turning serialport's `libudev` feature off
+      #   would build without it and silently lose that.
+      # libdbus-1-dev: `libdbus-sys`, via tao, defaults to pkg-config.
+      - name: Linux system libraries (webkit2gtk and friends)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl \
+            wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev libudev-dev libdbus-1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: macOS second architecture (universal binary)
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      # Prebuilt or nothing, and the token is what makes that possible.
+      #
+      # binstall resolves a release through the GitHub API, and unauthenticated
+      # that is sixty requests an hour shared across every runner on the same
+      # egress — so it gets refused, falls back to `compile`, and spends ten
+      # minutes building trunk from source. That build then failed on macOS
+      # with a bare `exit status: 101`, which reads as "trunk is broken" rather
+      # than "the download was rate limited". `trunk-aarch64-apple-darwin.tar.gz`
+      # was there the whole time.
+      #
+      # `--disable-strategies compile` says the same thing the comment at the
+      # top of this file already claimed: prebuilt or nothing. A genuinely
+      # missing binary now fails here, immediately, naming the crate — instead
+      # of surfacing ten minutes later as somebody else's dependency error.
+      #
+      # Versions are pinned for the reason `Trunk.toml` pins tailwind: a tool
+      # taken from "whatever is latest" is not a version, and two releases cut
+      # a month apart would be built by different tools with nothing recording
+      # which. `tauri-cli` is a `~` requirement rather than an exact one — it
+      # has its own patch train (there is no `tauri-cli` 2.11.5 to match the
+      # `tauri` 2.11.5 in `crates/rusty-app/Cargo.toml`), and what has to
+      # match is the *minor*: a CLI from a different one bundles against a
+      # config schema it does not share.
+      - name: Install trunk and tauri-cli (prebuilt)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          cargo binstall --no-confirm
+          --disable-strategies compile
+          trunk@0.21.14 tauri-cli@~2.11
+
+      # The tools the installer ships beside the app: rusty's own QEMU — the
+      # one with the peripherals — both esp-gdbs, espflash and the LLDB
+      # adapter. That is the difference between a fresh install that is a
+      # workbench and one that cannot simulate, debug or flash until the user
+      # has found and fetched four things. Rust itself is deliberately not in
+      # there; the script says why.
+      #
+      # A tool with no build for this platform is said aloud and skipped, so
+      # this is a no-op rather than a failure on a desktop nothing publishes
+      # for. Through `bash`, not by executing the file: a script committed
+      # from a Windows checkout is mode 644, and macOS and Linux runners
+      # refuse to run it ("Permission denied", exit 126) — the first v0.6.12
+      # build.
+      - name: Bundle the tools the app drives
+        shell: bash
+        run: bash scripts/bundle-tools.sh
+
+      # The tag is the version. Stamping it here means a release is one
+      # gesture — the tag — not a version-bump commit plus a matching tag.
+      #
+      # Both files: tauri.conf.json is what the app and its updater call
+      # themselves, and the workspace manifest is `CARGO_PKG_VERSION` — what
+      # `rusty-cli --version` prints. Only the first was stamped for ten
+      # releases, so every CLI in that stretch reported 0.6.12.
+      - name: Stamp the tag's version into tauri.conf.json and Cargo.toml
+        shell: python
+        run: |
+          import json, os, re
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          path = "crates/rusty-app/tauri.conf.json"
+          conf = json.load(open(path, encoding="utf-8"))
+          conf["version"] = version
+          json.dump(conf, open(path, "w", encoding="utf-8"), indent=2)
+
+          manifest = open("Cargo.toml", encoding="utf-8").read()
+          head, sep, tail = manifest.partition("[workspace.package]")
+          assert sep, "Cargo.toml has no [workspace.package] table"
+          tail, count = re.subn(
+              r'^version = "[^"]*"', f'version = "{version}"', tail, count=1, flags=re.M
+          )
+          assert count == 1, "no version under [workspace.package]"
+          with open("Cargo.toml", "w", encoding="utf-8", newline="") as out:
+              out.write(head + sep + tail)
+
+      # The built-in shell as a console program of its own, among the bundled
+      # tools (`bundle.resources`), where the app looks for it first. Windows
+      # only, and not optional there: the app is a GUI-subsystem executable
+      # in a release build, a pseudoconsole hosts console programs only, and
+      # the app re-entered as the shell exited 0 having printed nothing —
+      # every installed terminal said "The shell exited with status 0." After
+      # the version stamp, so the app's build reuses what this one compiled.
+      - name: Build the built-in shell (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo build -p rusty-term --bin rusty-shell --release
+          mkdir -p crates/rusty-app/bundled
+          cp target/release/rusty-shell.exe crates/rusty-app/bundled/
+
+      - name: Build the app bundle
+        working-directory: crates/rusty-app
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # linuxdeploy strips every ELF it deploys into the AppImage, and the
+          # bundled QEMU binaries are sixty-megabyte ELFs it has no business
+          # rewriting; a strip that fails there fails the whole bundle.
+          NO_STRIP: "true"
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            cargo tauri build ${{ matrix.tauri_args }} \
+              --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            cargo tauri build ${{ matrix.tauri_args }}
+          fi
+
+      - name: Build the headless CLI
+        run: cargo build -p rusty-cli --release
+
+      # One staging directory per platform: the bundles, the renamed CLI,
+      # and — when the build signed — a feed fragment the publish job merges.
+      - name: Stage release assets
+        shell: python
+        run: |
+          import glob, json, os, shutil
+          os.makedirs("stage", exist_ok=True)
+          roots = ["target/release/bundle", "target/universal-apple-darwin/release/bundle"]
+          patterns = [
+              "nsis/*-setup.exe", "nsis/*.sig",
+              "dmg/*.dmg", "macos/*.app.tar.gz", "macos/*.app.tar.gz.sig",
+              "deb/*.deb", "appimage/*.AppImage", "appimage/*.AppImage.sig",
+          ]
+          for root in roots:
+              for pattern in patterns:
+                  for path in glob.glob(f"{root}/{pattern}"):
+                      shutil.copy(path, "stage/")
+          # Refuse rather than ship half a release. `bundle.targets` was
+          # once `["nsis"]`, which is Windows-only, so macOS and Linux built
+          # the app, bundled nothing, staged the CLI alone — and the run went
+          # green while two of three platforms had no installer at all. The
+          # upload's own `if-no-files-found` cannot catch that: the directory
+          # is not empty, it is just missing the only thing anyone downloads.
+          if not os.listdir("stage"):
+              raise SystemExit(
+                  "no installer produced on ${{ matrix.os }} — check --bundles"
+                  " against what this platform can actually build"
+              )
+          cli = glob.glob("target/release/${{ matrix.cli }}") \
+              + glob.glob("target/universal-apple-darwin/release/${{ matrix.cli }}")
+          shutil.copy(cli[0], "stage/${{ matrix.cli_asset }}")
+
+          # Feed fragment: platform key -> {signature, url}, if signed.
+          tag = os.environ["GITHUB_REF_NAME"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          url = lambda name: (
+              f"https://github.com/{repo}/releases/download/{tag}/{name}"
+          )
+          entries = {}
+          def feed(pattern, keys):
+              sigs = glob.glob(f"stage/{pattern}")
+              if not sigs:
+                  return
+              sig = open(sigs[0], encoding="utf-8").read()
+              artifact = os.path.basename(sigs[0])[: -len(".sig")]
+              for key in keys:
+                  entries[key] = {"signature": sig, "url": url(artifact)}
+          feed("*-setup.exe.sig", ["windows-x86_64"])
+          feed("*.app.tar.gz.sig", ["darwin-x86_64", "darwin-aarch64"])
+          feed("*.AppImage.sig", ["linux-x86_64"])
+          if entries:
+              json.dump(entries, open("stage/feed-${{ matrix.os }}.json", "w"))
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}
+          path: stage/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      # Into `source/`, because `assets/` is the upload set and everything in
+      # it is attached to the release — a checkout beside it would ship the
+      # whole tree as a release asset.
+      - uses: actions/checkout@v4
+        with:
+          path: source
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      # The body users read. Taken from CHANGELOG.md, never generated.
+      #
+      # `generate_release_notes: true` builds the body from the commits
+      # between tags — and those commits are in a *private* repository whose
+      # messages describe internals in detail. Publishing them into a public
+      # release would put the whole history where the source deliberately is
+      # not. Anything users should read is written for them by hand.
+      #
+      # Written to a file beside the assets rather than a step output: the
+      # feed below carries the same text as its `notes`, which is what the
+      # app's update sheet shows, so the release page and the sheet cannot
+      # say two different things.
+      - name: The section of CHANGELOG.md for this tag
+        shell: python
+        run: |
+          import os, re
+          tag = os.environ["GITHUB_REF_NAME"]
+          try:
+              text = open("source/CHANGELOG.md", encoding="utf-8").read()
+          except FileNotFoundError:
+              text = ""
+          # Everything under `## <tag>` up to the next `## `.
+          found = re.search(
+              rf"^## +{re.escape(tag)}\b(.*?)(?=^## |\Z)", text, re.S | re.M
+          )
+          body = (found.group(1).strip() if found else
+                  "Installers for Windows, macOS and Linux are attached below.")
+          open("release-notes.md", "w", encoding="utf-8").write(body + "\n")
+
+      # latest.json: every platform's signed entry in one feed, with the
+      # notes the sheet shows before anyone downloads.
+      - name: Merge the updater feed
+        shell: python
+        run: |
+          import datetime, glob, json, os
+          platforms = {}
+          for fragment in glob.glob("assets/feed-*.json"):
+              platforms.update(json.load(open(fragment)))
+              os.remove(fragment)
+          if platforms:
+              feed = {
+                  "version": os.environ["GITHUB_REF_NAME"].lstrip("v"),
+                  "notes": open("release-notes.md", encoding="utf-8").read().strip(),
+                  "pub_date": datetime.datetime.now(datetime.timezone.utc)
+                      .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "platforms": platforms,
+              }
+              json.dump(feed, open("assets/latest.json", "w"), indent=2)
+
+      # Published here. It was a second, public repository while the source
+      # was private — GITHUB_TOKEN cannot cross repositories, so that needed a
+      # PAT — and going public collapsed the two back into one.
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: false
+          body_path: release-notes.md
+          files: assets/*

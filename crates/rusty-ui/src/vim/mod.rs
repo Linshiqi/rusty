@@ -1,0 +1,799 @@
+//! Modal editing, as a state machine with no DOM in it.
+//!
+//! Everything here is a pure function of `(keys, text, cursor)`. The editor
+//! reads [`Step`] and does the three things a browser makes it do — set
+//! `value`, set the selection, call `preventDefault` — and nothing else. That
+//! split is the whole reason this is testable: the board canvas got its
+//! arithmetic wrong three times while none of it was reachable from a test,
+//! and modal editing is far more arithmetic than the canvas ever was.
+//!
+//! **Indices are Unicode scalars, not UTF-16 code units.** The textarea counts
+//! selections in UTF-16 and the conversion happens at the boundary, exactly as
+//! the LSP client converts there — a `中` in a buffer must not shift every
+//! motion after it.
+//!
+//! What is deliberately absent: windows (`Ctrl+W`), the Ex language beyond a
+//! handful of commands, and macros. A sequence this does not know is *named*
+//! in the status line rather than silently swallowed — half a Vim that eats
+//! keys is worse than one that admits the gap.
+
+use std::fmt::Write as _;
+
+pub mod motion;
+pub mod object;
+mod parse;
+#[cfg(test)]
+mod tests;
+
+use motion::{Motion, Span};
+use parse::*;
+
+/// Which keys mean what right now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Mode {
+    /// Keys are commands. The cursor sits *on* a character.
+    #[default]
+    Normal,
+    /// Keys are text. The editor behaves as it does with Vim off, so every
+    /// shortcut anyone already learned keeps working.
+    Insert,
+    Visual,
+    VisualLine,
+}
+
+impl Mode {
+    /// What the status line shows. Vim's own words, because a Vim user reads
+    /// them without thinking.
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Normal => "NORMAL",
+            Mode::Insert => "INSERT",
+            Mode::Visual => "VISUAL",
+            Mode::VisualLine => "V-LINE",
+        }
+    }
+
+    pub fn is_visual(self) -> bool {
+        matches!(self, Mode::Visual | Mode::VisualLine)
+    }
+}
+
+/// One key, as the browser reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Key {
+    /// `KeyboardEvent.key`: a character like `a`, or a name like `Escape`.
+    /// Shift is already baked in — the browser sends `A`, not shift+`a`.
+    pub key: String,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+impl Key {
+    pub fn new(key: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            ctrl: false,
+            alt: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn ctrl(key: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            ctrl: true,
+            alt: false,
+        }
+    }
+
+    /// The single character this key types, if it types one.
+    fn char(&self) -> Option<char> {
+        let mut chars = self.key.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Some(c),
+            _ => None,
+        }
+    }
+}
+
+/// What the editor should do with the key.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Step {
+    /// True when Vim took the key: the editor calls `preventDefault` *and*
+    /// `stopPropagation`, so the global shortcuts never see it. False is the
+    /// path that keeps Ctrl+S, the palette and the clipboard working.
+    pub handled: bool,
+    /// The new buffer, when this step changed it.
+    pub text: Option<String>,
+    /// Where the cursor belongs afterwards, in scalars.
+    pub cursor: usize,
+    /// What to select, for visual mode and for the block cursor. `None` means
+    /// a plain caret.
+    pub selection: Option<(usize, usize)>,
+    /// Close the undo unit before applying. Vim's granularity is one command,
+    /// not one burst of typing: `ciwfoo<Esc>` undoes in a single press.
+    pub seal: bool,
+    /// A request the editor answers because Vim cannot — saving, closing,
+    /// searching. Keeps this module free of everything but text.
+    pub ask: Option<Ask>,
+}
+
+/// The few things a command means outside the buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    Save,
+    Close,
+    SaveAndClose,
+    Undo,
+    Redo,
+    /// `/` and `?` — the editor's own find bar, rather than a second search
+    /// implementation that would drift from it.
+    Search {
+        backwards: bool,
+    },
+    SearchNext,
+    SearchPrevious,
+    /// Half a screen, which only the editor knows the height of.
+    Scroll {
+        down: bool,
+    },
+    /// `Ctrl+O` / `Ctrl+I`, answered by the editor's navigation history.
+    Jump {
+        back: bool,
+    },
+    /// `*` and `#`: search for the word under the cursor. The editor pulls
+    /// the word out, because it is already the thing holding the caret.
+    SearchWord {
+        backwards: bool,
+    },
+    /// `zz` `zt` `zb` — only the editor knows how tall the view is.
+    Centre {
+        at: View,
+    },
+    /// `:s/…` — the replace bar that already exists, rather than a second
+    /// substitution engine that would disagree with it about escaping.
+    Replace,
+    /// `gc` and `gcc`, over the lines a motion covered. Comment syntax is
+    /// the document's language, which the editor knows and this does not.
+    Comment {
+        from: usize,
+        to: usize,
+    },
+}
+
+/// Where `zz`, `zt` and `zb` put the cursor's line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Middle,
+    Top,
+    Bottom,
+}
+
+/// A yanked or deleted span, and whether it was whole lines.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Register {
+    text: String,
+    linewise: bool,
+}
+
+/// The editor's modal state, one per open document.
+#[derive(Clone, Debug, Default)]
+pub struct Vim {
+    pub mode: Mode,
+    /// Keys typed toward a command that is not finished. Shown in the status
+    /// line, the way Vim shows a half-typed `2d`.
+    pub pending: String,
+    /// The last sequence this does not implement, for the status line to
+    /// name. Cleared by the next key that parses.
+    pub rejected: Option<String>,
+    /// Where visual mode started, in scalars.
+    anchor: usize,
+    register: Register,
+    /// The keys of the last buffer-changing command, replayed by `.`.
+    last_change: Option<String>,
+    /// True while `.` is replaying, so the replay does not record itself.
+    replaying: bool,
+    /// The last `f`/`t` search, replayed by `;` and `,`.
+    last_find: Option<(char, char)>,
+    /// The column `j` and `k` are aiming for, in characters from the line's
+    /// start — Vim's `curswant`. Kept across a line too short to reach it,
+    /// so `j` over a blank line comes back to the column it left, and
+    /// forgotten by anything else that moves the cursor.
+    want_col: Option<usize>,
+    /// Where this machine last put the cursor. A cursor that arrives
+    /// anywhere else was moved by something else — a click, typing in
+    /// insert mode, a find — and the column memory belongs to a place it has
+    /// left.
+    placed: Option<usize>,
+}
+
+impl Vim {
+    /// Feed one key. The only entry point.
+    ///
+    /// Returns [`Step::handled`] false for anything Vim does not want, which
+    /// is how Ctrl+S, the command palette and the clipboard keep working
+    /// while Vim is on.
+    pub fn feed(&mut self, key: &Key, text: &str, cursor: usize) -> Step {
+        let cursor = cursor.min(text.chars().count());
+        if self.placed != Some(cursor) {
+            self.want_col = None;
+        }
+        let step = self.feed_key(key, text, cursor);
+        self.placed = Some(step.cursor);
+        step
+    }
+
+    fn feed_key(&mut self, key: &Key, text: &str, cursor: usize) -> Step {
+        // Insert mode claims almost nothing on purpose. Anyone who turned
+        // Vim on still has completion, quick fixes, save and the palette
+        // exactly where they were.
+        if self.mode == Mode::Insert {
+            return self.insert_key(key, text, cursor);
+        }
+
+        if let Some(step) = self.control_key(key, text, cursor) {
+            return step;
+        }
+        // Any other chord belongs to the editor and to the globals: Ctrl+S
+        // saves, Ctrl+K opens the palette, Ctrl+A selects all. Vim's own
+        // versions of those are unmodified keys, which cost nothing to reach.
+        if key.ctrl || key.alt {
+            return self.pass(cursor);
+        }
+
+        match key.key.as_str() {
+            "Escape" => {
+                self.pending.clear();
+                self.rejected = None;
+                if self.mode.is_visual() {
+                    self.mode = Mode::Normal;
+                }
+                return self.consumed(text, cursor);
+            }
+            // Motions arrive as arrows too — a Vim user who reaches for one
+            // should not fall out of the model.
+            "ArrowLeft" => return self.run_motion(Motion::Left, 1, text, cursor),
+            "ArrowRight" => return self.run_motion(Motion::Right, 1, text, cursor),
+            "ArrowUp" => return self.run_motion(Motion::Up, 1, text, cursor),
+            "ArrowDown" => return self.run_motion(Motion::Down, 1, text, cursor),
+            "Enter" => {
+                // A colon line is finished by Enter, not by its own length —
+                // `:w` and `:wq` are prefixes of each other.
+                if let Some(ex) = self.pending.strip_prefix(':') {
+                    let ask = match ex {
+                        _ if ex.starts_with("s/") || ex.starts_with("%s/") => Some(Ask::Replace),
+                        "w" => Some(Ask::Save),
+                        "q" | "q!" => Some(Ask::Close),
+                        "wq" | "x" => Some(Ask::SaveAndClose),
+                        _ => None,
+                    };
+                    let unknown = ex.to_string();
+                    self.pending.clear();
+                    let mut step = self.consumed(text, cursor);
+                    match ask {
+                        Some(ask) => step.ask = Some(ask),
+                        None => self.rejected = Some(format!(":{unknown}")),
+                    }
+                    return step;
+                }
+                return self.run_motion(Motion::Down, 1, text, cursor);
+            }
+            "Backspace" => return self.run_motion(Motion::Left, 1, text, cursor),
+            _ => {}
+        }
+
+        let Some(character) = key.char() else {
+            // A named key with no meaning here — F-keys, Home, Tab. Left to
+            // the editor rather than eaten.
+            return self.pass(cursor);
+        };
+
+        // `iw`, `a(`, `i"` in visual mode select the object, as Vim's do.
+        // The grammar reads a bare `i` and `a` as insert and append, so
+        // `viw` left visual mode and typed a `w` into the file. A count in
+        // front is dropped rather than read as one: `v2i` is not something
+        // this selects twice.
+        if self.mode.is_visual() {
+            if matches!(character, 'i' | 'a') && self.pending.chars().all(|c| c.is_ascii_digit()) {
+                self.pending = character.to_string();
+                self.rejected = None;
+                return self.consumed(text, cursor);
+            }
+            let inside = match self.pending.as_str() {
+                "i" => Some(true),
+                "a" => Some(false),
+                _ => None,
+            };
+            if let Some(inside) = inside {
+                self.pending.clear();
+                return self.select_object(inside, character, text, cursor);
+            }
+        }
+
+        // In visual mode an operator acts on the selection at once. Routing
+        // it through the operator grammar would leave `vlld` waiting for a
+        // motion that is never coming, and the key would look ignored.
+        if self.mode.is_visual()
+            && self.pending.is_empty()
+            && let Some(command) = visual_command(character)
+        {
+            return self.run(command, text, cursor);
+        }
+
+        self.pending.push(character);
+        if self.pending.starts_with(':') {
+            // Collecting an Ex line: no key means anything until Enter.
+            self.rejected = None;
+            return self.consumed(text, cursor);
+        }
+        let pending = self.pending.clone();
+        match parse(&pending) {
+            Parsed::Incomplete => {
+                self.rejected = None;
+                self.consumed(text, cursor)
+            }
+            Parsed::Unknown => {
+                // Named, not swallowed. A key that vanishes teaches people the
+                // editor is broken; a key that says "no such command" teaches
+                // them the command.
+                self.rejected = Some(pending);
+                self.pending.clear();
+                self.consumed(text, cursor)
+            }
+            Parsed::Command(command) => {
+                self.pending.clear();
+                self.rejected = None;
+                let changes = command.changes_buffer();
+                let step = self.run(command, text, cursor);
+                if changes && !self.replaying {
+                    self.last_change = Some(pending);
+                }
+                step
+            }
+        }
+    }
+
+    /// Insert mode: only the keys that leave it, or that Vim adds.
+    fn insert_key(&mut self, key: &Key, text: &str, cursor: usize) -> Step {
+        if key.key == "Escape" && !key.ctrl && !key.alt {
+            self.mode = Mode::Normal;
+            // Vim steps left on the way out, so the cursor lands on the last
+            // character typed rather than past it.
+            let cursor = motion::left(text, cursor, 1);
+            let mut step = self.consumed(text, cursor);
+            step.seal = true;
+            return step;
+        }
+        self.pass(cursor)
+    }
+
+    /// The short, explicit list of chords Vim takes.
+    ///
+    /// Everything absent from it stays with the editor and the global
+    /// bindings — which is why Ctrl+A still selects all and Ctrl+C still
+    /// copies. Vim's own increment and its "leave insert mode" are the two
+    /// this deliberately gives up; `Esc` and `ggVG` cost nothing.
+    fn control_key(&mut self, key: &Key, text: &str, cursor: usize) -> Option<Step> {
+        if !key.ctrl || key.alt {
+            return None;
+        }
+        let ask = match key.key.to_ascii_lowercase().as_str() {
+            "r" => Ask::Redo,
+            "o" => Ask::Jump { back: true },
+            "i" => Ask::Jump { back: false },
+            "d" => Ask::Scroll { down: true },
+            "u" => Ask::Scroll { down: false },
+            _ => return None,
+        };
+        let mut step = self.consumed(text, cursor);
+        step.ask = Some(ask);
+        Some(step)
+    }
+
+    fn run(&mut self, command: Command, text: &str, cursor: usize) -> Step {
+        match command {
+            Command::Move(motion, count) => self.run_motion(motion, count, text, cursor),
+            Command::Operate { op, target, count } => {
+                self.want_col = None;
+                self.operate(op, target, count, text, cursor)
+            }
+            Command::Simple(simple, count) => {
+                self.want_col = None;
+                self.simple(simple, count, text, cursor)
+            }
+        }
+    }
+
+    fn run_motion(&mut self, motion: Motion, count: usize, text: &str, cursor: usize) -> Step {
+        let Some(span) = motion::apply(motion, text, cursor, count, &self.last_find) else {
+            return self.consumed(text, cursor);
+        };
+        if let Motion::Find { key, target } = motion {
+            self.last_find = Some((key, target));
+        }
+        if !matches!(motion, Motion::Up | Motion::Down) {
+            self.want_col = None;
+            // `span.cursor`, never `span.end`: for an inclusive motion like
+            // `e` the operator range runs one past the character the cursor
+            // lands on, and using the range here puts the cursor off the end
+            // of every word.
+            return self.consumed(text, span.cursor);
+        }
+        // The column wanted, not the one a short line clamped it to.
+        let column = *self
+            .want_col
+            .get_or_insert_with(|| cursor - motion::line_start(text, cursor));
+        let start = motion::line_start(text, span.cursor);
+        let end = motion::line_end(text, span.cursor);
+        self.consumed(text, (start + column).min(end))
+    }
+
+    /// `iw`, `a(` and the rest, in visual mode: the selection becomes the
+    /// object, through the same `object::apply` `diw` uses, so the two
+    /// cannot disagree about what a word is. An object the cursor is not in
+    /// — `i(` with no parentheses around it — leaves the selection as it
+    /// was, as Vim does; a key that is no object is named.
+    fn select_object(&mut self, inside: bool, key: char, text: &str, cursor: usize) -> Step {
+        let Some(object) = object::of(inside, key) else {
+            self.rejected = Some(format!("{}{key}", if inside { 'i' } else { 'a' }));
+            return self.consumed(text, cursor);
+        };
+        let Some(span) = object::apply(object, text, cursor).filter(|span| span.end > span.start)
+        else {
+            return self.consumed(text, cursor);
+        };
+        self.mode = if span.linewise {
+            Mode::VisualLine
+        } else {
+            Mode::Visual
+        };
+        self.anchor = span.start;
+        self.consumed(text, span.end - 1)
+    }
+
+    fn operate(&mut self, op: Op, target: Target, count: usize, text: &str, cursor: usize) -> Step {
+        // `cw` is `ce`, which is Vim's one deliberate inconsistency and one
+        // every user relies on: changing a word must not eat the space after
+        // it, or every rename needs a space typed back.
+        let target = match (op, target) {
+            (Op::Change, Target::Motion(Motion::WordForward)) if !on_blank(text, cursor) => {
+                Target::Motion(Motion::WordEnd)
+            }
+            (Op::Change, Target::Motion(Motion::BigWordForward)) if !on_blank(text, cursor) => {
+                Target::Motion(Motion::WordEnd)
+            }
+            (_, target) => target,
+        };
+
+        let range = match target {
+            Target::Motion(motion) => {
+                let Some(span) = motion::apply(motion, text, cursor, count, &self.last_find) else {
+                    return self.consumed(text, cursor);
+                };
+                if let Motion::Find { key, target } = motion {
+                    self.last_find = Some((key, target));
+                }
+                span
+            }
+            Target::Line => motion::whole_lines(text, cursor, count),
+            Target::Object(object) => {
+                let Some(span) = object::apply(object, text, cursor) else {
+                    return self.consumed(text, cursor);
+                };
+                span
+            }
+            Target::Selection => {
+                let (from, to) = self.visual_range(text, cursor);
+                Span {
+                    start: from,
+                    end: to,
+                    cursor: from,
+                    linewise: self.mode == Mode::VisualLine,
+                }
+            }
+        };
+        let (start, end) = (range.start.min(range.end), range.start.max(range.end));
+        let taken: String = text.chars().skip(start).take(end - start).collect();
+        self.register = Register {
+            text: taken,
+            linewise: range.linewise,
+        };
+
+        if self.mode.is_visual() {
+            self.mode = Mode::Normal;
+        }
+
+        // Indent and comment act on whole lines however they were reached:
+        // `>j` shifts both lines, not the characters between the two carets.
+        if matches!(op, Op::Indent | Op::Outdent | Op::Comment) {
+            let first = motion::line_start(text, start);
+            let last = motion::line_end(
+                text,
+                end.max(start)
+                    .saturating_sub(usize::from(range.linewise && end > start)),
+            );
+            return match op {
+                Op::Comment => {
+                    let mut step = self.consumed(text, start);
+                    step.ask = Some(Ask::Comment {
+                        from: first,
+                        to: last,
+                    });
+                    step.seal = true;
+                    step
+                }
+                _ => {
+                    let out = shift(text, first, last, op == Op::Indent);
+                    let at = motion::line_first_word(&out, first.min(out.chars().count()));
+                    let mut step = self.consumed(&out, at);
+                    step.text = Some(out);
+                    step.seal = true;
+                    step
+                }
+            };
+        }
+
+        match op {
+            Op::Yank => {
+                // Yank leaves the buffer alone and parks the cursor at the
+                // start of what it took, as Vim does.
+                self.consumed(text, start)
+            }
+            // Handled above; the compiler needs the arm.
+            Op::Indent | Op::Outdent | Op::Comment => self.consumed(text, start),
+            Op::Delete | Op::Change => {
+                let mut out: String = text.chars().take(start).collect();
+                out.extend(text.chars().skip(end));
+                if op == Op::Change {
+                    self.mode = Mode::Insert;
+                }
+                let mut step = self.consumed(&out, start);
+                step.text = Some(out);
+                step.seal = true;
+                step
+            }
+        }
+    }
+
+    fn simple(&mut self, simple: Simple, count: usize, text: &str, cursor: usize) -> Step {
+        match simple {
+            Simple::Insert => self.enter_insert(text, cursor),
+            Simple::InsertLineStart => {
+                let at = motion::line_first_word(text, cursor);
+                self.enter_insert(text, at)
+            }
+            Simple::Append => {
+                let at = motion::right_for_append(text, cursor);
+                self.enter_insert(text, at)
+            }
+            Simple::AppendLineEnd => {
+                let at = motion::line_end(text, cursor);
+                self.enter_insert(text, at)
+            }
+            Simple::OpenBelow => {
+                let at = motion::line_end(text, cursor);
+                let mut out: String = text.chars().take(at).collect();
+                out.push('\n');
+                out.extend(text.chars().skip(at));
+                let mut step = self.enter_insert(&out, at + 1);
+                step.text = Some(out);
+                step.seal = true;
+                step
+            }
+            Simple::OpenAbove => {
+                let at = motion::line_start(text, cursor);
+                let mut out: String = text.chars().take(at).collect();
+                out.push('\n');
+                out.extend(text.chars().skip(at));
+                let mut step = self.enter_insert(&out, at);
+                step.text = Some(out);
+                step.seal = true;
+                step
+            }
+            Simple::DeleteChar => {
+                let end = (cursor + count).min(motion::line_end(text, cursor));
+                if end <= cursor {
+                    return self.consumed(text, cursor);
+                }
+                self.register = Register {
+                    text: text.chars().skip(cursor).take(end - cursor).collect(),
+                    linewise: false,
+                };
+                let mut out: String = text.chars().take(cursor).collect();
+                out.extend(text.chars().skip(end));
+                let at = cursor.min(motion::last_column(&out, cursor));
+                let mut step = self.consumed(&out, at);
+                step.text = Some(out);
+                step.seal = true;
+                step
+            }
+            Simple::Paste { after } => self.paste(after, count, text, cursor),
+            Simple::Visual => {
+                self.mode = if self.mode == Mode::Visual {
+                    Mode::Normal
+                } else {
+                    self.anchor = cursor;
+                    Mode::Visual
+                };
+                self.consumed(text, cursor)
+            }
+            Simple::VisualLine => {
+                self.mode = if self.mode == Mode::VisualLine {
+                    Mode::Normal
+                } else {
+                    self.anchor = cursor;
+                    Mode::VisualLine
+                };
+                self.consumed(text, cursor)
+            }
+            Simple::Replace(with) => {
+                let end = motion::line_end(text, cursor);
+                if cursor >= end {
+                    return self.consumed(text, cursor);
+                }
+                let mut out: String = text.chars().take(cursor).collect();
+                out.push(with);
+                out.extend(text.chars().skip(cursor + 1));
+                let mut step = self.consumed(&out, cursor);
+                step.text = Some(out);
+                step.seal = true;
+                step
+            }
+            Simple::JoinLines => {
+                let Some(out) = motion::join(text, cursor, count.max(2)) else {
+                    return self.consumed(text, cursor);
+                };
+                let at = motion::line_end(text, cursor).min(out.chars().count());
+                let mut step = self.consumed(&out, at);
+                step.text = Some(out);
+                step.seal = true;
+                step
+            }
+            Simple::Ask(ask) => {
+                let mut step = self.consumed(text, cursor);
+                step.ask = Some(ask);
+                step
+            }
+            Simple::Repeat => {
+                let Some(keys) = self.last_change.clone() else {
+                    return self.consumed(text, cursor);
+                };
+                self.replaying = true;
+                let mut text = text.to_string();
+                let mut at = cursor;
+                let mut last = self.consumed(&text, at);
+                for character in keys.chars() {
+                    let step = self.feed(&Key::new(&character.to_string()), &text, at);
+                    if let Some(next) = step.text.clone() {
+                        text = next;
+                    }
+                    at = step.cursor;
+                    last = step;
+                }
+                self.replaying = false;
+                // A repeat that ended in insert mode has to come back out —
+                // `.` replays the change, not the typing that followed it.
+                if self.mode == Mode::Insert {
+                    self.mode = Mode::Normal;
+                }
+                last.text = Some(text);
+                last.cursor = at;
+                last.seal = true;
+                last
+            }
+        }
+    }
+
+    fn paste(&mut self, after: bool, count: usize, text: &str, cursor: usize) -> Step {
+        if self.register.text.is_empty() {
+            return self.consumed(text, cursor);
+        }
+        let payload = self.register.text.repeat(count);
+        // A linewise put lands on its own line. Pasting below the *last*
+        // line, which has no newline after it, has to open one first — or
+        // `ddp` at the end of a buffer smears the line onto the one above.
+        let mut opener = String::new();
+        let (at, cursor_after) = if self.register.linewise {
+            let at = if after {
+                let end = motion::line_end(text, cursor);
+                if end >= text.chars().count() {
+                    opener.push('\n');
+                    end
+                } else {
+                    end + 1
+                }
+            } else {
+                motion::line_start(text, cursor)
+            };
+            (at, at + opener.chars().count())
+        } else if after {
+            let at = motion::right_for_append(text, cursor);
+            (at, at + payload.chars().count() - 1)
+        } else {
+            (cursor, cursor + payload.chars().count() - 1)
+        };
+        let mut out: String = text.chars().take(at).collect();
+        out.push_str(&opener);
+        out.push_str(&payload);
+        // A linewise register pasted at the end of a buffer with no trailing
+        // newline needs one, or the paste lands on the last line instead of
+        // below it.
+        if self.register.linewise && !payload.ends_with('\n') {
+            out.push('\n');
+        }
+        out.extend(text.chars().skip(at));
+        let mut step = self.consumed(&out, cursor_after.min(out.chars().count()));
+        step.text = Some(out);
+        step.seal = true;
+        step
+    }
+
+    fn enter_insert(&mut self, text: &str, cursor: usize) -> Step {
+        self.mode = Mode::Insert;
+        let mut step = self.consumed(text, cursor);
+        step.seal = true;
+        step
+    }
+
+    /// Visual mode's span, ordered, with the anchor's character included —
+    /// Vim selects *through* the character under the cursor.
+    fn visual_range(&self, text: &str, cursor: usize) -> (usize, usize) {
+        let (from, to) = if self.anchor <= cursor {
+            (self.anchor, cursor)
+        } else {
+            (cursor, self.anchor)
+        };
+        if self.mode == Mode::VisualLine {
+            let start = motion::line_start(text, from);
+            let end = (motion::line_end(text, to) + 1).min(text.chars().count());
+            (start, end)
+        } else {
+            (from, (to + 1).min(text.chars().count()))
+        }
+    }
+
+    fn consumed(&self, text: &str, cursor: usize) -> Step {
+        Step {
+            handled: true,
+            text: None,
+            cursor,
+            selection: self.selection(text, cursor),
+            seal: false,
+            ask: None,
+        }
+    }
+
+    fn pass(&self, cursor: usize) -> Step {
+        Step {
+            handled: false,
+            cursor,
+            ..Step::default()
+        }
+    }
+
+    /// What the editor should select: the visual range, or nothing.
+    fn selection(&self, text: &str, cursor: usize) -> Option<(usize, usize)> {
+        match self.mode {
+            Mode::Insert => None,
+            Mode::Visual | Mode::VisualLine => Some(self.visual_range(text, cursor)),
+            // Normal mode has no selection: the block is drawn by the editor
+            // where the caret is. Selecting the character instead was the
+            // first design, and it could not put a cursor on an empty line —
+            // there is nothing there to select — so a blank line showed no
+            // cursor at all. And a selection is what copy and cut act on.
+            Mode::Normal => None,
+        }
+    }
+
+    /// The status line's right-hand side: the half-typed command, or the one
+    /// this does not know.
+    pub fn hint(&self) -> String {
+        let mut out = String::new();
+        if let Some(rejected) = &self.rejected {
+            let _ = write!(out, "no command `{rejected}`");
+        } else {
+            out.push_str(&self.pending);
+        }
+        out
+    }
+}

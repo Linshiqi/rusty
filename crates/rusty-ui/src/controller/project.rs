@@ -1,0 +1,518 @@
+//! Opening a project, and everything that follows from it.
+//!
+//! One place decides what "open" means — detection, the Cargo analysis, the
+//! catalogue, the tab strip — because the picker path and the recents path
+//! both go through it, and drifting apart is how one of them forgets a step.
+
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+
+use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
+use rusty_embed::{
+    Board, Chip, EmbeddedProject, Firmware, LogLevel, LogLine, LogStream, MemoryReport, Migration,
+    ToolchainReport,
+};
+use rusty_i18n::t;
+
+// The sibling modules, flat: `controller` re-exports every one of them,
+// so a call between two of them reads the same as a call from a view.
+use super::*;
+use crate::{
+    ipc::{self, cmd},
+    state::AppState,
+};
+
+pub fn load_catalog(state: AppState) {
+    track(
+        state,
+        ipc::get::<Vec<Chip>>(cmd::catalog::CHIPS),
+        move |chips| state.project.chips.set(chips),
+    );
+    track(
+        state,
+        ipc::get::<Vec<Board>>(cmd::catalog::BOARDS),
+        move |boards| state.project.boards.set(boards),
+    );
+}
+
+pub fn load_recents(state: AppState) {
+    spawn_local(async move {
+        if let Ok(list) = ipc::get::<Vec<String>>(cmd::workbench::RECENTS).await {
+            state.app.recents.set(list);
+        }
+    });
+}
+
+/// Open a project from the recents list.
+///
+/// `announce` decides what failure looks like. Clicked by a human: a banner.
+/// Tried automatically at launch: a log line — a red banner as the first thing
+/// every morning because a folder moved would train people to ignore banners —
+/// and either way the stale entry is forgotten so it stops being offered.
+pub fn open_recent(state: AppState, path: String, announce: bool) {
+    #[derive(serde::Serialize)]
+    struct Forget {
+        path: String,
+    }
+
+    let args = PathArg { path: path.clone() };
+    spawn_local(async move {
+        match ipc::call::<_, OpenResult>(cmd::project::OPEN, &args).await {
+            Ok(result) => {
+                project_opened(state, result);
+                load_recents(state);
+            }
+            Err(error) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: t!("misc.reopen-failed", path = path, reason = error.message),
+                    level: Some(LogLevel::Warn),
+                });
+                let _ = ipc::call::<_, ()>(
+                    cmd::workbench::FORGET_RECENT,
+                    &Forget { path: path.clone() },
+                )
+                .await;
+                load_recents(state);
+                if announce {
+                    state.app.error.set(Some(error));
+                }
+            }
+        }
+    });
+}
+
+/// Ask the OS for a folder, then open it.
+///
+/// Cancelling is not a failure and must not surface as one — which is why this
+/// does not go through `track`.
+pub fn choose_project(state: AppState) {
+    spawn_local(async move {
+        match ipc::pick_folder(&t!("misc.pick-project")).await {
+            Ok(Some(path)) => open_project(state, path),
+            Ok(None) => {}
+            Err(e) => state.app.error.set(Some(e)),
+        }
+    });
+}
+
+/// Open a folder as the project.
+pub fn open_project(state: AppState, path: String) {
+    open_project_then(state, path, || {});
+}
+
+/// [`open_project`], then `then` once it is open — how a playground kept as
+/// a project stays laid out the way it was being worked on.
+pub fn open_project_then(state: AppState, path: String, then: impl FnOnce() + 'static) {
+    // Bound rather than passed as a temporary: the future outlives this
+    // statement, so a borrow of an inline struct literal would dangle.
+    let args = PathArg { path };
+    track(
+        state,
+        async move { ipc::call::<_, OpenResult>(cmd::project::OPEN, &args).await },
+        move |result| {
+            project_opened(state, result);
+            load_recents(state);
+            then();
+        },
+    );
+}
+
+/// Everything that follows a successful open, shared by the picker path, the
+/// recents path and the playground's so none of them can drift apart.
+pub(super) fn project_opened(state: AppState, result: OpenResult) {
+    {
+        {
+            let was_playground = state.playground_now().is_some();
+            let playground = result.project.playground.clone();
+            state.project.detected.set(Some(result.project));
+            // A playground is code beside its board, Wokwi's shape, and
+            // opens on its code; leaving one puts the board back where it
+            // was. Between two ordinary projects the board stays as it was
+            // set — anybody may put it beside their code.
+            if let Some(playground) = &playground {
+                // The drawing playground has no board: what it draws is
+                // in the Draw tab below the code.
+                state
+                    .layout
+                    .board_beside
+                    .set(rusty_embed::playground_has_board(playground));
+                state.layout.panel.set("files".to_string());
+            } else if was_playground {
+                state.layout.board_beside.set(false);
+            }
+            // The last project's analysis describes packages that are not
+            // there; dropped before the new one is asked for, so no panel
+            // shows the old numbers while the answer is in flight.
+            state.project.workspace.set(None);
+            // Another project's binary is worse than none — it would be analysed
+            // against this project's chip and report plausible nonsense.
+            state.project.selected_firmware.set(None);
+            state.project.memory.set(None);
+            // Both groups, and the split itself: a second group still
+            // showing the last project's file beside this project's tree is
+            // exactly the wrong-window mistake the rest of this block exists
+            // to prevent.
+            for group in [
+                state.group(crate::state::Group::First),
+                state.group(crate::state::Group::Second),
+            ] {
+                reset_group(group);
+            }
+            state.layout.split.set(false);
+            state.layout.focus.set(crate::state::Group::First);
+            state.search.query.set(String::new());
+            state.search.results.set(None);
+            state.search.word.set(false);
+            state.search.regex.set(false);
+            state.search.include.set(String::new());
+            state.search.exclude.set(String::new());
+            state.editor.tree.set(Vec::new());
+            state.editor.expanded.set(Vec::new());
+            state.lsp.diagnostics.set(std::collections::HashMap::new());
+            // The selection names a member of the *previous* workspace, so
+            // keeping it would ask the backend to resolve features for a package
+            // that is not there.
+            state.project.feature_selection.set(None);
+            state.project.feature_rows.set(Vec::new());
+            state.project.feature_impact.set(None);
+            // The toolchain verdict depends on which chip was just detected, so
+            // it has to follow rather than run alongside.
+            refresh_toolchain(state);
+            refresh_firmware(state);
+            refresh_workspace(state);
+            refresh_tree(state);
+            start_lsp(state);
+            start_watch(state);
+            // The title bar's Run and Debug read the plan on every panel, so
+            // it is asked for here rather than when the Simulate panel first
+            // mounts — and the last project's answer is dropped first, or a
+            // C3 project would show an ESP32 project's verdict until the
+            // reply landed.
+            state.sim.plan.set(None);
+            load_sim_plan(state);
+            if let Some(root) = state
+                .project
+                .detected
+                .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
+            {
+                let first = playground
+                    .as_deref()
+                    .map(|playground| rusty_embed::playground_main(playground).to_string());
+                restore_tabs(state, &root, first);
+            }
+        }
+    }
+}
+
+/// Re-read the project's files without reopening it.
+///
+/// Guarded, because this is what the menu entry and `Ctrl R` reach: asking
+/// the backend to re-check nothing produces an error banner about no project
+/// being open, which the user can see for themselves.
+pub fn refresh_project(state: AppState) {
+    if state.has_project_now() {
+        reload_project(state);
+    }
+}
+
+/// Fetch the project the backend holds, whether or not this window knows about
+/// it yet.
+///
+/// Separate from [`refresh_project`] because [`restore`] runs when the frontend
+/// has *no* project and the backend does — the guard above would reject exactly
+/// the case restore exists to handle, and a reload would silently drop the open
+/// project with nothing on screen to explain it.
+fn reload_project(state: AppState) {
+    track(
+        state,
+        ipc::get::<EmbeddedProject>(cmd::project::STATUS),
+        move |project| {
+            let root = project.root.clone();
+            let first = project
+                .playground
+                .as_deref()
+                .map(|playground| rusty_embed::playground_main(playground).to_string());
+            // A window coming back to a playground lays it out as one; a
+            // re-check leaves the board where the user put it.
+            if !state.has_project_now()
+                && let Some(playground) = &project.playground
+            {
+                state
+                    .layout
+                    .board_beside
+                    .set(rusty_embed::playground_has_board(playground));
+            }
+            state.project.detected.set(Some(project));
+            refresh_toolchain(state);
+            refresh_firmware(state);
+            refresh_workspace(state);
+            refresh_tree(state);
+            start_lsp(state);
+            start_watch(state);
+            load_sim_plan(state);
+            // A WebView reload reaches a project the backend never closed —
+            // this path skips project_opened, so the strip is replayed here
+            // too or a refresh would silently drop every open tab.
+            restore_tabs(state, &root, first);
+        },
+    );
+}
+
+/// Re-fetch the Cargo analysis.
+///
+/// Deliberately not tracked. A workspace whose `cargo metadata` failed is a
+/// normal state for a misconfigured embedded project — the case this workbench
+/// is *for* — and the panels that need it already say so in their own terms. A
+/// red banner on every restore would be crying wolf about the expected thing.
+fn refresh_workspace(state: AppState) {
+    // The Cargo analysis has nothing to read in a PlatformIO or CMake
+    // project, and "cargo metadata unavailable" in the dock at every open
+    // would be a warning about a tool the project does not use.
+    let cargo = state.project.detected.with_untracked(|p| {
+        p.as_ref()
+            .is_none_or(|p| p.build.system == rusty_embed::BuildSystem::Cargo)
+    });
+    if !cargo {
+        state.project.workspace.set(None);
+        return;
+    }
+    spawn_local(async move {
+        match ipc::get::<WorkspaceReport>(cmd::project::WORKSPACE_REPORT).await {
+            Ok(report) => state.project.workspace.set(Some(report)),
+            Err(e) => {
+                state.project.workspace.set(None);
+                // Kept in the dock rather than dropped: "why is the Features
+                // panel empty" has to be answerable after the fact.
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: t!("misc.metadata-unavailable", reason = e.message),
+                    level: Some(LogLevel::Warn),
+                });
+            }
+        }
+    });
+}
+
+/// Re-scan the target directory for built binaries.
+///
+/// Cheap enough to run on every project refresh: it is a directory walk and a
+/// four-byte read per candidate, and a memory panel showing yesterday's build
+/// list is worse than useless — it is confidently wrong.
+pub fn refresh_firmware(state: AppState) {
+    refresh_firmware_then(state, || {});
+}
+
+/// [`refresh_firmware`], then `then` once the list is in — how a build
+/// hands the image it just made to the flash after it.
+pub fn refresh_firmware_then(state: AppState, then: impl FnOnce() + 'static) {
+    if !state.has_project_now() {
+        then();
+        return;
+    }
+    track(
+        state,
+        ipc::get::<Vec<Firmware>>(cmd::firmware::LIST),
+        move |found| {
+            // Drop a selection that no longer exists, so the panel falls back to
+            // the default rather than showing a path that was just cleaned away.
+            state.project.selected_firmware.update(|selected| {
+                if let Some(path) = selected.as_deref()
+                    && !found.iter().any(|f| f.path == path)
+                {
+                    *selected = None;
+                }
+            });
+            state.project.firmware.set(found);
+            then();
+        },
+    );
+}
+
+/// Analyse a built ELF.
+pub fn analyze_memory(state: AppState, elf_path: String) {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        elf_path: String,
+    }
+
+    let args = Args { elf_path };
+    track(
+        state,
+        async move { ipc::call::<_, MemoryReport>(cmd::memory::REPORT, &args).await },
+        move |report| state.project.memory.set(Some(report)),
+    );
+}
+
+/// Simulate a feature selection, updating both halves of the matrix.
+///
+/// The rows and the impact are two queries because they answer two questions —
+/// what each switch costs on its own, and what the whole selection costs — and
+/// they are issued together because a screen showing one recomputed and the
+/// other stale is worse than a screen showing neither.
+pub fn apply_features(state: AppState, selection: FeatureSelection) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        selection: FeatureSelection,
+    }
+
+    state.project.feature_selection.set(Some(selection.clone()));
+
+    let rows_args = Args {
+        selection: selection.clone(),
+    };
+    track(
+        state,
+        async move { ipc::call::<_, Vec<FeatureRow>>(cmd::features::ROWS, &rows_args).await },
+        move |rows| state.project.feature_rows.set(rows),
+    );
+
+    let impact_args = Args { selection };
+    track(
+        state,
+        async move { ipc::call::<_, FeatureImpact>(cmd::features::IMPACT, &impact_args).await },
+        move |impact| state.project.feature_impact.set(Some(impact)),
+    );
+}
+
+pub fn refresh_toolchain(state: AppState) {
+    track(
+        state,
+        ipc::get::<ToolchainReport>(cmd::toolchain::REPORT),
+        move |report| {
+            state.project.toolchain.set(Some(report));
+            // The check rides on the report rather than on startup: it needs
+            // the chip to know whether the Xtensa toolchain is even relevant,
+            // and the chip arrives with the project.
+            check_environment(state);
+        },
+    );
+}
+
+/// Reattach to a project the backend still holds, after a frontend reload.
+pub fn restore(state: AppState) {
+    if !ipc::backend_available() {
+        state.app.error.set(Some(ipc::IpcError {
+            message: "Running outside Tauri, so nothing can be loaded.".into(),
+            causes: vec![
+                "This is the Trunk dev server in a plain browser. The layout and \
+                 styling are real; anything that needs the backend is not."
+                    .into(),
+                "Run `cargo tauri dev` from crates/rusty-app for the whole app.".into(),
+            ],
+            kind: None,
+        }));
+        return;
+    }
+
+    // Before anything else, because it decides what the keyboard means. Not
+    // tied to opening a project: someone who edits in Vim keys wants them in
+    // the window that is already open, and in the next one. The shortcut
+    // overrides and the interface scale are the same kind of thing, and used
+    // to load only when a project came back through the recents list.
+    load_vim(state);
+    load_auto_save(state);
+    load_editor_view(state);
+    load_rust_analyzer(state);
+    load_keybinds(state);
+    apply_ui_zoom(state);
+
+    // Neither the catalogue nor the machine's toolchain depends on a project,
+    // so both load unconditionally. Sequencing them after the project probe
+    // would mean one failed probe leaving those panels empty for the whole
+    // session, with nothing on screen to say why.
+    load_catalog(state);
+    load_provider(state);
+    refresh_toolchain(state);
+
+    load_recents(state);
+    schedule_update_check(state);
+
+    spawn_local(async move {
+        // Nothing open is the normal cold-start state, not a failure worth
+        // showing, so this one deliberately does not go through `track`.
+        if let Ok(Some(_path)) = ipc::get::<Option<String>>(cmd::project::PATH).await {
+            reload_project(state);
+            return;
+        }
+        // A window New Window opened starts on the welcome screen. The last
+        // project is open in the window it was asked from, and two windows
+        // on one project are two language servers taking turns at one build
+        // directory.
+        if ipc::get::<bool>(cmd::window::FRESH).await.unwrap_or(false) {
+            return;
+        }
+        // A fresh launch: pick up where the last session left off. Quietly —
+        // a moved folder degrades to the normal empty state plus a log line,
+        // and stops being offered.
+        if let Ok(list) = ipc::get::<Vec<String>>(cmd::workbench::RECENTS).await
+            && let Some(last) = list.first()
+        {
+            open_recent(state, last.clone(), false);
+        }
+    });
+}
+
+/// Another rusty in a window of its own: New Window.
+///
+/// A second *instance* of the app rather than a second window of this one:
+/// the backend holds one project — its language server, its watcher, its
+/// runs — and every window of an instance shares it. It opens on the welcome
+/// screen (`window_fresh`), and a failure to start it is the banner's.
+pub fn new_window(state: AppState) {
+    if !ipc::backend_available() {
+        return;
+    }
+    track(state, ipc::get::<()>(cmd::window::NEW), move |()| {});
+}
+
+// ─── chips ───────────────────────────────────────────────────────────────────
+
+/// The part's pins and what the source names, for the editor's pin map.
+pub fn load_pin_report(state: AppState) {
+    track(
+        state,
+        ipc::get::<Option<rusty_embed::PinReport>>(cmd::pins::REPORT),
+        move |report| state.project.pins.set(report),
+    );
+}
+
+/// What switching this project to another chip would change.
+pub fn plan_migration(state: AppState, chip: String, into: RwSignal<Option<Migration>>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        chip: String,
+    }
+    let args = Args { chip };
+    track(
+        state,
+        async move { ipc::call::<_, Migration>(cmd::migrate::PLAN, &args).await },
+        move |plan| into.set(Some(plan)),
+    );
+}
+
+/// Carry one out, then re-read the project: the chip, the target and the
+/// toolchain the status bar shows have all just changed.
+pub fn apply_migration(state: AppState, plan: Migration, into: RwSignal<Option<Migration>>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        plan: Migration,
+    }
+    let args = Args { plan };
+    track(
+        state,
+        async move { ipc::call::<_, Vec<String>>(cmd::migrate::APPLY, &args).await },
+        move |written| {
+            into.set(None);
+            for path in written {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: format!("— switched {path}"),
+                    level: None,
+                });
+            }
+            refresh_project(state);
+        },
+    );
+}

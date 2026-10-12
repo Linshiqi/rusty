@@ -1,0 +1,30 @@
+# No chip's: a vector type, a test and an example that draw through
+# rusty-draw into the Draw tab, on stable Rust. rusty-draw itself is written
+# beside them from this rusty's own copy of its source, so the playground
+# needs no network and draws exactly the lines this rusty reads.
+
+playground = 5
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "Cargo.lock.in"
+
+[[file]]
+path = "src/lib.rs"
+from = "lib.rs.in"
+
+[[file]]
+path = "examples/vectors.rs"
+from = "vectors.rs.in"
+
+[[file]]
+path = "rusty-draw/Cargo.toml"
+from = "rusty-draw-Cargo.toml.in"
+
+[[file]]
+path = "rusty-draw/src/lib.rs"
+from = "../../../../rusty-draw/src/lib.rs"

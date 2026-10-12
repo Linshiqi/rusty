@@ -1,0 +1,60 @@
+# The board the firmware-in-the-loop gate is about.
+#
+# GPIO2 drives a 10k into a 1uF to ground, and GPIO3 reads the junction.
+#
+# Ten milliseconds of time constant, and the number is chosen against the
+# *firmware's* own read interval rather than against anything electrical:
+# the probe reads once a millisecond, so a time constant of one millisecond
+# is a curve it can only see two points of, and the gate cannot tell that
+# from a host echoing the pin. Ten times slower is ten points per constant.
+# Measured the first way and it read 0, 4095, 739 — right physics, no
+# resolution.
+#
+# `fullscale` is the one thing this file has to say that a netlist would
+# not: the converter's full-scale voltage is not the rail, and without it
+# rusty answers volts and no counts. 2.5 V is the C3's 11 dB range, which is
+# the attenuation the firmware asks for.
+version = 2
+
+[board]
+chip = "esp32c3"
+x = 460
+y = 40
+
+[[part]]
+ref = "R1"
+symbol = "Device:R"
+value = "10k"
+x = 300
+y = 120
+
+[[part]]
+ref = "C1"
+symbol = "Device:C"
+value = "1u"
+x = 200
+y = 200
+props = { fullscale = "2.5" }
+
+[[part]]
+ref = "GND1"
+symbol = "rusty:GND"
+value = "GND"
+x = 200
+y = 280
+
+[[wire]]
+from = "U1.GPIO2"
+to = "R1.1"
+
+[[wire]]
+from = "R1.2"
+to = "C1.1"
+
+[[wire]]
+from = "C1.1"
+to = "U1.GPIO3"
+
+[[wire]]
+from = "C1.2"
+to = "GND1.GND"

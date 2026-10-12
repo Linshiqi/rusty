@@ -1,0 +1,21 @@
+[package]
+name = "rusty-i18n"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The catalogues are TOML embedded at compile time and parsed once. TOML
+# rather than a generated Rust table because a translator has to be able to
+# edit them, and `toml` is pure Rust, so this compiles to wasm with the rest
+# of the frontend.
+# Default features: `Value` and `Table` live behind `serde`, and trimming
+# them costs more than it saves — this is pure Rust either way, so it
+# compiles to wasm with the rest of the frontend.
+toml = "1.1.4"
+
+[lints]
+workspace = true

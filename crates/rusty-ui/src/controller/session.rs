@@ -1,0 +1,594 @@
+//! A running session: the serial line, the plot, and the trace.
+//!
+//! `absorb` is the single reading of the board protocol — one function, three
+//! callers. It was per-stream once, and the consequence was telemetry that
+//! plotted in the simulator and vanished on hardware.
+
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+
+use rusty_embed::{LogLevel, LogLine, LogStream};
+use rusty_i18n::t;
+
+// The sibling modules, flat: `controller` re-exports every one of them,
+// so a call between two of them reads the same as a call from a view.
+use super::*;
+use crate::{
+    ipc::{self, cmd},
+    state::{AppState, TraceClock},
+};
+
+/// What proxy is stored, and what detection currently sees.
+pub fn load_proxy_setting(stored: RwSignal<Option<String>>, detected: RwSignal<Option<String>>) {
+    spawn_local(async move {
+        if let Ok(value) = ipc::get::<serde_json::Value>(cmd::workbench::PROXY).await {
+            stored.set(value["stored"].as_str().map(str::to_string));
+            detected.set(value["detected"].as_str().map(str::to_string));
+        }
+    });
+}
+
+/// Store the proxy choice and re-read, so the preview line tells the truth.
+pub fn save_proxy_setting(
+    value: Option<String>,
+    stored: RwSignal<Option<String>>,
+    detected: RwSignal<Option<String>>,
+    saved: RwSignal<bool>,
+) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        value: Option<String>,
+    }
+    let args = Args { value };
+    spawn_local(async move {
+        if ipc::call::<_, ()>(cmd::workbench::SET_PROXY, &args)
+            .await
+            .is_ok()
+        {
+            saved.set(true);
+            load_proxy_setting(stored, detected);
+        }
+    });
+}
+
+/// Board files that would not parse. Asked for by the Catalogue settings —
+/// a user whose board never appears deserves the reason in the window, not
+/// only in the CLI.
+pub fn load_catalog_problems(state: AppState) {
+    track(
+        state,
+        ipc::get::<Vec<rusty_embed::CatalogProblem>>(cmd::catalog::PROBLEMS),
+        move |problems| state.project.catalog_problems.set(problems),
+    );
+}
+
+/// Whether a key for this profile is on file. The key itself is never read
+/// back — the credential store is write-only from here, by design.
+pub fn refresh_key_state(state: AppState, profile: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        profile: String,
+    }
+    let args = Args { profile };
+    spawn_local(async move {
+        if let Ok(stored) = ipc::call::<_, bool>(cmd::ai::KEY_CONFIGURED, &args).await {
+            state.ai.key_stored.set(stored);
+        }
+    });
+}
+
+/// Forget the stored key for a profile.
+pub fn delete_key(state: AppState, profile: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        profile: String,
+    }
+    let args = Args {
+        profile: profile.clone(),
+    };
+    spawn_local(async move {
+        match ipc::call::<_, ()>(cmd::ai::DELETE_KEY, &args).await {
+            Ok(()) => {
+                state.ai.key_stored.set(false);
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: t!("misc.key-removed", profile = profile),
+                    level: None,
+                });
+            }
+            Err(error) => state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: error.message,
+                level: Some(LogLevel::Error),
+            }),
+        }
+    });
+}
+
+/// Forget what the last board said.
+///
+/// Every capture the protocol feeds, dropped together at the start of a run.
+/// Partially clearing it is worse than not clearing at all: a plot whose
+/// curves come from two different boots, on two different clocks, is read as
+/// one signal and is not one.
+pub(super) fn clear_capture(state: AppState) {
+    state.sim.gpio.set(std::collections::HashMap::new());
+    state.sim.pwm.set(std::collections::HashMap::new());
+    state.sim.analog.set(std::collections::HashMap::new());
+    state.sim.readings.set(std::collections::HashMap::new());
+    state.sim.adc.set(std::collections::HashMap::new());
+    state.lab.clear_capture();
+    state.sim.i2c.set(Vec::new());
+    state.sim.spi.set(Vec::new());
+    state.sim.rmt.set(std::collections::HashMap::new());
+    // The screens go blank rather than away: the sheet still declares them,
+    // and the panel puts a fresh one back for each. A picture left over
+    // from the last boot on a board that has not drawn yet is the plot's
+    // two-boots problem on a surface that looks like the truth.
+    state.sim.screens.update(|screens| {
+        for screen in screens.values_mut() {
+            *screen = rusty_embed::screen::Screen::of(screen.panel());
+        }
+    });
+    // The declarations go too: they belong to the run that made them, and
+    // offering a sensor the next firmware never asked for is the invented
+    // range in another costume.
+    state.sim.sensors.set(Vec::new());
+    state
+        .sim
+        .sensor_values
+        .set(std::collections::HashMap::new());
+    state.sim.trace.set(crate::state::SimTrace::default());
+    state.sim.display.set(String::new());
+    state.sim.plot.set(crate::state::Plot::default());
+    state.sim.params.set(Vec::new());
+    // Back to the weaker claim until this run announces otherwise. A run
+    // against rusty's QEMU followed by one against a stock build — the user
+    // swapped the binary, or is now watching a real board over the serial
+    // link — would otherwise keep a caption promising register-level truth
+    // about levels the firmware is once again merely narrating.
+    state.sim.pin_source.set(rusty_embed::PinSource::Firmware);
+}
+
+/// One line from a board, wherever it came from.
+///
+/// The same firmware prints the same protocol whether it is running in QEMU,
+/// under `espflash monitor`, or on a port rusty holds open itself — so the
+/// reading of it lives in one place rather than being re-implemented per
+/// stream. It was per-stream once, and the consequence was that telemetry
+/// plotted in the simulator and vanished on real hardware.
+///
+/// Anything that is not protocol is log, unchanged.
+///
+/// A line that carries what a dock tab shows also puts that tab on the strip
+/// — telemetry or a tunable the Plot, a sensor declaration the Flight tab, a
+/// gpio report the Waves — without bringing it forward: the user is reading
+/// Output, and the strip saying "there is a plot now" is the whole of the
+/// interruption. Which lines reveal which tab is decided here, beside the
+/// reading, because the tabs are about the protocol and this is the one
+/// place it is read. A `[rusty:pwm]` line reveals nothing on purpose: a servo
+/// or a dimmed lamp is a duty too, and the board sheet already shows both —
+/// the horn where the pulse puts it, the lamp at the brightness the duty
+/// gives it (`rusty_embed::period`).
+pub(super) fn absorb(state: AppState, line: LogLine) {
+    follow_activity(state, &line.text);
+    // A test run's own reading, beside the protocol's: every line of it in
+    // order, whichever arm below then takes it.
+    if state.dock.source.get_untracked() == "test" {
+        tests_heard(state, &line.text);
+    }
+    if let Some((before, sample)) = rusty_embed::protocol::split_telemetry(&line.text) {
+        // A test harness's `test name ... ` before the test's first sample
+        // goes to the log, as it does before a drawing.
+        let before = before.trim_end().to_string();
+        record_plot(state, sample);
+        state.reveal_tab(crate::state::DockTab::Plot);
+        if !before.is_empty() {
+            state.push_log(LogLine {
+                text: before,
+                ..line
+            });
+        }
+    } else if let Some(param) = rusty_embed::protocol::parse_param(&line.text) {
+        // Newest wins, by name: the firmware re-announces after a change, and
+        // what it says it took is the truth — a clamp is information, not a
+        // mistake to hide.
+        state.sim.params.update(|params| {
+            match params.iter_mut().find(|known| known.name == param.name) {
+                Some(known) => *known = param,
+                None => params.push(param),
+            }
+        });
+        state.reveal_tab(crate::state::DockTab::Plot);
+    } else if let Some(def) = rusty_embed::parse_sensor_def(&line.text) {
+        // Newest wins by name, exactly as the tunables do: firmware that
+        // re-announces on a timer is how a panel connecting late finds out
+        // what it may inject at all.
+        state.sim.sensors.update(
+            |known| match known.iter_mut().find(|s| s.name == def.name) {
+                Some(existing) => *existing = def,
+                None => known.push(def),
+            },
+        );
+        state.reveal_tab(crate::state::DockTab::Flight);
+    } else if let Some(source) = rusty_embed::parse_pin_source(&line.text) {
+        // Before the gpio arm on purpose: this line decides what the board's
+        // caption may claim about every line after it.
+        state.sim.pin_source.set(source);
+        state.push_log(line);
+    } else if let Some(report) = rusty_embed::parse_gpio_report(&line.text) {
+        state.reveal_tab(crate::state::DockTab::Waves);
+        state.sim.gpio.update(|gpio| {
+            for (pin, level) in &report.pins {
+                gpio.insert(*pin, *level);
+            }
+        });
+        forget(state.sim.pwm, report.pins.iter().map(|(pin, _)| *pin));
+        record_trace(state, report);
+    } else if let Some(report) = rusty_embed::parse_pwm_report(&line.text) {
+        // The analogue half of the arm above. Not folded into it: a level and
+        // a duty are different facts about a pin, and a motor asked to hold
+        // 40% is not the same as a pin that happens to be high right now.
+        state.sim.pwm.update(|pwm| {
+            for (pin, drive) in &report.pins {
+                pwm.insert(*pin, *drive);
+            }
+        });
+        forget(state.sim.gpio, report.pins.iter().map(|(pin, _)| *pin));
+    } else if let Some(report) = rusty_embed::parse_rmt_report(&line.text) {
+        // What a chain of addressable LEDs was sent, whole: one transmission
+        // sets every pixel, so keeping anything less would light a strip one
+        // LED at a time. Reveals no tab — a strip is drawn on the board, and
+        // the dock has nothing to say about it that the board does not.
+        state.sim.rmt.update(|rmt| {
+            rmt.insert(report.pin, report.bytes);
+        });
+    } else if let Some(report) = rusty_embed::parse_adc_report(&line.text) {
+        // What the firmware's converter took, which is the return half of the
+        // slider. Kept apart from `sim.analog`, which is what the *host* is
+        // driving: the two agreeing is the interesting fact, and folding them
+        // into one map would make disagreement unrepresentable — a slider
+        // that moved a firmware which never read it would look identical to
+        // one that worked.
+        state.sim.adc.update(|adc| {
+            adc.insert(report.pin, report.counts);
+        });
+        // And every stamped one kept, for the lab: with a signal playing a
+        // conversion is a sample of it, on the clock the firmware reads by.
+        if let Some(at_us) = report.at_us {
+            state.lab.conversions.update(|all| {
+                crate::state::record_conversion(
+                    all.entry(report.pin).or_default(),
+                    at_us,
+                    report.counts,
+                );
+            });
+        }
+    } else if let Some(report) = rusty_embed::parse_i2c_report(&line.text) {
+        // A screen the sheet declared at that address is drawn as well as
+        // listed. Only one the sheet declared: which controller it is
+        // decides how the bytes read, and rusty does not guess that from
+        // traffic. `w+` is more of the message before it — a driver sending
+        // a framebuffer crosses the FIFO, and each step after the first
+        // carries no control byte of its own.
+        // Asked before it is written, because `update` wakes everything
+        // that reads the map whether or not it changed anything — and a bus
+        // with no screen on it carries a thousand transactions a frame.
+        if state
+            .sim
+            .screens
+            .with_untracked(|screens| screens.contains_key(&report.address))
+        {
+            state.sim.screens.update(|screens| {
+                if let Some(screen) = screens.get_mut(&report.address) {
+                    match report.verb.as_str() {
+                        "w" => screen.i2c(&report.bytes),
+                        "w+" => screen.i2c_more(&report.bytes),
+                        _ => {}
+                    }
+                }
+            });
+        }
+        // Traffic, kept in order and capped. The cap is what stops a display
+        // refreshing for an hour from eating the tab, and dropping the
+        // *oldest* is right for a stream: what a bus just did is what
+        // somebody is looking at.
+        const BUS_KEPT: usize = 500;
+        state.sim.i2c.update(|bus| {
+            bus.push(report);
+            if bus.len() > BUS_KEPT {
+                let over = bus.len() - BUS_KEPT;
+                bus.drain(..over);
+            }
+        });
+    } else if let Some(report) = rusty_embed::parse_spi_report(&line.text) {
+        const WIRE_KEPT: usize = 500;
+        state.sim.spi.update(|wire| {
+            wire.push(report);
+            if wire.len() > WIRE_KEPT {
+                let over = wire.len() - WIRE_KEPT;
+                wire.drain(..over);
+            }
+        });
+    } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
+        state.sim.display.set(text);
+    } else if let Some(report) = rusty_embed::wave::parse_wave_report(&line.text) {
+        // When a table started or stopped on the emulator's clock: what a
+        // played signal is lined up with the conversions it produced by. A
+        // refusal is the emulator saying a table did not arrive whole, which
+        // somebody has to be able to read.
+        use rusty_embed::wave::WaveEvent;
+        let start_us = match report.event {
+            WaveEvent::On { start_us } => Some(start_us),
+            WaveEvent::Off => None,
+            WaveEvent::Refused(_) => {
+                state.push_log(line);
+                return;
+            }
+        };
+        state.lab.switched.update(|switched| {
+            switched.insert(
+                report.target,
+                crate::state::Switched {
+                    at_us: report.at_us,
+                    start_us,
+                },
+            );
+        });
+        if start_us.is_some() {
+            state.reveal_tab(crate::state::DockTab::Signals);
+        }
+    } else if let Some((before, drawing)) = rusty_embed::draw::split_draw(&line.text) {
+        // What a program drew with `rusty-draw`. Anything before the marker
+        // is somebody else's — a test harness running one test at a time
+        // writes `test name ... ` and then what the test prints — and goes
+        // to the log as the rest of that line would have.
+        let before = before.trim_end().to_string();
+        drawn(state, drawing);
+        if !before.is_empty() {
+            state.push_log(LogLine {
+                text: before,
+                ..line
+            });
+        }
+    } else {
+        state.push_log(line);
+    }
+}
+
+/// The host's own clock in microseconds, for streams the firmware left
+/// unstamped. Shared by the pin trace and the plot so the two axes mean the
+/// same thing when both fall back to it.
+fn host_now_us() -> u64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| (p.now() * 1000.0) as u64)
+        .unwrap_or(0)
+}
+
+/// Take pins out of one of the two pin maps, because the other has just
+/// heard about them: a pin is in one or the other, never both (see
+/// `Sim::pwm`). Touched only when one of them is there — `update` wakes
+/// every reader whether or not anything changed, and a level is reported a
+/// thousand times for every time a duty is.
+fn forget<T: Send + Sync + 'static>(
+    map: RwSignal<std::collections::HashMap<u8, T>>,
+    pins: impl Iterator<Item = u8>,
+) {
+    let pins: Vec<u8> = pins.collect();
+    if map.with_untracked(|known| pins.iter().any(|pin| known.contains_key(pin))) {
+        map.update(|known| {
+            for pin in &pins {
+                known.remove(pin);
+            }
+        });
+    }
+}
+
+/// One gpio report into the waveform capture.
+///
+/// The first report decides the clock: stamped reports run on the firmware's
+/// systimer, unstamped ones on the host's arrival time — never both, because
+/// a trace that mixes time bases is a trace that lies. Capped so an hour of
+/// simulation cannot eat the tab.
+fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
+    const CAP: usize = 200_000;
+
+    state.sim.trace.update(|trace| {
+        let clock = *trace.clock.get_or_insert(if report.at_us.is_some() {
+            TraceClock::Firmware
+        } else {
+            TraceClock::Host
+        });
+        let at = match (clock, report.at_us) {
+            (TraceClock::Firmware, Some(us)) => us,
+            // A late unstamped line in a firmware-clocked trace (or the
+            // reverse) would corrupt the axis; reuse the last moment
+            // instead, which keeps the event without inventing a time.
+            (TraceClock::Firmware, None) => trace.events.last().map(|(t, ..)| *t).unwrap_or(0),
+            (TraceClock::Host, _) => host_now_us(),
+        };
+        for (pin, level) in report.pins {
+            trace.events.push((at, pin, level));
+        }
+        if trace.events.len() > CAP {
+            let drop = trace.events.len() - CAP;
+            trace.events.drain(..drop);
+            trace.truncated = true;
+        }
+    });
+}
+
+/// Fold one telemetry line into the rolling plot.
+///
+/// The same clock discipline the pin trace learned: whichever base the first
+/// sample arrived on decides the axis, and a later line in the other base
+/// reuses the last moment rather than inventing one. Mixing them silently is
+/// how a plot lies about *when*, which for a control loop is the only thing
+/// it is being read for.
+fn record_plot(state: AppState, sample: rusty_embed::protocol::Telemetry) {
+    /// Samples kept per channel. A 1 kHz loop fills this in twenty seconds,
+    /// which is the window a tuning change is judged in; older than that and
+    /// you re-run rather than scroll back.
+    const CAP: usize = 20_000;
+
+    state.sim.plot.update(|plot| {
+        let clock = *plot.clock.get_or_insert(if sample.at_us.is_some() {
+            TraceClock::Firmware
+        } else {
+            TraceClock::Host
+        });
+        let at = match (clock, sample.at_us) {
+            (TraceClock::Firmware, Some(us)) => us,
+            (TraceClock::Firmware, None) => plot
+                .channels
+                .iter()
+                .filter_map(|(_, points)| points.last().map(|(t, _)| *t))
+                .max()
+                .unwrap_or(0),
+            (TraceClock::Host, _) => host_now_us(),
+        };
+        let mut dropped = false;
+        for (name, value) in sample.channels {
+            let points = plot.channel(&name);
+            points.push((at, value));
+            if points.len() > CAP {
+                let over = points.len() - CAP;
+                points.drain(..over);
+                dropped = true;
+            }
+        }
+        plot.truncated |= dropped;
+    });
+}
+
+/// Set a tunable on the running firmware, over the serial line it is already
+/// talking on.
+///
+/// No reflash: the whole point. The firmware answers with a `[rusty:param]`
+/// line carrying what it actually took, and that is what the panel then
+/// shows — so a value the firmware clamped reads as clamped rather than as
+/// the number that was typed.
+pub fn set_param(state: AppState, name: String, value: f32) {
+    sim_send(state, rusty_embed::protocol::set_param_line(&name, value));
+}
+
+/// Hold a serial port open in both directions, until it is closed.
+///
+/// The mode a control loop is tuned in. `espflash monitor` reads its keyboard
+/// through the console rather than through stdin, so a monitor rusty spawned
+/// can only listen — this opens the port itself, which is what makes a
+/// tunable writable, and gives up defmt decoding to do it.
+pub fn open_link(state: AppState, port: String, baud: u32) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
+
+    #[derive(serde::Serialize)]
+    struct Args {
+        port: String,
+        baud: u32,
+    }
+
+    if state.app.session_running.get_untracked() {
+        return;
+    }
+    state.dock.source.set("link");
+    clear_capture(state);
+
+    let channel = ipc::Channel::new();
+    let on_line =
+        Closure::wrap(Box::new(move |value: JsValue| {
+            match serde_wasm_bindgen::from_value::<LogLine>(value) {
+                Ok(line) => absorb(state, line),
+                Err(e) => state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: t!("misc.undecodable-port-line", error = e),
+                    level: Some(LogLevel::Warn),
+                }),
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+    channel.set_onmessage(&on_line);
+    on_line.forget();
+
+    state.app.session_running.set(true);
+    state.sim.link_port.set(Some(port.clone()));
+    // Said in the status bar like every other session, and known there to
+    // hold the port — which is what lets Flash release it first.
+    let mut link = crate::activity::Activity::new(crate::activity::Kind::Link, js_sys::Date::now());
+    link.target = Some(port.clone());
+    state.app.activity.set(Some(link));
+    state.app.outcome.set(None);
+    state.show_dock(crate::state::DockTab::Plot);
+
+    let args = Args { port, baud };
+    track_session(
+        state,
+        async move {
+            let answer =
+                ipc::call_streaming::<_, Option<i32>>(cmd::flash::LINK, &args, "onLine", &channel)
+                    .await;
+            // The claim has to be given back when the port refuses to open.
+            // It is made up front because a streaming call never resolves
+            // while it is working, so success is not an event — but leaving
+            // it set after a refusal left the panel showing Disconnect and
+            // live sliders over a port it did not have, which is the exact
+            // failure `link_port` exists to prevent. Seen for real: the port
+            // was still held by an earlier session, the error banner said so
+            // correctly, and the panel claimed the link anyway.
+            if answer.is_err() {
+                state.sim.link_port.set(None);
+            }
+            answer
+        },
+        move |_| {
+            state.sim.link_port.set(None);
+            note_exit(state, None);
+        },
+    );
+}
+
+/// Close the link, which is the same stop every other session answers to.
+pub fn close_link(state: AppState) {
+    state.sim.link_port.set(None);
+    stop_session(state);
+}
+
+/// Write the captured trace as VCD into the project's target directory,
+/// where PulseView and GTKWave can open it.
+pub fn export_vcd(state: AppState) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        text: String,
+    }
+
+    let trace = state.sim.trace.get_untracked();
+    if trace.events.is_empty() {
+        return;
+    }
+    let args = Args {
+        text: rusty_embed::to_vcd(&trace.events),
+    };
+    spawn_local(async move {
+        match ipc::call::<_, String>(cmd::sim::SAVE_TRACE, &args).await {
+            Ok(path) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: t!("misc.waveform-written", path = path),
+                    level: None,
+                });
+                state.show_dock(crate::state::DockTab::Output);
+            }
+            Err(error) => state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: error.message,
+                level: Some(LogLevel::Error),
+            }),
+        }
+    });
+}
+
+/// `cargo build --release` for the open project, streamed to the dock —
+/// the title bar's Build, sharing the one session slot with
+/// everything else that runs.
+pub fn build_project(state: AppState) {
+    build_then(state, |_| {});
+}

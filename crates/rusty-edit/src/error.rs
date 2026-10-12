@@ -1,0 +1,72 @@
+//! File failures, stated in terms of what the user did.
+
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("could not read {path}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not save {path}")]
+    Write {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// rustfmt refused or could not run. The message is rustfmt's own reason,
+    /// or what to install when the binary is missing — either way something
+    /// the user can act on, because a save that silently skips formatting
+    /// teaches people the feature is broken.
+    #[error("{message}")]
+    Format { message: String },
+
+    /// A path that climbs out of the project.
+    ///
+    /// The frontend sends relative paths back, and `../../..` in one of them
+    /// would let a panel read or overwrite anything on the machine. Refused
+    /// rather than normalised, because a caller asking for it is either
+    /// confused or hostile and neither deserves the file.
+    #[error("{path} is outside the project")]
+    Outside { path: String },
+
+    /// Creating something that is already there. Refused rather than
+    /// truncated: "new file" must never be a way to empty an existing one.
+    #[error("{path} already exists")]
+    Exists { path: String },
+
+    /// Moving or copying something that is not there — a tree that has
+    /// moved on under the menu.
+    #[error("{path} does not exist")]
+    NotFound { path: String },
+
+    /// A directory dragged into itself or below itself: a rename that can
+    /// never finish, refused by name rather than attempted.
+    #[error("{path} cannot be moved into itself")]
+    IntoItself { path: String },
+
+    /// A rename asked for with a separator in it, or with no name at all.
+    /// A rename is a name; a path is a move to somewhere the tree did not
+    /// show.
+    #[error("{name:?} is not a file name")]
+    BadName { name: String },
+
+    /// A file asked for as a picture that is bigger than this window will
+    /// load as one. Named with the size, so "will not show" reads as a limit
+    /// rather than a broken image.
+    #[error("{path} is {bytes} bytes, more than this window will load as a picture")]
+    TooLarge { path: String, bytes: u64 },
+
+    /// The platform said no to something with no better name — today only the
+    /// file watcher, which can fail on an exhausted inotify budget or a path
+    /// the OS will not watch. Carried as a message because there is nothing
+    /// the caller can do differently, and the reason is the whole value.
+    #[error("{0}")]
+    Io(String),
+}

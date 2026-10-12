@@ -1,0 +1,2699 @@
+# Espressif's QEMU with a GPIO that keeps its state — built, proven, shipped.
+#
+# Three jobs, in that order:
+#
+#   build    one per desktop. Clones espressif/qemu at the tag rusty pins,
+#            checks the two files being replaced are the ones the model was
+#            written against, builds both target lists and packages the
+#            result in Espressif's own layout so it is a drop-in.
+#   prove    unpacks the *packaged* Linux build and boots real firmware
+#            through it. Deliberately the shipped artifact rather than a
+#            second build: proving one binary and shipping another is how a
+#            green run comes to mean nothing.
+# Publishing lives in `qemu-release.yml`, which calls this one and then
+# attaches the packages to a Release. Two files rather than a tag filter here:
+# `on.push` applies `paths` and `tags` together, so a release tag on a commit
+# that happens not to touch qemu/ would silently not build.
+#
+# Why replacement files rather than a patch: the model being replaced is a
+# stub, so almost every line changes, and a unified diff's line numbers would
+# be the fragile part of an otherwise total substitution. The checksums do the
+# job a patch's context would — if upstream edits the file, the run stops and
+# says so rather than quietly discarding their change.
+
+name: qemu
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - "qemu/**"
+      - ".github/workflows/qemu.yml"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build for ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: x86_64-linux-gnu
+            shell: bash
+          - os: macos-latest
+            label: aarch64-apple-darwin
+            shell: bash
+          - os: windows-latest
+            label: x86_64-w64-mingw32
+            # QEMU on Windows builds under MSYS2's mingw64 — the route
+            # upstream documents, and the reason every step below has to run
+            # in that shell rather than in PowerShell.
+            shell: "msys2 {0}"
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before any `run` step: the shell default above applies to all of them,
+      # so on Windows there is no shell to run in until this has set one up.
+      #
+      # **No `update`, and no cache.** Both are ways for this step to fail
+      # for reasons that have nothing to do with what is being built, and it
+      # did: two runs in a row ended here in 55 seconds with `cmd.exe`
+      # exiting 1, taking the whole emulator release with them, after
+      # eighteen releases that had passed. `update: true` is a full
+      # `pacman -Syuu` before anything is installed — an upgrade of the
+      # runtime under the shell doing the upgrading, and the step that
+      # breaks when a mirror is half-synced; the packages named below are
+      # fetched at their current versions either way. The cache is the
+      # action's own, and the Actions cache service is being migrated under
+      # it. Nothing here is trusted on faith: the header check immediately
+      # after this fails loudly if the install did not produce what the
+      # build needs.
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: false
+          cache: false
+          install: >-
+            base-devel git binutils
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-glib2
+            mingw-w64-x86_64-pixman
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-libslirp
+            mingw-w64-x86_64-libgcrypt
+            mingw-w64-x86_64-python
+
+      - name: Build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev \
+            libslirp-dev libgcrypt20-dev python3-venv flex bison
+
+      # dylibbundler: a macOS build links Homebrew's glib and pixman by
+      # absolute path, so without this the tarball only runs on a machine
+      # that already has the same Homebrew. It copies each dependency in and
+      # rewrites the install names to point at the copy.
+      - name: Build dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja pkg-config glib pixman libslirp libgcrypt dylibbundler
+
+      # Fail at minute two rather than at minute twenty. A missing header
+      # surfaces as a compile error deep in the build, on whichever file
+      # happens to include it first, and reads like a source problem — which
+      # is exactly how gcrypt.h was diagnosed twice.
+      - name: The headers the build needs are actually there
+        run: |
+          missing=""
+          for header in glib-2.0/glib.h pixman.h gcrypt.h; do
+            found=""
+            for dir in /usr/include /usr/local/include /mingw64/include \
+                       /opt/homebrew/include /opt/homebrew/opt/libgcrypt/include \
+                       /usr/include/glib-2.0 /usr/include/pixman-1 \
+                       /mingw64/include/pixman-1 /opt/homebrew/include/pixman-1; do
+              [ -f "$dir/$header" ] && found="$dir/$header" && break
+            done
+            if [ -n "$found" ]; then
+              echo "ok   $header -> $found"
+            else
+              echo "MISS $header"
+              missing="$missing $header"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::${{ matrix.label }} is missing:$missing — the dependency step \
+            above did not install what it claims to. This is what a 'source' error twenty \
+            minutes into the build actually is."
+            exit 1
+          fi
+
+      # The tag rusty pins, read from the source rather than repeated here —
+      # two copies of a version is one that goes stale.
+      - name: Read the pinned QEMU release
+        id: pin
+        run: |
+          # Searched for, not read out of one path. It used to name
+          # `simulate.rs`, which became `simulate/` in a refactor and took
+          # the constant to `install.rs` with it — and `grep` on a file that
+          # is not there exits 2, which under `pipefail` killed this step
+          # before anything was built. Every qemu build since was dead, and
+          # nothing said so until one was needed.
+          #
+          # `grep | cut`, not `grep -oP`: PCRE is unavailable under some
+          # locales, and a step that fails for *that* reason costs a whole
+          # twenty-minute round trip to find out about.
+          found=$(grep -rl 'QEMU_RELEASE: &str' crates/rusty-embed/src || true)
+          count=$(printf '%s\n' "$found" | grep -c . || true)
+          if [ "$count" != "1" ]; then
+            echo "::error::expected exactly one QEMU_RELEASE in rusty-embed, found $count:%0A$found"
+            exit 1
+          fi
+          tag=$(grep -h 'QEMU_RELEASE: &str' "$found" | cut -d'"' -f2)
+          if [ -z "$tag" ]; then
+            echo "::error::could not read the tag out of $found"
+            exit 1
+          fi
+          echo "read $tag from $found"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "building against $tag"
+
+      # `core.autocrlf=false` explicitly: Windows runners default it to true,
+      # which would rewrite every line ending in the clone and make the
+      # checksum below fail — indistinguishable, in the log, from Espressif
+      # having edited the file.
+      - name: Clone espressif/qemu
+        run: |
+          git -c core.autocrlf=false clone --depth 1 \
+            --branch "${{ steps.pin.outputs.tag }}" \
+            https://github.com/espressif/qemu.git qemu-src
+
+      # The check a patch would have done. If Espressif has edited either
+      # file since these were written, the substitution would silently drop
+      # their change — so stop, and make somebody read the new source.
+      #
+      # macOS has no `sha256sum`, only `shasum -a 256`, which takes the same
+      # `-c` file. Assuming the GNU name is how this check would have failed
+      # on the platform it was added to test.
+      - name: Verify the upstream files are the ones this was written against
+        working-directory: qemu-src
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            check="sha256sum -c"
+          else
+            check="shasum -a 256 -c"
+          fi
+          if ! $check ../qemu/upstream.sha256; then
+            echo "::error::espressif/qemu's GPIO model has changed since qemu/*.c was written."
+            echo "Re-read hw/gpio/esp32_gpio.c upstream, fold in the change, and update qemu/upstream.sha256."
+            exit 1
+          fi
+
+      - name: Install the GPIO model
+        run: |
+          cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
+          cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
+
+      # Two holes in the interrupt path, both silent: neither machine
+      # connects the GPIO device's interrupt line, and the C3's interrupt
+      # matrix never says which *source* is asserting — the two registers
+      # esp-hal reads on every interrupt to find out what to call. Anchored
+      # insertions after text the script insists on seeing exactly once; all
+      # three files are pinned in upstream.sha256 above, so a rewrite
+      # upstream fails loudly rather than quietly doing nothing.
+      - name: Give the interrupt path what upstream is missing
+        run: python qemu/patches.py qemu-src
+
+      # Espressif's fork asks pkg-config for slirp with `static: true`, which
+      # upstream QEMU 9.2 does not:
+      #
+      #   slirp_dep = dependency('slirp', required: get_option('slirp'),
+      #                      method: 'pkg-config',
+      #                      static: true)
+      #
+      # On MSYS2 that resolves libslirp's Libs.private statically and drags in
+      # libglib-2.0.a, while QEMU links glib through libglib-2.0.dll.a — so
+      # every glib symbol is defined twice and the final link dies in 289
+      # lines of `multiple definition of g_*`. Not something to paper over
+      # with --allow-multiple-definition either: two glibs in one binary is
+      # two allocators and two main contexts, and that turns a loud link error
+      # into a quiet runtime one.
+      #
+      # One keyword, appearing exactly once in 4896 lines, and the guards say
+      # so — if upstream ever writes it elsewhere or drops it, this stops
+      # rather than editing the wrong line or silently doing nothing. Same
+      # discipline as upstream.sha256, for the same reason.
+      - name: Link slirp the way this platform links everything else
+        if: runner.os == 'Windows'
+        working-directory: qemu-src
+        run: |
+          before=$(grep -c 'static: true' meson.build || true)
+          if [ "$before" != "1" ]; then
+            echo "::error::expected exactly one \`static: true\` in meson.build, found $before —"
+            echo "::error::the slirp dependency has moved; re-read it before trusting this edit."
+            exit 1
+          fi
+          sed -i 's/^\( *\)static: true)/\1static: false)/' meson.build
+          after=$(grep -c 'static: true' meson.build || true)
+          if [ "$after" != "0" ]; then
+            echo "::error::the substitution did not take — \`static: true\` is still there"
+            exit 1
+          fi
+          grep -n -B2 'static: false)' meson.build
+
+      # Both target lists. riscv32 covers the C3 and C6; xtensa covers the
+      # original ESP32 and the S3, which is the part most people own — a
+      # package with only one of them would leave half the catalogue on the
+      # stock emulator with no sign of why.
+      #
+      # --enable-gcrypt is what makes xtensa buildable, and it is not
+      # optional. `hw/misc/esp32_flash_enc.c` opens with a bare
+      #
+      #     #include <gcrypt.h>
+      #
+      # before even qemu/osdep.h, while hw/misc/meson.build adds the file for
+      # CONFIG_XTENSA_ESP32 with no gcrypt dependency attached. So the include
+      # path arrives only if QEMU's *global* crypto backend happens to be
+      # gcrypt — which is what Ubuntu picks and what macOS and Windows do not,
+      # where meson finds gnutls and nettle first. Naming the backend makes it
+      # the same build everywhere instead of one that depends on which crypto
+      # library each platform's package manager offers first.
+      #
+      # Installing libgcrypt is necessary and was not sufficient: the header
+      # was present on macOS and the compiler still could not see it.
+      #
+      # --disable-gnutls follows from that choice. Switching the backend left
+      # macOS building crypto/tlscreds.c without gnutls's include path, and
+      # rather than chase that path, ask whether a local emulator needs TLS at
+      # all. It does not — a serial line and a pin chardev, no VNC, no
+      # migration, no NBD — so the whole dependency goes, and with it one more
+      # way for the four platforms to differ.
+      - name: Configure
+        working-directory: qemu-src
+        run: |
+          # An explicit prefix inside the build tree on every platform, so
+          # `ninja install` lays the package out without sudo and without
+          # touching the runner. It is also required on Windows: meson
+          # validates --prefix before reading anything else and wants a drive
+          # letter, while QEMU's configure defaults the mingw prefix to
+          # `/qemu`, which meson 1.5 rejects at ../meson.build:1:0.
+          extra=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
+            # Keeps a very large PE within what mingw's ld handles; nothing
+            # shipped from here needs the debug info. Not the slirp fix it was
+            # once guessed to be — that one is the meson step above.
+            extra="--disable-debug-info"
+          else
+            prefix="--prefix=$PWD/qemu-install"
+          fi
+          echo "using $prefix $extra"
+          # --disable-guest-agent: qemu-ga is a program that runs *inside* a
+          # guest OS and touches nothing in the emulator. On Windows it drags
+          # in the VSS provider, which needs Microsoft's Volume Shadow Copy
+          # SDK and cannot build without it.
+          if ! ./configure \
+            $prefix \
+            $extra \
+            --target-list=riscv32-softmmu,xtensa-softmmu \
+            --enable-slirp \
+            --enable-gcrypt \
+            --disable-gnutls \
+            --disable-guest-agent \
+            --disable-docs \
+            --disable-sdl \
+            --disable-gtk \
+            --disable-vnc \
+            --disable-werror > configure.out 2>&1
+          then
+            detail=$(tail -50 configure.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::configure failed on ${{ matrix.label }}:%0A$detail"
+            if [ -f build/meson-logs/meson-log.txt ]; then
+              meson=$(tail -60 build/meson-logs/meson-log.txt | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+              echo "::error::meson-log tail:%0A$meson"
+            fi
+            exit 1
+          fi
+          tail -25 configure.out
+
+      - name: Build
+        working-directory: qemu-src
+        run: |
+          if ! ninja -C build > build.out 2>&1; then
+            # The failed block: FAILED: up to the next ninja progress line,
+            # which is where the failing command's own output ends.
+            block=$(awk '/^FAILED:/{seen=1} seen && /^\[[0-9]+\/[0-9]+\]/{exit} seen' build.out)
+            # Drop the echoed command by *length*, not by shape. It comes back
+            # quoted on Windows (`"cc" "-m64" …`) and bare on the other two
+            # (`cc -Ilibcommon… `), and a filter that only knew the quoted form
+            # let a 1500-character line eat the whole annotation budget on
+            # macOS — the report arrived saying "6 lines, 6 after dropping
+            # echoed commands" with the error nowhere in it. 400 is far above
+            # any diagnostic ld or cc emits and far below any command line.
+            kept=$(printf '%s\n' "$block" | awk 'length($0) < 400')
+
+            # Say what was thrown away. Every earlier version of this step
+            # reported only what survived its filter, so a filter eating the
+            # diagnosis looked exactly like a toolchain that produced none —
+            # and those need different fixes.
+            echo "::error::the build failed on ${{ matrix.label }}: failed block \
+            $(printf '%s\n' "$block" | wc -l) lines, \
+            $(printf '%s\n' "$kept" | wc -l) after dropping echoed commands"
+
+            # In chunks: one annotation is capped at 4096 characters, and a
+            # run's logs need admin rights on the repository, so annotations
+            # are the only channel that reaches anyone.
+            #
+            # `END{printf "\n"}` is load-bearing — without a trailing newline
+            # `read` drops the final chunk, and the folded output is usually
+            # a single chunk, so the whole report vanishes.
+            # `awk NR<=80`, not `head -80`: head closes the pipe as soon as it
+            # has its lines, printf dies of SIGPIPE, and the step reports exit
+            # 141 — a failing build whose report is itself a failure.
+            printf '%s\n' "$kept" | awk 'NR<=80' | sed 's/%/%25/g' \
+              | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+              | while IFS= read -r chunk; do
+                  echo "::error::…$chunk"
+                done
+            # When the link is what failed, the interesting thing is not the
+            # 284 duplicate symbols — it is *which library put the static
+            # archive on the line*. ninja passes the whole link through a
+            # response file, so that file is the answer, and meson's log says
+            # how each dependency was resolved.
+            #
+            # Added because this failure has now been diagnosed by hypothesis
+            # three times: prefer_static, then slirp's `static: true`, then
+            # gcrypt. Two were right about something and none of them was the
+            # whole story. A guess costs half an hour; the .rsp is already on
+            # disk.
+            rsp=$(ls *.rsp 2>/dev/null | head -1)
+            if [ -n "$rsp" ]; then
+              libs=$(tr ' ' '\n' < "$rsp" | grep -iE 'glib|slirp|gcrypt|pixman|\.a$|\.dll\.a$' \
+                | awk 'NR<=40' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0} END{printf "\n"}')
+              echo "::error::what the link was given ($rsp):%0A$libs"
+            fi
+            if [ -f meson-logs/meson-log.txt ]; then
+              how=$(grep -iE 'glib|slirp|gcrypt' meson-logs/meson-log.txt \
+                | grep -iE 'found|link|lib' | awk 'NR<=25' | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}')
+              echo "::error::how meson resolved them:%0A$how"
+            fi
+            exit 1
+          fi
+          tail -5 build.out
+
+      # Espressif's own layout — `qemu/bin` beside `qemu/share/qemu` — because
+      # rusty's downloader unpacks into the data directory's tools/ and looks
+      # for tools/qemu/bin. A package that needs a different unpack is not a
+      # drop-in, and the fallback to Espressif's build would then land
+      # somewhere else.
+      #
+      # `ninja install` rather than copying by hand: QEMU decides what belongs
+      # in share/qemu, and a hand-picked list is a list that goes stale on the
+      # next bump with the symptom of a missing bios blob at boot.
+      - name: Package
+        working-directory: qemu-src
+        run: |
+          ninja -C build install > install.out 2>&1 || {
+            tail -30 install.out
+            echo "::error::ninja install failed on ${{ matrix.label }}"
+            exit 1
+          }
+          installed="$PWD/qemu-install"
+          echo "─── what ninja install laid down ───"
+          find "$installed" -maxdepth 2 | awk 'NR<=40'
+
+          root="$PWD/../package"
+          rm -rf "$root"
+          mkdir -p "$root/qemu/bin" "$root/qemu/share/qemu"
+
+          # Found, not assumed. QEMU installs into <prefix>/bin on Linux and
+          # macOS and flat into <prefix> on mingw, so `cp <prefix>/bin` worked
+          # on two platforms and failed on the third with a message about a
+          # missing directory — which reads like the build not having produced
+          # anything.
+          #
+          # Only the two emulators: `ninja install` also lays down qemu-img
+          # and friends, and none of them are what rusty runs.
+          for arch in riscv32 xtensa; do
+            found=$(find "$installed" -type f \
+              \( -name "qemu-system-$arch" -o -name "qemu-system-$arch.exe" \) | head -1)
+            if [ -z "$found" ]; then
+              echo "::error::qemu-system-$arch is not in the install tree at all"
+              exit 1
+            fi
+            cp "$found" "$root/qemu/bin/"
+          done
+
+          # The data directory, located the same way — by the blobs QEMU
+          # actually loads at boot rather than by a path that happens to be
+          # right on the platform this was written on. Without them the
+          # emulator starts and then cannot find its firmware, which is a
+          # failure a packaging test would not catch but every user would.
+          blob=$(find "$installed" -type f \
+            \( -name 'opensbi-riscv32*' -o -name 'esp32*.bin' -o -name '*-bios*.bin' \) \
+            | head -1)
+          if [ -z "$blob" ]; then
+            echo "::error::no firmware blobs in the install tree — QEMU would boot to nothing"
+            find "$installed" -type d | awk 'NR<=30'
+            exit 1
+          fi
+          cp -R "$(dirname "$blob")/." "$root/qemu/share/qemu/"
+
+          echo "─── packaged ───"
+          ls -la "$root/qemu/bin"
+          ls "$root/qemu/share/qemu" | awk 'NR<=15'
+
+      # A dynamically linked build carries its libraries' absolute paths, so
+      # without this the package runs only where it was built. Espressif ships
+      # these beside the exe too; a user who has to install MSYS2 or Homebrew
+      # first is a user for whom this did not work.
+      - name: Bring the libraries along
+        working-directory: package/qemu
+        if: runner.os != 'Linux'
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # ldd resolves the mingw DLLs by name; anything under /mingw64 is
+            # ours to ship, anything under /c/Windows belongs to the OS.
+            for exe in bin/*.exe; do
+              ldd "$exe" | awk '/=> \/mingw64/ {print $3}'
+            done | sort -u | while IFS= read -r dll; do
+              cp -n "$dll" bin/ || true
+            done
+            ls bin/ | head -40
+          else
+            for exe in bin/qemu-system-*; do
+              dylibbundler -od -b -x "$exe" -d libs -p '@executable_path/../libs/' \
+                || { echo "::error::dylibbundler failed for $exe"; exit 1; }
+            done
+            ls libs/ | head -40
+          fi
+
+      # The proof the binary is ours and not the stub it replaced — and that
+      # it carries every marker rusty asks of it (`PERIPHERAL_MARKERS` and
+      # `ESP32_MODEL_MARKER` in rusty-embed's `simulate/mod.rs`). A marker
+      # no published build carries makes every copy look a generation
+      # behind to every rusty that asks for it, so the list is checked here,
+      # where a build that lacks one never becomes a release. The ESP32's is
+      # asked of the Xtensa binary alone: its interrupt matrix is compiled
+      # into no other.
+      #
+      # `grep -a` rather than `strings`: macOS's strings reads only the text
+      # section by default and the marker lives in __cstring, so it reported
+      # this model absent from a binary that had built perfectly. One method
+      # across every platform, since this is one question.
+      - name: Prove the packaged binaries carry this model
+        working-directory: package/qemu/bin
+        run: |
+          for arch in riscv32 xtensa; do
+            bin="qemu-system-$arch"
+            if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
+            markers=('[rusty:gpio@' '[rusty:adc@' '[rusty:i2c@' '[rusty:spi@'
+                     '[rusty:pwm@' '[rusty:rmt@' '[rusty:sw@' '[rusty:wave@'
+                     '[rusty:systimer-exact]')
+            if [ "$arch" = xtensa ]; then
+              markers+=('misc.esp32.intmatrix.status')
+            fi
+            for marker in "${markers[@]}"; do
+              if LC_ALL=C grep -aqF "$marker" "$bin"; then
+                echo "$bin carries $marker"
+              else
+                echo "::error::$bin does not carry $marker, which rusty asks of it.%0Asize=$(wc -c < "$bin")"
+                exit 1
+              fi
+            done
+          done
+
+      - name: Name and compress it
+        run: |
+          version="${GITHUB_REF_NAME#qemu-}"
+          case "$version" in refs/*|master|main) version="dev-${GITHUB_SHA::7}" ;; esac
+          name="qemu-rusty-$version-${{ matrix.label }}"
+          echo "$version" > package/qemu/RUSTY_VERSION
+          tar -C package -cJf "$name.tar.xz" qemu
+          ls -la "$name.tar.xz"
+          echo "PACKAGE=$name.tar.xz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-${{ matrix.label }}
+          path: ${{ env.PACKAGE }}
+          if-no-files-found: error
+
+  # Boot real firmware through the package that would ship.
+  #
+  # blink-rust is the ideal subject because it drives GPIO0 *and* prints
+  # `[rusty:gpio]` itself — two independent accounts of one pin, so they can
+  # be checked against each other rather than either taken on trust.
+  prove:
+    needs: build
+    # The gates run against the Linux build and nothing else, so a Windows
+    # or macOS job that failed for its own reasons must not take them with
+    # it. It did: an MSYS2 install that exited 1 skipped thirteen gates with
+    # a perfectly good binary sitting in an artifact, and the models went
+    # unproven for a reason that had nothing to do with them. When it is the
+    # Linux leg that failed there is no artifact, and the download below
+    # says so by name — which is the clearer failure anyway.
+    if: always() && needs.build.result != 'cancelled'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: qemu-x86_64-linux-gnu
+          path: package
+
+      - name: Unpack exactly as a user's install would
+        run: |
+          # QEMU's runtime libraries, and `libudev-dev` for rusty-embed's
+          # serial support: `serialport` links it on Linux to read a port's
+          # USB vendor and product ids, which is how a board is recognised
+          # rather than guessed at. The board probe below is the first thing
+          # in this workflow to build rusty's own crates, and it failed here
+          # on `libudev-sys` — a missing header, reported as a build script
+          # exiting 101, which reads as nothing to do with the gate.
+          #
+          # Tried three times: a mirror mid-sync fails a fetch, apt exits 100,
+          # and every gate below is skipped over builds that were all good —
+          # which is how the first run carrying the signal gate ended. A proof
+          # that fails for the mirror's reasons proves nothing either way.
+          for attempt in 1 2 3; do
+            if sudo apt-get -o Acquire::Retries=3 update &&
+               sudo apt-get -o Acquire::Retries=3 install -y \
+                 libglib2.0-0 libpixman-1-0 libslirp0 libudev-dev; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 30
+          done
+          mkdir -p tools
+          tar -C tools -xf package/*.tar.xz
+          tools/qemu/bin/qemu-system-riscv32 --version
+          tools/qemu/bin/qemu-system-xtensa --version
+
+      - name: Rust for the target
+        run: rustup target add riscv32imc-unknown-none-elf
+
+      # The action first: `cargo binstall` is not a command a runner has.
+      # Building espflash from source is the fallback rather than the default.
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: espflash, for the flash image
+        env:
+          # Unauthenticated, binstall's GitHub API calls are rate limited and
+          # it falls through to the `||` — compiling espflash from source for
+          # no reason. Same fix as release.yml.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo binstall --no-confirm espflash || cargo install --locked espflash
+
+      - name: Build blinky and make its image
+        working-directory: examples/blink-rust
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/blink-rust \
+            target/sim/flash.bin
+
+      # `-global`, because the machine creates the GPIO device — there is no
+      # `-device` line to hang a chardev off.
+      - name: Boot it and watch the pins
+        run: |
+          timeout 25 tools/qemu/bin/qemu-system-riscv32 \
+            -M esp32c3 -nographic \
+            -drive "file=examples/blink-rust/target/sim/flash.bin,if=mtd,format=raw" \
+            -serial file:serial.log \
+            -chardev file,id=pins,path=pins.log \
+            -global driver=esp32.gpio,property=pins,value=pins \
+            > qemu.out 2>&1 || true
+          echo "─── the pin channel ───"
+          head -20 pins.log 2>/dev/null || echo "(no pins.log at all)"
+          echo "─── what the firmware said ───"
+          grep -m5 'rusty:gpio' serial.log 2>/dev/null || echo "(no firmware report)"
+          echo "─── qemu's own output ───"
+          head -10 qemu.out
+
+      # Refuse to call this proven on a file that exists but is empty — the
+      # exact shape of the release that shipped no installer.
+      - name: The pin channel carried something
+        run: |
+          if [ ! -s pins.log ]; then
+            echo "::error::the GPIO chardev produced nothing. Either -global is"
+            echo "the wrong way to reach a machine-created device, or the model"
+            echo "is not seeing the writes esp-hal makes."
+            exit 1
+          fi
+          lines=$(grep -c 'rusty:gpio@' pins.log || echo 0)
+          echo "$lines pin reports from the emulator itself"
+          [ "$lines" -gt 0 ]
+
+      # A line arriving proves the channel works; it does not prove the
+      # *level* is right, and a model reporting a stuck 1 would pass
+      # everything above.
+      - name: The emulator and the firmware agree about GPIO0
+        shell: python
+        run: |
+          import re, sys
+
+          def levels(path):
+              out = []
+              try:
+                  text = open(path, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return out
+              for line in text.splitlines():
+                  if "rusty:gpio" not in line:
+                      continue
+                  found = re.search(r"\b0=([01])\b", line)
+                  if found:
+                      out.append(int(found.group(1)))
+              return out
+
+          emulator = levels("pins.log")
+          firmware = levels("serial.log")
+          print("emulator :", emulator[:12])
+          print("firmware :", firmware[:12])
+
+          def stop(why):
+              """Fail with the evidence attached.
+
+              An `::error::` becomes an annotation, which survives the run and
+              is readable without admin rights on the repository. `sys.exit(msg)`
+              writes to stderr, which is neither.
+              """
+              print(f"::error::{why} | emulator={emulator[:12]} firmware={firmware[:12]}")
+              sys.exit(1)
+
+          if len(emulator) < 4:
+              stop(f"the emulator reported GPIO0 only {len(emulator)} times; "
+                   "blinky toggles it, so the model is missing writes")
+
+          # Consecutive repeats mean a write was seen but the level was
+          # computed wrong — a stuck pin reported over and over.
+          if any(a == b for a, b in zip(emulator, emulator[1:])):
+              stop("the emulator's GPIO0 does not alternate")
+
+          if not firmware:
+              stop("the firmware printed no GPIO report, so there is "
+                   "nothing to check the emulator against")
+
+          # The two do not start together, and should not. `Output::new` sets
+          # the pin's direction and initial level *before* the loop that does
+          # the printing, so the emulator legitimately knows about transitions
+          # the firmware never announced. Demanding they agree on element zero
+          # was the first version of this check, and it rejected a model that
+          # was working — for being more truthful than the firmware.
+          offset = None
+          for lead in range(4):
+              overlap = min(len(emulator) - lead, len(firmware), 8)
+              if overlap >= 4 and emulator[lead:lead + overlap] == firmware[:overlap]:
+                  offset = lead
+                  break
+
+          if offset is None:
+              stop("the emulator's account does not contain the firmware's")
+
+          print(f"both accounts of GPIO0 agree, the emulator leading by {offset} "
+                "— the pin being configured, which the firmware never printed")
+
+      # The firmware's clock is the systimer, and it has to keep the virtual
+      # clock's time: that is the clock the emulator stamps its own reports
+      # with and plays a signal against. Upstream's counter dropped the
+      # fraction of a tick at every read, so firmware polling it in a loop —
+      # blinky's busy wait, every esp-hal delay — ran slow by however often
+      # it looked: about half a percent on a runner, which the signal gate's
+      # tolerance let through and the filter gate did not. Each GPIO0 edge
+      # has two stamps here, the emulator's and the one blinky takes off its
+      # systimer, and the two have to advance together.
+      - name: The firmware's clock keeps the emulator's time
+        shell: python
+        run: |
+          import re, sys
+
+          def edges(path):
+              try:
+                  text = open(path, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return []
+              return [(int(m.group(1)), int(m.group(2))) for m in
+                      re.finditer(r"\[rusty:gpio@(\d+)\][^\n]*?\b0=([01])\b", text)]
+
+          emulator = edges("pins.log")
+          firmware = edges("serial.log")
+          lead = next((k for k in range(4)
+                       if len(emulator) > k + 4 and len(firmware) >= 4
+                       and [l for _, l in emulator[k:k + 4]] == [l for _, l in firmware[:4]]),
+                      None)
+          if lead is None:
+              print(f"::error::the two accounts of GPIO0 do not line up: "
+                    f"emulator={emulator[:6]} firmware={firmware[:6]}")
+              sys.exit(1)
+          pairs = [(e, f) for (e, _), (f, _) in zip(emulator[lead:], firmware)]
+          if len(pairs) < 10:
+              print(f"::error::only {len(pairs)} edges carry both stamps")
+              sys.exit(1)
+          n = len(pairs)
+          mx = sum(e for e, _ in pairs) / n
+          my = sum(f for _, f in pairs) / n
+          slope = (sum((e - mx) * (f - my) for e, f in pairs)
+                   / sum((e - mx) ** 2 for e, _ in pairs))
+          gaps = sorted(b - a for (a, _), (b, _) in zip(pairs, pairs[1:]))
+          print(f"{n} edges: the firmware's clock ran {slope:.7f} of the emulator's; "
+                f"a 500 ms wait and a print took {gaps[len(gaps) // 2] / 1000:.3f} ms")
+          if abs(slope - 1) > 1e-4:
+              print(f"::error::the firmware's clock ran {slope:.6f} of the emulator's "
+                    f"({(slope - 1) * 100:+.3f}%): the systimer is not keeping virtual time")
+              sys.exit(1)
+
+      # Everything above proves the *output* half. The input half — a host
+      # driving a level that unmodified firmware reads through GPIO_IN — has
+      # no witness in blinky, which never reads a pin.
+      - name: Build the input probe and make its image
+        working-directory: qemu/gpio-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/gpio-probe \
+            target/sim/flash.bin
+
+      # A socket chardev, not a file: this direction needs somebody able to
+      # write, and `-chardev file` is one-way.
+      - name: A host-driven pin reaches the firmware's is_high()
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, time
+
+          IMAGE = "qemu/gpio-probe/target/sim/flash.bin"
+          SERIAL = "probe-serial.log"
+          PORT = 5555
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def levels():
+              """Every level the firmware printed, in order.
+
+              It prints on *change*, so this is the transition sequence — and
+              comparing a sequence is what lets the second half of the test
+              fail distinctly. Waiting for "gpio4=0" a second time would match
+              the first occurrence and pass without the pin coming back down.
+              """
+              return [int(m) for m in re.findall(r"\[probe\] gpio4=([01])", read())]
+
+          def stop(why):
+              print(f"::error::{why} | levels={levels()}")
+              print("--- serial ---")
+              print(read()[-1500:])
+              sys.exit(1)
+
+          def settle(count, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if len(levels()) >= count:
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("probe-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              settle(1, 60, "the probe never reported GPIO4 at all — it did not "
+                            "boot, or reading GPIO_IN does not come back")
+              print(f"booted, GPIO4 reads {levels()[0]}")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              link.sendall(b"4=1\n")
+              settle(2, 25, "the host drove GPIO4 high and the firmware never "
+                            "saw it — the input half does not reach GPIO_IN")
+
+              # Back down, because a model that ORed every write into `in`
+              # would have passed everything above this line.
+              link.sendall(b"4=0\n")
+              settle(3, 25, "GPIO4 went high and would not come back down — "
+                            "the model sets bits but never clears them")
+
+              seen = levels()[:3]
+              if seen != [0, 1, 0]:
+                  stop(f"expected the pin to read 0, then 1, then 0; got {seen}")
+              print("0 → 1 → 0, driven from the host and read through GPIO_IN")
+          finally:
+              qemu.kill()
+
+      # Polling is not the whole of reading a pin. Firmware that asks to be
+      # *interrupted* by a button — which is how nearly every real button is
+      # read — sat in its loop for ever while the pin moved underneath it,
+      # because the GPIO peripheral raised no interrupt and no machine had
+      # wired the line it would have raised.
+      - name: Build the interrupt probe and make its image
+        working-directory: qemu/irq-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/irq-probe \
+            target/sim/flash.bin
+
+      - name: A pin edge interrupts the firmware
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/irq-probe/target/sim/flash.bin"
+          SERIAL = "irq-serial.log"
+          PORT = 5556
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def edges():
+              """Every count the handler has printed, in order.
+
+              The probe never reads the pin outside its handler, so a number
+              here is an interrupt the peripheral raised and the CPU took —
+              nothing else in that firmware can produce one.
+              """
+              return [int(m) for m in re.findall(r"\[irq\] edges=(\d+)", read())]
+
+          # What the *model* says it did, read off the pin channel: the
+          # device announces every change of the interrupt line. Two
+          # accounts of one interrupt, so a failure names which half is
+          # broken instead of saying nothing happened.
+          raised = []
+
+          def stop(why):
+              # The probe's own lines first, then the log. Annotations are
+              # capped at ten per step, and a cap that ate the probe's
+              # account of what it programmed is why two rounds of this said
+              # nothing but bootloader chatter. The whole tail travels as one
+              # annotation with its newlines encoded, so the cap cannot cut
+              # it in the middle either.
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[irq]")]
+              print(f"::error::{why} | edges={edges()} | the model raised: {raised}")
+              for line in said[-6:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(count, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if len(edges()) >= count:
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("irq-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              deadline = time.time() + 60
+              while time.time() < deadline and "listening on GPIO4" not in read():
+                  time.sleep(0.25)
+              if "listening on GPIO4" not in read():
+                  stop("the interrupt probe never booted")
+
+              # Nothing has moved the pin, so nothing may have fired. An
+              # interrupt here would mean the model raises the line on
+              # configuration, and every count after it would be noise.
+              time.sleep(2)
+              if edges():
+                  stop("an interrupt arrived before the pin was ever driven")
+              print("booted, and quiet until the pin moves")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              # Everything the device says, in the background: pin reports
+              # and the interrupt line's own account.
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:irq"):
+                              raised.append(text)
+                              print(f"    {text}")
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              link.sendall(b"4=1\n")
+              settle(1, 25, "the host drove GPIO4 high and the firmware was "
+                            "never interrupted")
+
+              # And back down, because a model that latched the first edge and
+              # never cleared would pass everything above this line — and so
+              # would one that raised the line and left it raised, which is a
+              # handler re-entering rather than a second edge.
+              link.sendall(b"4=0\n")
+              settle(2, 25, "the pin came back down and the firmware was not "
+                            "interrupted again")
+
+              seen = edges()[:2]
+              if seen != [1, 2]:
+                  stop(f"expected the handler to run once per edge; got {seen}")
+              if not raised:
+                  stop("the firmware was interrupted, but the model never said "
+                       "it raised the line — one of the two accounts is wrong")
+              print(f"both edges interrupted the firmware, once each; the model "
+                    f"raised the line {len(raised)} times")
+          finally:
+              qemu.kill()
+
+      # Everything above is about pins. This is about the *board*: the
+      # sheet in examples/blink-rust says a lamp is wired to the pin the
+      # firmware drives, through a resistor, and its cathode to ground —
+      # and `board_probe` replays the sheet's own rules over the pins the
+      # emulator reports, so "the lamp lights" is checked rather than
+      # looked at. It fails when a lamp on a GPIO never lights, which is
+      # what a rewired sheet or a broken rule both look like.
+      #
+      # `RUSTY_CONFIG_DIR` is the workspace, so rusty's tool ladder finds
+      # the emulator this job just unpacked into `tools/qemu` — the same
+      # ladder a user's install walks, with the data directory pointed here.
+      - name: The board's own rules light its lamp
+        env:
+          RUSTY_CONFIG_DIR: ${{ github.workspace }}
+        run: |
+          cargo run -p rusty-embed --example board_probe -- examples/blink-rust 8 \
+            > board-probe.log 2>&1 || {
+              echo "::error::the board probe failed on examples/blink-rust"
+              tail -40 board-probe.log | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+                | while IFS= read -r chunk; do echo "::error::…$chunk"; done
+              exit 1
+            }
+          tail -30 board-probe.log
+
+      - name: Build the analog probe and make its image
+        working-directory: qemu/adc-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/adc-probe \
+            target/sim/flash.bin
+
+      # Everything above is a pin that is high or low. This is the other
+      # half of a board: a knob, a divider, a light sensor — an analog value
+      # the firmware reads with `adc.read_oneshot()` and not through any
+      # channel it had to be written to expect.
+      #
+      # The failure this gate exists for is worse than a wrong number. With
+      # nothing mapped at the converter's registers the driver polls a done
+      # bit nothing can set, and the firmware hangs inside the user's own
+      # `read` call. Measured on the stock build before the model was
+      # written: `[adc] the conversion never finished`, which is the probe
+      # refusing to spin rather than reporting the hang as silence.
+      - name: An analog value on a pin reaches the firmware's ADC
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/adc-probe/target/sim/flash.bin"
+          SERIAL = "adc-serial.log"
+          PORT = 5557
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def counts():
+              """Every reading the firmware has printed, in order."""
+              return [int(m) for m in re.findall(r"\[adc\] gpio3=(\d+)", read())]
+
+          # What the *model* says it converted, off the pin channel. Two
+          # accounts of one reading: the host said what was on the pin, the
+          # emulator says what it handed over, and the firmware says what it
+          # got. A gate that read only the last of those cannot tell a
+          # converter that ignored the host from a driver that ignored the
+          # converter.
+          converted = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[adc]")]
+              print(f"::error::{why} | firmware read {counts()} | "
+                    f"the model converted {converted}")
+              for line in said[-6:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in counts():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("adc-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              deadline = time.time() + 60
+              while time.time() < deadline and "listening on GPIO3" not in read():
+                  time.sleep(0.25)
+              if "listening on GPIO3" not in read():
+                  stop("the analog probe never booted")
+
+              # An undriven pin converts to zero, and the conversion has to
+              # *finish*: this is the assertion the stock emulator fails, and
+              # it fails it by never printing anything at all.
+              settle(0, 20, "the firmware never completed a conversion")
+              print("booted, and reading zero on an undriven pin")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:adc"):
+                              converted.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              # Two values, because a converter returning a constant passes
+              # any single one of them, and then a third that is out of range
+              # — a slider dragged past full scale must read as full scale,
+              # not wrap to nothing.
+              for drive, want in ((1234, 1234), (3000, 3000), (99999, 4095)):
+                  link.sendall(f"A3={drive}\n".encode())
+                  settle(want, 20,
+                         f"the host put {drive} on GPIO3 and the firmware "
+                         f"read {counts()[-1:]}")
+
+              seen = counts()
+              if seen[:4] != [0, 1234, 3000, 4095]:
+                  stop(f"expected the readings to follow the pin; got {seen[:6]}")
+
+              # And the emulator's own account has to carry the same numbers.
+              # Independent: one is a register the model latched, the other a
+              # `println!` from the driver that read it.
+              theirs = [int(m) for m in
+                        re.findall(r"\[rusty:adc@\d+\] 3=(\d+)", "\n".join(converted))]
+              for want in (1234, 3000, 4095):
+                  if want not in theirs:
+                      stop(f"the firmware read {want} and the model never said "
+                           f"it converted it — one of the two accounts is wrong")
+              print(f"the firmware read {seen[:4]}; the model converted "
+                    f"{len(theirs)} samples and agrees on every one")
+          finally:
+              qemu.kill()
+
+      - name: Build the signal probe and make its image
+        working-directory: qemu/wave-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/wave-probe \
+            target/sim/flash.bin
+
+      # A value on a pin is not a signal: the host sends one about once a
+      # millisecond, never exactly on time, and a 50 Hz tone arriving that
+      # way is a third of a radian out — a filter judged against it is judged
+      # against the host's scheduler. So the host renders a table and the
+      # emulator plays it against its virtual clock, the one the firmware's
+      # systimer keeps. This proves the three halves of that: every
+      # conversion the emulator reports is the table's value at its instant;
+      # the firmware read what was reported; and the tone has the table's
+      # frequency by the firmware's own clock. And the sensor half: a burst
+      # read of a register block with a table playing is one sample whole,
+      # its seven words carrying the sample's number so a torn read shows.
+      - name: A signal plays against the firmware's own clock
+        shell: python
+        run: |
+          import math
+          import os
+          import re
+          import socket
+          import subprocess
+          import sys
+          import threading
+          import time
+
+          QEMU = "tools/qemu/bin/qemu-system-riscv32"
+          ROMS = None
+          IMAGE = "qemu/wave-probe/target/sim/flash.bin"
+          SERIAL = "wave-serial.log"
+          PORT = 5561
+
+          # One second of a 50 Hz tone at 20 kHz: fifty whole periods, so the table
+          # loops without a seam, around mid-scale with room either side.
+          RATE, LEN, TONE = 20000, 20000, 50.0
+          TABLE = [round(2048 + 1500 * math.sin(2 * math.pi * TONE * n / RATE)) for n in range(LEN)]
+          # The sensor's block: fourteen bytes a sample, its seven words each the
+          # sample's own number, so a torn read shows as words that disagree.
+          S_RATE, S_LEN, WIDTH = 1000, 4000, 14
+
+
+          def block(k):
+              word = (k & 0xFFFF).to_bytes(2, "big")
+              return word * 7
+
+
+          def lines():
+              out = [f"W3={RATE},{LEN}"]
+              for at in range(0, LEN, 96):
+                  out.append(f"W3@{at}=" + "".join(f"{c:04x}" for c in TABLE[at:at + 96]))
+              out.append("W3=on")
+              out.append(f"i2c 68~3b:{WIDTH}={S_RATE},{S_LEN}")
+              data = b"".join(block(k) for k in range(S_LEN))
+              for at in range(0, len(data), 224):
+                  out.append(f"i2c 68~@{at}=" + data[at:at + 224].hex())
+              out.append("i2c 68~=on")
+              return out
+
+
+          def expected(t, start):
+              """What a conversion at guest time `t` reads: the device's own arithmetic."""
+              elapsed = max(0, t - start)
+              position = elapsed * RATE
+              index, millionths = (position // 1_000_000) % LEN, position % 1_000_000
+              a, b = TABLE[index], TABLE[(index + 1) % LEN]
+              return min((a * (1_000_000 - millionths) + b * millionths + 500_000) // 1_000_000, 0xFFF)
+
+
+          def read_serial():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+
+          heard = []
+
+
+          def fail(why):
+              serial = read_serial()
+              said = [l for l in serial.splitlines() if l.startswith("[wave]")]
+              print(f"::error::{why}")
+              for line in said[:4] + said[-4:]:
+                  print(f"::error::probe: {line[:300]}")
+              for line in [l for l in heard if "wave" in l][:6]:
+                  print(f"::error::channel: {line[:300]}")
+              sys.exit(1)
+
+
+          def main():
+              # A log from an earlier run already says "done": QEMU's file backend
+              # does not start the file over.
+              if os.path.exists(SERIAL):
+                  os.remove(SERIAL)
+              command = [QEMU, "-M", "esp32c3", "-nographic",
+                         "-drive", f"file={IMAGE},if=mtd,format=raw",
+                         "-serial", f"file:{SERIAL}",
+                         "-chardev", f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                         "-global", "driver=esp32.gpio,property=pins,value=pins"]
+              if ROMS:
+                  command += ["-L", ROMS]
+              qemu = subprocess.Popen(command, stdout=open("wave-qemu.out", "w"), stderr=subprocess.STDOUT)
+              try:
+                  link = None
+                  for _ in range(500):
+                      try:
+                          link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                          break
+                      except OSError:
+                          time.sleep(0.02)
+                  if link is None:
+                      fail("the emulator never opened the pin channel")
+
+                  def listen():
+                      buffered = b""
+                      while True:
+                          try:
+                              chunk = link.recv(65536)
+                          except OSError:
+                              return
+                          if not chunk:
+                              return
+                          buffered += chunk
+                          while b"\n" in buffered:
+                              one, buffered = buffered.split(b"\n", 1)
+                              heard.append(one.decode("utf-8", "replace").strip())
+
+                  threading.Thread(target=listen, daemon=True).start()
+                  link.sendall(("\n".join(lines()) + "\n").encode())
+
+                  deadline = time.time() + 90
+                  while time.time() < deadline and "[wave] done" not in read_serial():
+                      time.sleep(0.25)
+                  if "[wave] done" not in read_serial():
+                      fail("the probe never finished its readings")
+                  time.sleep(0.5)
+              finally:
+                  qemu.kill()
+
+              # The tables were taken and played, with the instant sample 0 played at.
+              starts = {}
+              for line in heard:
+                  m = re.match(r"\[rusty:wave@(\d+)\] (.+?) on (\d+)$", line)
+                  if m:
+                      starts[m.group(2)] = int(m.group(3))
+                  if re.match(r"\[rusty:wave@\d+\] .* (refused|\?)", line):
+                      fail(f"the emulator refused a table: {line}")
+              if "3" not in starts or "i2c 68" not in starts:
+                  fail(f"the emulator never said both tables were playing: {starts}")
+              start = starts["3"]
+
+              # Every conversion the emulator reports is the table's value at that
+              # instant — to the count, because it is the same arithmetic.
+              reports = []
+              for line in heard:
+                  m = re.match(r"\[rusty:adc@(\d+)\] 3=(\d+)$", line)
+                  if m:
+                      reports.append((int(m.group(1)), int(m.group(2))))
+              wrong = [(t, v, expected(t, start)) for t, v in reports if v != expected(t, start)]
+              if len(reports) < 1500:
+                  fail(f"only {len(reports)} conversions of GPIO3 were reported")
+              if wrong:
+                  fail(f"{len(wrong)} of {len(reports)} conversions were not the table's value "
+                       f"at their instant, e.g. (t, read, table) {wrong[:3]}")
+
+              # The firmware read what was reported, in order. A conversion is
+              # reported when its value changed, so a reading equal to the last one
+              # reported is a conversion nobody needed to hear about — the probe's
+              # loop catching up after a slow print takes two in a row.
+              readings = [tuple(int(x) for x in m) for m in
+                          re.findall(r"\[wave\] (\d+) (\d+) (-?\d+)", read_serial())]
+              if len(readings) < 1900:
+                  fail(f"the probe printed only {len(readings)} readings")
+              values = iter(v for _, v in reports)
+              last = None
+              for at, value, _ in readings:
+                  if value == last:
+                      continue
+                  for reported in values:
+                      if reported == value:
+                          last = value
+                          break
+                  else:
+                      fail(f"the firmware read {value} at {at} µs, which the emulator never "
+                           f"reported converting after {last}")
+
+              # The tone has the table's frequency by the firmware's own clock.
+              crossings = []
+              for (t0, v0, _), (t1, v1, _) in zip(readings, readings[1:]):
+                  if (v0 - 2048) < 0 <= (v1 - 2048):
+                      crossings.append(t0 + (t1 - t0) * (2048 - v0) / (v1 - v0))
+              if len(crossings) < 50:
+                  fail(f"only {len(crossings)} rising crossings of mid-scale in the readings")
+              # The period is the slope of the crossings against their count, the
+              # first five left out: the probe's first readings come late while the
+              # host is still sending the tables, and two ends of a span weigh
+              # whatever those ends happened to be.
+              def slope(points):
+                  n = len(points)
+                  mx = sum(x for x, _ in points) / n
+                  my = sum(y for _, y in points) / n
+                  return (sum((x - mx) * (y - my) for x, y in points)
+                          / sum((x - mx) ** 2 for x, _ in points))
+
+              period = slope(list(enumerate(crossings))[5:])
+              frequency = 1e6 / period
+              # A twentieth of a percent. It was half of one, and a systimer
+              # running that much slow of the virtual clock passed it — the
+              # filter gate is what found the drift, as a hum fitted at a
+              # third of its size.
+              if abs(frequency - TONE) > TONE * 0.0005:
+                  fail(f"the firmware timed the tone at {frequency:.3f} Hz, not {TONE} Hz")
+
+              # The sensor: never torn, never missing, and its sample moving at the
+              # table's rate by the firmware's clock.
+              serial = read_serial()
+              if "[wave] torn" in serial or "done torn=0" not in serial:
+                  fail("a burst read took words from two samples")
+              if any(s < 0 for _, _, s in readings):
+                  fail("a burst read of the sensor failed")
+              # Its rate by the firmware's clock is the slope of the sample against
+              # the stamp, the first readings left out for the reason the tone's
+              # are: measured between the first and the last reading, a first
+              # transaction a few milliseconds late was two samples of drift.
+              (t0, _, s0), (t1, _, s1) = readings[0], readings[-1]
+              rate = slope([(t, s) for t, _, s in readings[10:]]) * 1e6
+              if abs(rate - S_RATE) > S_RATE * 0.001:
+                  fail(f"the sensor's sample moved at {rate:.2f} a second by the firmware's clock, "
+                       f"not {S_RATE}")
+
+              print(f"{len(reports)} conversions each the table's value at its instant; "
+                    f"the firmware timed the tone at {frequency:.3f} Hz; "
+                    f"{len(readings)} sensor reads, none torn, sample {s0}->{s1} over {(t1 - t0) / 1e6:.3f} s")
+
+
+          if __name__ == "__main__":
+              main()
+
+      - name: Build the bus probe and make its image
+        working-directory: qemu/i2c-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/i2c-probe \
+            target/sim/flash.bin
+
+      # The bus almost every real board has something on. Three addresses,
+      # each carrying its own assertion: a sensor whose registers the host
+      # loaded, a display whose writes the host must see, and an address
+      # nobody declared, which must **not** answer. The last is the one the
+      # others cannot make — a bus where every address acknowledges is a bus
+      # where a missing part looks exactly like a present one.
+      #
+      # Measured on the stock build before the model existed: `scan -`, and
+      # the driver's transactions timing out. Without the software timeout
+      # the probe sets, it hung instead, silently, inside `i2c.read`.
+      - name: A device on the bus answers the firmware's driver
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/i2c-probe/target/sim/flash.bin"
+          SERIAL = "i2c-serial.log"
+          PORT = 5558
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          # What the model says happened on the bus, off the pin channel.
+          # The firmware's own account is the serial log; agreement between
+          # the two is the evidence, as everywhere else here.
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[i2c]")]
+              print(f"::error::{why}")
+              # The lines that say what the controller did, and how far the
+              # loop got, ahead of the rest: the annotation budget is small
+              # and a scan count buried under boot chatter is a scan count
+              # nobody reads.
+              # The controller's registers, and how far the loop got — one
+              # heartbeat, not twenty-eight of them crowding out the lines
+              # that say what the bus did.
+              for line in [l for l in said if l.startswith("[i2c] regs")][-2:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in [l for l in said if l.startswith("[i2c] alive")][-1:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              said = [l for l in said if not l.startswith("[i2c] alive")]
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::bus: {line.replace('%', '%25')[:900]}")
+              # The emulator's own stderr, which is where an assertion or a
+              # crash inside the model would be. This gate once failed with
+              # three lines of serial and silence everywhere else, and the
+              # one place that could have said whether the guest was stuck
+              # or the emulator had died was not being read.
+              try:
+                  ours = open("i2c-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("i2c-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              # Connected before the guest boots: the device reports only to
+              # a channel somebody is on, so anything the firmware does in its
+              # first tenth of a second is lost to a gate that waits for a
+              # serial line and connects afterwards. QEMU opens this socket
+              # during machine init, before the first instruction.
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:i2c"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[i2c] listening on the bus", 60, "the bus probe never booted")
+
+              # Before anything is declared the bus is empty, and the probe
+              # has to say so: an empty scan is the state every run starts in
+              # and the one a model that answered everything would never
+              # report.
+              settle("[i2c] scan -", 30, "the probe found something on an empty bus")
+              settle("[i2c] 50 did not answer, which is right", 30,
+                     "an address nobody declared answered anyway")
+              print("booted, with nothing on the bus")
+
+              # A sensor with an identity byte and six bytes of sample, and a
+              # display with nothing to read. 0x50 stays undeclared.
+              link.sendall(b"i2c 68:75=68\n")
+              link.sendall(b"i2c 68:3b=010203040506\n")
+              link.sendall(b"i2c 3c=+\n")
+
+              settle("[i2c] scan 3c,68", 30,
+                     "the host put two devices on the bus and the firmware did "
+                     "not find them")
+              settle("[i2c] who=68", 30,
+                     "the sensor answered its identity register with something "
+                     "other than what the host put there")
+              settle("[i2c] burst=010203040506", 30,
+                     "a six-byte read did not return the six bytes the host "
+                     "loaded — a model answering one byte six times fails here "
+                     "and passes every shorter read")
+              settle("[i2c] wrote 00ae", 30,
+                     "the firmware could not write to the display")
+
+              # And taken off the bus, it stops answering. A scan that
+              # remembered rather than asked would pass everything above.
+              link.sendall(b"i2c 68=-\n")
+              settle("[i2c] scan 3c", 30,
+                     "the host took the sensor off the bus and the firmware "
+                     "still found it")
+
+              if "answered and nobody put it there" in read():
+                  stop("an address nobody declared acknowledged at some point")
+
+              # The model's own account has to carry the display's bytes: the
+              # firmware saying it wrote them and the emulator saying it
+              # carried them are two different claims.
+              if not any(re.search(r"\] 3c w 00ae$", line) for line in traffic):
+                  stop("the firmware wrote to the display and the model never "
+                       "said it carried the bytes — one of the two accounts is "
+                       "wrong")
+              print(f"the bus works both ways; the model reported "
+                    f"{len(traffic)} transactions")
+          finally:
+              qemu.kill()
+
+      - name: Build the wire probe and make its image
+        working-directory: qemu/spi-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/spi-probe \
+            target/sim/flash.bin
+
+      # The last of the four peripherals, and the third hang of the same
+      # shape: upstream models SPI1, the flash controller the machine boots
+      # through, and nothing at SPI2 — the one a project puts a display on.
+      #
+      # Two assertions, and they are different questions. A **write**
+      # completes and its bytes reach the host, which is the whole of what a
+      # display needs and the case where nothing comes back. A **transfer**
+      # returns the bytes the host declared for that chip select, read from
+      # the start of its buffer — SPI has no addressing, so any other rule
+      # would be a convention this model invented.
+      - name: An SPI transfer reaches a device and brings back what it said
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/spi-probe/target/sim/flash.bin"
+          SERIAL = "spi-serial.log"
+          PORT = 5559
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[spi]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::wire: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("spi-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("spi-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              # Connected before the guest has booted, not after. The device
+              # reports only to a channel somebody is on, and the firmware's
+              # one write to the display happens a tenth of a second after it
+              # starts — so a gate that waits for that line and *then*
+              # connects has already missed the report it is about to assert
+              # on. QEMU opens this socket during machine init, before the
+              # first instruction, so the only thing to wait for is the
+              # process itself.
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:spi"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[spi] listening on SPI2", 60, "the wire probe never booted")
+              # The write completes with nothing declared — which is exactly
+              # a display — and an undriven MISO reads as zeros rather than
+              # hanging.
+              settle("[spi] wrote aea501", 30,
+                     "the firmware could not write to the wire")
+              settle("[spi] read 0000", 30,
+                     "an undriven MISO did not read as zeros; a transfer with "
+                     "nothing declared must still complete")
+              print("booted, writing to a device that says nothing back")
+
+              # Two bytes for chip select 0. The driver sends a command byte
+              # and reads the reply out of the same transfer, so the second
+              # byte is the answer — which is what full duplex means and why
+              # the buffer is read from its start.
+              link.sendall(b"spi 0=1a68\n")
+              settle("[spi] read 1a68", 30,
+                     "the host declared what chip select 0 answers with and "
+                     "the firmware read something else")
+
+              if not any(re.search(r"\] 0 w aea501$", line) for line in traffic):
+                  stop("the firmware wrote to the wire and the model never said "
+                       "it carried the bytes — one of the two accounts is wrong")
+              print(f"the wire works both ways; the model reported "
+                    f"{len(traffic)} transfers")
+          finally:
+              qemu.kill()
+
+      - name: Build the duty probe and make its image
+        working-directory: qemu/ledc-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/ledc-probe \
+            target/sim/flash.bin
+
+      # The fifth peripheral, and the first that is about *how hard* rather
+      # than whether. LEDC is the timer behind every servo, dimmed lamp and
+      # motor on a hobby board, and upstream maps nothing at it: the driver
+      # writes a duty into a hole and the pin never moves, so a servo stands
+      # still and a lamp stays dark with no error anywhere.
+      #
+      # Three assertions, and the second and third are what make it a model
+      # of LEDC rather than a duty echo. A channel's **frequency** comes from
+      # the timer it points at, so a second channel on a second timer must be
+      # reported at 50 Hz while the first is at 24 kHz — a model that stored
+      # one frequency reports both the same. And it must be on the **pin the
+      # matrix routes it to**: a model reporting channel numbers would put
+      # the servo's duty on the lamp's pin and look perfectly plausible.
+      #
+      # **`wait=on`, unlike the gates above.** The channel reports only to
+      # somebody who is on it, and this firmware sets its first duty sixty
+      # milliseconds into the guest's life — which is sooner than a Python
+      # process can start QEMU and connect to it. The first run said so
+      # exactly: `[(5, 0.75, …), (6, 0.0798, …)]`, the quarter that comes
+      # first missing entirely. With `wait=on` the machine does not execute
+      # an instruction until the listener is there, which is what the app
+      # itself does and for the same reason.
+      - name: A duty reaches the pin at the frequency its timer sets
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/ledc-probe/target/sim/flash.bin"
+          SERIAL = "ledc-serial.log"
+          PORT = 5569
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[ledc]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::duty: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("ledc-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("ledc-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:pwm"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[ledc] set 25 at 24000", 60, "the duty probe never booted")
+              settle("[ledc] set 75 at 24000", 30,
+                     "the firmware never got as far as changing the duty")
+              settle("[ledc] set 8 at 50", 30,
+                     "the firmware never got as far as the second timer")
+              # A moment for the last report to cross the channel: the line
+              # above is printed by the firmware and the one below is the
+              # model's, and they travel on different pipes.
+              time.sleep(1.0)
+
+              seen = []
+              for line in traffic:
+                  for pin, duty, hz in re.findall(
+                      r"(\d+)=([\d.]+)@([\d.]+)", line
+                  ):
+                      seen.append((int(pin), float(duty), float(hz)))
+              if not seen:
+                  stop("the firmware set three duties and the model reported "
+                       "none — either nothing is mapped at LEDC or nothing "
+                       "reaches the matrix")
+
+              def want(pin, duty, hz, why):
+                  for at, d, f in seen:
+                      if at == pin and abs(d - duty) < 0.01 and abs(f - hz) < hz * 0.05:
+                          return
+                  stop(f"{why}: the model reported {seen[-6:]}")
+
+              want(5, 0.25, 24000.0, "a quarter at 24 kHz on GPIO5 was never reported")
+              want(5, 0.75, 24000.0, "three quarters at 24 kHz on GPIO5 was never reported")
+              # Eight percent at twelve bits is 327/4096, which is what the
+              # register holds and therefore what the model must report —
+              # not the eight percent the driver was asked for.
+              want(6, 327 / 4096, 50.0,
+                   "the servo channel's duty at 50 Hz on GPIO6 was never "
+                   "reported — a model that keeps one frequency for every "
+                   "channel, or reports channels rather than pins, fails here")
+              print(f"the duty reaches the pin; the model reported {len(seen)} changes")
+          finally:
+              qemu.kill()
+
+      - name: Build the strip probe and make its image
+        working-directory: qemu/rmt-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/rmt-probe \
+            target/sim/flash.bin
+
+      # The sixth, and the one whose absence is a hang rather than a wrong
+      # answer: with nothing mapped at RMT the transmission never ends, so
+      # `wait()` never returns and a strip's driver stops the firmware in the
+      # user's own `write`.
+      #
+      # Three LEDs on purpose. A channel holds 48 codes and three LEDs are
+      # 72, so the driver sends half, waits for the threshold, writes the
+      # next half over the first and goes round — the refill loop a model
+      # that sent its RAM once and stopped would fail. Both accounts are
+      # asserted: the firmware says its `wait()` returned, and the model says
+      # which bytes went out on which pin.
+      - name: A strip's codes reach the pin as the bytes they carry
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/rmt-probe/target/sim/flash.bin"
+          SERIAL = "rmt-serial.log"
+          PORT = 5579
+          WANT = "100000002000000030"
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[rmt]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::strip: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("rmt-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("rmt-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:rmt"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[rmt] sending", 60, "the strip probe never booted")
+              # `holding` is printed by the loop after the transmission, so
+              # reaching it is the firmware saying `wait()` returned rather
+              # than waiting for ever — which is what happens with nothing
+              # mapped at RMT.
+              settle("[rmt] holding", 40,
+                     "the transmission never finished: the driver is still "
+                     "waiting, which is the hang this model exists to fix")
+              if f"[rmt] sent {WANT}" not in read():
+                  stop("the transmission finished with an error rather than "
+                       "sending the codes")
+              time.sleep(1.0)
+
+              if not any(re.search(rf"\] 8 {WANT}\b", line) for line in traffic):
+                  stop("the firmware clocked out three pixels and the model "
+                       "never said which bytes reached GPIO8 — one of the two "
+                       "accounts is wrong")
+              print(f"the strip's bytes reach the pin; the model reported "
+                    f"{len(traffic)} transmissions")
+          finally:
+              qemu.kill()
+
+      - name: Build the screen probe and make its image
+        working-directory: qemu/display-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/display-probe \
+            target/sim/flash.bin
+
+      # A display is the bus read the other way round: nothing is ever read
+      # from it, so the writes *are* the picture. Two rules make that
+      # readable, and each is invisible until it is wrong.
+      #
+      # **Every write is reported.** The bus says a transaction only when it
+      # differs from the one before it — right for a driver polling a sensor
+      # at a kilohertz, and fatal for a framebuffer, where clearing the
+      # screen is the same sixteen zero bytes sixty-four times, each landing
+      # somewhere else. Suppressed, a frame's sixty-four transactions
+      # collapse to three and the picture loses everything but its first
+      # line. So the gate counts them.
+      #
+      # **A continued transaction says so.** A write longer than the
+      # thirty-two byte FIFO is reported in steps, and the steps after the
+      # first carry no control byte of their own; read as messages, their
+      # first data byte is taken for one.
+      #
+      # The driver is the `ssd1306` crate and the drawing is
+      # `embedded-graphics`, so what passes here is somebody else's stream
+      # rather than one written beside the model.
+      - name: A display's whole frame reaches the host
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/display-probe/target/sim/flash.bin"
+          SERIAL = "display-serial.log"
+          PORT = 5589
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[disp]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::screen: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("display-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("display-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:i2c"):
+                              traffic.append(text)
+
+              # The panel is declared with no registers, which is what a
+              # display is: an address that acknowledges and has nothing to
+              # be read from. The same declaration a sheet's display part
+              # produces.
+              link.sendall(b"i2c 3c=+\n")
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[disp] wrote 48 bytes in one go", 60,
+                     "the write that crosses the FIFO never completed")
+              settle("[disp] the panel is up", 40,
+                     "the driver never finished its init sequence")
+              settle("[disp] drew frame 2", 40,
+                     "the driver never drew a second frame")
+              time.sleep(1.0)
+
+              if not any(" w+ " in line for line in traffic):
+                  stop("a write longer than the FIFO was reported as separate "
+                       "messages: every step after the first would have its "
+                       "data read as a control byte")
+              writes = [l for l in traffic if re.search(r"\] 3c w\+? 40", l)]
+              if len(writes) < 100:
+                  stop(f"two frames are 128 framebuffer writes and the model "
+                       f"reported {len(writes)}: identical writes are being "
+                       f"suppressed, which loses all but the first line of "
+                       f"every picture")
+              # The near corner of the drawing: eight columns of eight lit
+              # pixels, which is the first sixteen bytes of the first page.
+              if not any("40ffffffffffffffff0000000000000000" in l for l in traffic):
+                  stop("the frame reached the host without the square the "
+                       "firmware drew in its near corner")
+              print(f"the screen's writes reach the host; the model reported "
+                    f"{len(traffic)} transactions, {len(writes)} of them "
+                    f"framebuffer")
+          finally:
+              qemu.kill()
+
+      - name: Build the keypad probe and make its image
+        working-directory: qemu/keypad-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/keypad-probe \
+            target/sim/flash.bin
+
+      # A matrix keypad, which is neither of the two things the pin channel
+      # could say before. A key does not drive a pad — it **joins** two of
+      # them, and which way the level flows is whichever the firmware is
+      # driving at that instant; and the columns rest high because the pads
+      # pull them there, which nothing modelled either.
+      #
+      # Both halves are asserted, and each fails on its own. **At rest the
+      # firmware must report no key**: with no pull-up an input reads zero
+      # and every one of the sixteen keys is held down before the firmware
+      # has done anything. **Then a closed switch must be the key that
+      # joins those two pins** — not a neighbour, which a model that drove
+      # the column instead would give, and not nothing, which is what a
+      # model with no switches gives.
+      - name: A matrix keypad rests high and reads the key that is down
+        shell: python
+        run: |
+          import socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/keypad-probe/target/sim/flash.bin"
+          SERIAL = "keypad-serial.log"
+          PORT = 5599
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[keypad]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("keypad-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          def latest():
+              said = [l.strip() for l in read().splitlines() if l.startswith("[keypad]")]
+              return said[-1] if said else ""
+
+          def settle_last(want, seconds, why):
+              # What the pad is saying *now*, not what it once said: a key
+              # released has to be the firmware's latest word, and `in` over
+              # the whole log would match the line before it was pressed.
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if latest() == want:
+                      return
+                  time.sleep(0.25)
+              stop(f"{why} (it is saying {latest()!r})")
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("keypad-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              settle("[keypad] scanning", 60, "the keypad probe never booted")
+              # Nothing is pressed, and nothing must read as pressed. This
+              # is the pull-ups' assertion: without them the columns read
+              # zero and the scan finds a key in every row.
+              settle("[keypad] none", 40,
+                     "the keypad read a key with nothing pressed — the columns "
+                     "are not resting at their pull-ups")
+
+              # The key where row GPIO3 crosses column GPIO6, which the pad
+              # prints as 8. A model that drove the column instead of joining
+              # it would report a key in every row of that column.
+              link.sendall(b"sw 3-6=1\n")
+              settle("[keypad] down 8", 30,
+                     "a key joining GPIO3 and GPIO6 was closed and the firmware "
+                     "did not read it as the 8")
+              link.sendall(b"sw 3-6=0\n")
+              settle_last("[keypad] none", 30,
+                          "the key was released and the firmware still reads it as down")
+              # A second key, on another row and column: a model that
+              # remembered one switch, or one pin, passes everything above.
+              link.sendall(b"sw 4-10=1\n")
+              settle_last("[keypad] down D", 30,
+                          "a second key on another row and column was never read")
+              print("the keypad rests high and reads the key that is down")
+          finally:
+              qemu.kill()
+
+      # And the one that closes the loop. Every gate above proves one
+      # direction of one peripheral: the host says something and the
+      # firmware hears it, or the firmware does something and the model
+      # reports it. This proves the two halves *joined* — the firmware
+      # drives a pin, the sheet's own resistor and capacitor decide what
+      # that does, and the firmware's converter reads the answer back.
+      #
+      # **The assertion is the shape of the numbers, and nothing weaker
+      # would do.** A host echoing the pin level passes "the firmware read
+      # something" and every other check that counts lines; what it cannot
+      # do is make the reading *climb* through a time constant somebody
+      # drew and then arrive. So the probe requires readings at all, a run
+      # of several that rise, and a settle at both ends — and it exits
+      # non-zero otherwise, which is what makes this a gate.
+      #
+      # It needs the converter, not just the pins: a build from before
+      # `qemu-v3` has GPIO and no SAR, and the probe checks that marker
+      # rather than a proxy for it. Twenty-five seconds because the step
+      # builds the firmware and the image first, through the same
+      # `simulate::plan` the app runs.
+      #
+      # The readings are the firmware's own, and only those. The probe used
+      # to count the emulator's report of each conversion as well — every
+      # reading twice, equal neighbours that cut every climb into pairs —
+      # and fetched those reports off the pin channel ahead of the circuit,
+      # which then missed whichever drive edge it took. So the gate passed
+      # or failed on how two streams interleaved: green on the release run,
+      # red on the next push, with one climb of 0, 263, 514, 753, 979 read as
+      # a climb of two.
+      - name: The firmware drives the circuit the sheet draws
+        env:
+          RUSTY_CONFIG_DIR: ${{ github.workspace }}
+        run: |
+          cargo run -p rusty-embed --example live_probe -- qemu/live-probe 25 \
+            > live-probe.log 2>&1 || {
+              echo "::error::the firmware-in-the-loop gate failed on qemu/live-probe"
+              tail -40 live-probe.log | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+                | while IFS= read -r chunk; do echo "::error::…$chunk"; done
+              exit 1
+            }
+          tail -30 live-probe.log
+
+      # The Signals tab's whole chain, with nothing mocked. The sheet in
+      # examples/filter-lab puts a generator on GPIO3: rusty's own host code
+      # renders its table through the circuit and plays it down the pin
+      # channel, the firmware reads its converter by its own clock and runs
+      # the filter the Design view exported, and a scenario's `play` step
+      # changes the signal while it runs. The probe requires `raw` to carry
+      # each tone at the sheet's counts, fitted at the firmware's own stamps,
+      # and `y` to be the design's filter of that `raw` sample for sample —
+      # the numbers, not the shape. Its first run found the firmware
+      # sampling 643 times a second where it was written for a thousand: a
+      # line a sample was more than the console carries in a millisecond,
+      # the loop fell behind its deadlines, and a filter's coefficients are
+      # right at one rate only. It samples 250 a second now, and the probe
+      # checks the rate before anything else. Its next two found the hum at a
+      # third and then a seventh of its size, the second with every sample
+      # exactly on time: the firmware's clock was slow. Upstream's systimer
+      # dropped a fraction of a tick at every read, so firmware busy-waiting
+      # on it ran half a percent slow here, and the tone arrived at another
+      # frequency by its clock — the systimer patch in qemu/patches.py, and
+      # the clock gate after blinky's. The log still says how evenly the
+      # samples fell, since a held-up host bunches them.
+      - name: A filter the lab designed does in firmware what the lab says
+        env:
+          RUSTY_CONFIG_DIR: ${{ github.workspace }}
+        run: |
+          cargo run -p rusty-embed --example filter_probe -- examples/filter-lab \
+            > filter-probe.log 2>&1 || {
+              echo "::error::the filter gate failed on examples/filter-lab"
+              tail -40 filter-probe.log | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+                | while IFS= read -r chunk; do echo "::error::…$chunk"; done
+              exit 1
+            }
+          tail -30 filter-probe.log
+
+      # The Xtensa toolchain, which none of the gates above need: every
+      # other probe is an ESP32-C3 on stable Rust. This one is an ESP32,
+      # and there is no ESP32 without espup — a prebuilt Xtensa `core` does
+      # not exist.
+      - name: Install the Xtensa toolchain for the ESP32 probe
+        run: |
+          cargo install espup --locked --version 0.15.1 || cargo install espup --locked
+          espup install --targets esp32 --toolchain-version 1.97.0.0
+          echo "LIBCLANG_PATH=$(ls -d "$HOME"/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-clang/lib 2>/dev/null | head -1)" >> "$GITHUB_ENV"
+
+      - name: Build the float probe, as an application writes it and with the FPU switched off
+        working-directory: qemu/float-probe
+        run: |
+          . "$HOME/export-esp.sh" 2>/dev/null || true
+          mkdir -p target/sim
+          cargo build --release
+          espflash save-image --chip esp32 --merge \
+            target/xtensa-esp32-none-elf/release/float-probe \
+            target/sim/float.bin
+          FLOAT_PROBE_DISABLE=1 cargo build --release
+          espflash save-image --chip esp32 --merge \
+            target/xtensa-esp32-none-elf/release/float-probe \
+            target/sim/off.bin
+
+      # The one gate whose subject is the CPU, written against two claims
+      # rusty made and took back. First that "Espressif's QEMU stops at the
+      # first floating-point instruction" — it does not. Then, measured, that
+      # the *application* had to switch its FPU on, because CPENABLE read
+      # zero at the float — also wrong. Nothing in the ESP32's ROM, its
+      # bootloader or an esp-hal application ever writes CPENABLE (all three
+      # disassembled; one read turned up), esp-hal's interrupt entry saves
+      # the floating-point registers unconditionally, and esp-hal's
+      # interrupts work on real boards: the FPU is on from reset on the
+      # silicon, and upstream's system emulation leaves it off. rusty's comes
+      # out of reset the way the board does (`patches.py`, target/xtensa/cpu.c).
+      #
+      # Both halves, and each fails on its own. **The build that does nothing
+      # to CPENABLE must run to its last line**, as the same image does on a
+      # board. **The build that switches coprocessor 0 off itself must go
+      # quiet and the emulator must say why** — xtensa-lx-rt does exactly
+      # that inside every interrupt when float-save-restore is off — because
+      # the symptom on its own is silence.
+      #
+      # `tools/qemu/bin`, the package as a user unpacks it, like every gate
+      # above. This gate's first version named the build job's
+      # `qemu-install/` and `qemu-src/pc-bios`, which do not exist in this
+      # job, and failed on every push with a Python traceback and no
+      # annotation at all — a gate that could not start reads exactly like
+      # one that ran and found something.
+      - name: An ESP32 application survives its first float, and is told when it switched the FPU off
+        shell: python
+        run: |
+          import subprocess, sys
+
+          QEMU = "tools/qemu/bin/qemu-system-xtensa"
+
+          def run(image, seconds=25):
+              # `timeout` rather than a wait: the firmware ends in `loop {}`
+              # on the way we want and spins in the double-exception vector
+              # on the way we do not, so neither run ever exits by itself.
+              with open(f"{image}.out", "w") as o, open(f"{image}.err", "w") as e:
+                  proc = subprocess.Popen(
+                      [QEMU, "-nographic", "-machine", "esp32",
+                       "-drive", f"file={image},if=mtd,format=raw"],
+                      stdout=o, stderr=e,
+                  )
+                  try:
+                      proc.wait(timeout=seconds)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
+                      proc.wait()
+              read = lambda p: open(p, encoding="utf-8", errors="replace").read()
+              return read(f"{image}.out"), read(f"{image}.err")
+
+          def stop(why, out, err):
+              detail = (out[-2000:] + "\n--- stderr ---\n" + err[-2000:])
+              detail = detail.replace("%", "%25")
+              detail = "".join(f"{line}%0A" for line in detail.splitlines())
+              print(f"::error::{why}%0A{detail}")
+              sys.exit(1)
+
+          out, err = run("qemu/float-probe/target/sim/float.bin")
+          if "[float] product 3.75" not in out:
+              stop("an ESP32 application that never touches CPENABLE could "
+                   "not multiply two floats: the emulator is leaving the FPU "
+                   "off at reset again, where the silicon has it on", out, err)
+          if "[float] survived" not in out:
+              stop("the float probe multiplied and then stopped before its "
+                   "last line", out, err)
+          if "[rusty:cpu]" in err:
+              stop("the emulator reported a disabled coprocessor for a "
+                   "firmware that never disabled it", out, err)
+          print("an application that never touches CPENABLE runs its floats "
+                "to the end, as it does on a board")
+
+          out, err = run("qemu/float-probe/target/sim/off.bin")
+          if "[float] about to multiply" not in out:
+              stop("the probe that switches the FPU off did not even reach "
+                   "its float", out, err)
+          if "[float] product" in out:
+              stop("a float ran with coprocessor 0 switched off, which means "
+                   "the coprocessor-disabled exception is no longer raised and "
+                   "the emulator is now more permissive than the silicon",
+                   out, err)
+          if "[rusty:cpu] coprocessor 0 is disabled" not in err:
+              stop("the run went quiet at the float and the emulator said "
+                   "nothing about why — which is the state this gate exists "
+                   "to keep rusty out of", out, err)
+          print("with the FPU switched off, the run stops and the emulator "
+                "names the reason")
+
+      - name: Build the ESP32 peripheral probe and make its image
+        working-directory: qemu/esp32-probe
+        run: |
+          . "$HOME/export-esp.sh" 2>/dev/null || true
+          mkdir -p target/sim
+          cargo build --release
+          espflash save-image --chip esp32 --merge \
+            target/xtensa-esp32-none-elf/release/esp32-probe \
+            target/sim/flash.bin
+
+      # Everything the C3 gets, on the original ESP32 — and each item one
+      # that failed on this part in a way of its own before it was modelled
+      # (see the probe's header for the whole list). The assertions are the
+      # firmware's account of what it read, compared with what the host put
+      # there, and the model's account of what the firmware drove:
+      #
+      # - **pulls** land on the right pads, which is what proves IO_MUX's
+      #   pad-name-ordered table (the probe's pins are chosen so that the
+      #   table read as arithmetic answers wrongly for every one of them);
+      # - **an input-only pad refuses its pull**, as the silicon does;
+      # - **a host press** drags a pulled-up button low;
+      # - **the converter** answers through `SENS`, the bus answers with a
+      #   declared register, the wire with a declared buffer;
+      # - **both halves of LEDC** report a duty and a carrier, the high-speed
+      #   half having no latch at all;
+      # - **the strip's bytes** come out of RMT on the right pin;
+      # - **a GPIO edge reaches the firmware's own handler**, which needs
+      #   the dispatcher's status words answered and the FPU on from reset;
+      # - **the clock runs**: a one-shot TIMG alarm whose handler raises
+      #   FROM_CPU0 and then clears itself, and a switch handler that sets
+      #   the next alarm — Embassy's chain on this part, which stops at the
+      #   first link if the timer's line waits on INT_ENA or if the matrix
+      #   lowers a shared CPU line under a source still high on it;
+      # - and the emulator says nothing about the CPU.
+      - name: An ESP32 gets the board the C3 gets
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/esp32-probe/target/sim/flash.bin"
+          SERIAL = "esp32-serial.log"
+          PORT = 5599
+          traffic = []
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def emulator():
+              try:
+                  return open("esp32-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[esp32]")]
+              print(f"::error::{why}")
+              for line in said[-12:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-12:]:
+                  print(f"::error::channel: {line.replace('%', '%25')[:900]}")
+              ours = emulator()
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          def heard(pattern, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if any(re.search(pattern, line) for line in traffic):
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-xtensa", "-M", "esp32", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("esp32-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              # Before the first instruction (`wait=on`): the sensor and the
+              # wire have to be declared before the firmware reaches for them.
+              link.sendall(b"i2c 68:75=68\n")
+              link.sendall(b"spi 0=1a68\n")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          traffic.append(one.decode("utf-8", "replace").strip())
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[esp32] listening for edges on 17", 90,
+                     "the ESP32 probe never booted")
+              for pin, level in (("4", "1"), ("13", "0"), ("32", "1"),
+                                 ("27", "0"), ("23", "1")):
+                  settle(f"[esp32] pull {pin}={level}", 30,
+                         f"GPIO{pin} did not rest at its pull — IO_MUX's table "
+                         f"put that pad's pull somewhere else, or nowhere")
+              settle("[esp32] nopull 39=0", 30,
+                     "an input-only pad took the pull-up it has no circuitry "
+                     "for — the silicon floats it")
+              settle("[esp32] i2c 68:75 -> 68", 30,
+                     "the bus did not read the declared register — look for "
+                     "`?op` on the channel, which is a command the model does "
+                     "not know")
+              settle("[esp32] spi read 1a6800", 30,
+                     "the wire did not read what chip select 0 declared")
+              heard(r"\] 16=0\.7500@24002\.4$", 30,
+                    "the low-speed LEDC channel never reported its duty")
+              heard(r"\] 33=0\.0800@50\.0$", 30,
+                    "the high-speed LEDC channel never reported its duty — "
+                    "a model waiting for a latch this half does not have")
+              heard(r"\] 26 100020$", 30,
+                    "the strip's three bytes never came out of RMT on GPIO26")
+              print("booted: pulls, the converter at rest, the bus, the wire, "
+                    "both halves of LEDC and the strip all answer")
+
+              # The clock, before the host touches anything: a GPIO edge
+              # shares the CPU line and would pick up a switch the matrix
+              # dropped, which is how a broken chain limps rather than
+              # stops once the host starts moving pins.
+              clock = []
+              deadline = time.time() + 30
+              while time.time() < deadline:
+                  clock = re.findall(r"\[esp32\] timer (\d+) switch (\d+)", read())
+                  if clock and int(clock[-1][0]) >= 20:
+                      break
+                  time.sleep(0.25)
+              ticks, switches = (int(n) for n in clock[-1]) if clock else (0, 0)
+              if ticks == 0:
+                  stop("the TIMG alarm never fired — a timer model gating its "
+                       "line on INT_ENA, which this part ignores and esp-hal "
+                       "never writes")
+              if switches == 0:
+                  stop("the alarm fired and the software interrupt it raised "
+                       "was never taken — the matrix lowered the CPU line "
+                       "both share when the alarm cleared itself, and nothing "
+                       "set the next alarm")
+              if ticks < 20 or abs(ticks - switches) > 2:
+                  stop(f"the clock stalled at {ticks} alarms and {switches} "
+                       f"switches — a link of the chain is being dropped")
+              print(f"the clock runs: {ticks} alarms, each followed by its "
+                    f"switch")
+
+              # Now the host acts on the board: a knob on each ADC pin, the
+              # button on GPIO4 pressed, and an edge on GPIO17.
+              for line in (b"A34=2048\n", b"A35=999\n", b"4=0\n", b"17=1\n"):
+                  link.sendall(line)
+              settle("[esp32] adc 34=2048 35=999", 30,
+                     "the converter did not read what the host put on its pins")
+              settle("[esp32] pull 4=0", 30,
+                     "a pressed button did not drag its pulled-up pad low")
+              deadline = time.time() + 30
+              while time.time() < deadline:
+                  counts = re.findall(r"\[esp32\] edges on 17: (\d+)", read())
+                  if counts and int(counts[-1]) >= 1:
+                      break
+                  time.sleep(0.25)
+              else:
+                  stop("the pin moved and the firmware's own handler never ran "
+                       "— look at the probe's `latched:` line, which names the "
+                       "link of the chain that was open")
+              if "[rusty:cpu]" in emulator():
+                  stop("the emulator reported a disabled coprocessor for a "
+                       "firmware that never disabled it")
+              print("and the host's knob, button and edge all reached the "
+                    "firmware")
+          finally:
+              qemu.kill()
+
+      - uses: actions/upload-artifact@v4
+        # Especially on failure: the logs are the evidence for whatever the
+        # comparison above rejected, and a step that only runs when the run
+        # succeeded throws them away exactly when they are needed.
+        if: always()
+        with:
+          name: pin-logs
+          path: |
+            pins.log
+            serial.log
+            probe-serial.log
+            probe-qemu.out
+            irq-serial.log
+            irq-qemu.out
+            adc-serial.log
+            adc-qemu.out
+            i2c-serial.log
+            i2c-qemu.out
+            spi-serial.log
+            spi-qemu.out
+            ledc-serial.log
+            ledc-qemu.out
+            rmt-serial.log
+            rmt-qemu.out
+            display-serial.log
+            display-qemu.out
+            keypad-serial.log
+            keypad-qemu.out
+            board-probe.log
+            live-probe.log
+            qemu/float-probe/target/sim/*.out
+            qemu/float-probe/target/sim/*.err
+            esp32-serial.log
+            esp32-qemu.out
+          if-no-files-found: warn

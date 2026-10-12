@@ -1,0 +1,31 @@
+# A WeAct "Black Pill" STM32F411CE: embassy-stm32 blinking PC13, faster
+# while the KEY button on PA0 is held, logging defmt over a debug probe.
+# Built for thumbv7em-none-eabihf with stable Rust; not run on a board here.
+# The wizard writes every Black Pill part's project from it, the F401CC's
+# included: the feature and probe-rs's name for the part are replaced.
+
+chip = "stm32f411ce"
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "Cargo.lock.in"
+
+[[file]]
+path = "build.rs"
+from = "build.rs.in"
+
+[[file]]
+path = "rust-toolchain.toml"
+from = "rust-toolchain.toml.in"
+
+[[file]]
+path = ".cargo/config.toml"
+from = "cargo-config.toml.in"
+
+[[file]]
+path = "src/main.rs"
+from = "main.rs.in"

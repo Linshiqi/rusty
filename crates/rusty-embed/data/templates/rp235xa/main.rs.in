@@ -1,0 +1,25 @@
+//! A Raspberry Pi Pico 2 (RP2350A): the LED on GPIO25 blinks, faster
+//! while a button from GPIO15 to ground is held. Embassy's async executor
+//! and timer; the log is defmt over a debug probe (`cargo run`).
+
+#![no_std]
+#![no_main]
+
+use defmt::info;
+use embassy_executor::Spawner;
+use embassy_rp::gpio::{Input, Level, Output, Pull};
+use embassy_time::Timer;
+use {defmt_rtt as _, panic_probe as _};
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_rp::init(Default::default());
+    let mut led = Output::new(p.PIN_25, Level::Low);
+    let button = Input::new(p.PIN_15, Pull::Up);
+    info!("blinking GPIO25");
+    loop {
+        led.toggle();
+        let pause = if button.is_low() { 100 } else { 500 };
+        Timer::after_millis(pause).await;
+    }
+}

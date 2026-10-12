@@ -1,0 +1,201 @@
+//! The only place a cross-layer action begins.
+//!
+//! Views render; controllers fetch, mutate, and record failure. Keeping that
+//! split means the busy indicator, the error surface, and the ordering rules
+//! are written once instead of being re-invented per panel.
+//!
+//! One module per thing the workbench does. It was one file of 3,800 lines
+//! and 146 functions, already sectioned by hand-drawn dividers — those
+//! dividers were module boundaries that had never been made into modules, so
+//! nothing stopped the debugger's section from accreting the editor, the
+//! update check and the keybinds. The names below are those dividers.
+//!
+//! Everything is re-exported flat, so a caller still writes
+//! `controller::open_file(…)` and never has to know which module it moved to.
+//! The submodules are how *this* code is organised, not a second vocabulary
+//! for the views to learn.
+
+mod assistant;
+mod calls;
+mod crates;
+mod debug;
+mod devices;
+mod disk;
+mod draw;
+mod editor;
+mod git;
+mod lab;
+mod lsp;
+mod math;
+mod navigate;
+mod playground;
+mod project;
+mod session;
+mod setup;
+mod simulate;
+mod storage;
+mod terminal;
+mod testrun;
+mod views;
+mod watch;
+mod wizard;
+mod workbench;
+
+pub use assistant::*;
+pub use calls::*;
+pub use crates::*;
+pub use debug::*;
+pub use devices::*;
+pub use disk::*;
+pub use draw::*;
+pub use editor::*;
+pub use git::*;
+pub use lab::*;
+pub use lsp::*;
+pub use math::*;
+pub use navigate::*;
+pub use playground::*;
+pub use project::*;
+pub use session::*;
+pub use setup::*;
+pub use simulate::*;
+pub use storage::*;
+pub use terminal::*;
+pub use views::*;
+pub use watch::*;
+pub use wizard::*;
+pub use workbench::*;
+// Nothing outside the controllers calls it: a run is read as it passes.
+use testrun::*;
+
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+
+use rusty_embed::{EmbeddedProject, LogLevel, LogLine, LogStream};
+
+use crate::{ipc::Answer, state::AppState};
+
+/// The arguments of a command that takes a path and nothing else.
+#[derive(serde::Serialize)]
+pub(crate) struct PathArg {
+    pub path: String,
+}
+
+/// A document and its text: a sync, a save, a format.
+#[derive(serde::Serialize)]
+pub(crate) struct PathText {
+    pub path: String,
+    pub text: String,
+}
+
+/// A document and a position in it: every request anchored at the caret.
+#[derive(serde::Serialize)]
+pub(crate) struct PathAt {
+    pub path: String,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// Set a signal only when the value is not already what it holds.
+///
+/// Every Git read's answer goes through this — an unchanged history set
+/// again rebuilt every row of the log — and so does anything else whose
+/// answer is usually the same as last time. It lives here rather than in
+/// `git`, because a second copy beside the first is how two readers of one
+/// idea drift.
+pub(crate) fn set_if_changed<T: PartialEq + Send + Sync + 'static>(holder: RwSignal<T>, value: T) {
+    if holder.with_untracked(|current| *current != value) {
+        holder.set(value);
+    }
+}
+
+/// What `open_project` returns. Mirrors `rusty_app::commands::OpenResult`.
+///
+/// Detection and nothing else. The Cargo analysis used to travel with it,
+/// and the window could not draw the new project until `cargo metadata` had
+/// resolved the whole dependency graph — which nothing on screen at that
+/// moment reads. It is asked for separately now (`refresh_workspace`),
+/// beside the tree rather than ahead of it, and the reason it is absent
+/// still reaches the dock from there.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenResult {
+    project: EmbeddedProject,
+}
+
+/// Run an action, tracking it as in flight and recording any failure.
+///
+/// Every controller entry point goes through this, so a panel can never leave
+/// the spinner spinning by forgetting to decrement it on the error path.
+fn track<F, T>(state: AppState, future: F, apply: impl FnOnce(T) + 'static)
+where
+    F: std::future::Future<Output = Answer<T>> + 'static,
+    T: 'static,
+{
+    tracked(state, future, apply, false);
+}
+
+/// [`track`] for a call that *started* the session: its failure is that
+/// session ending, so the Stop button and the terminal's prompt come back.
+///
+/// The distinction is load-bearing because `session_running` is one global
+/// flag, and `track` wraps *every* controller entry point. Clearing it on any
+/// failure meant one unrelated error — a register read refused because the
+/// debugger had stopped, a workspace query that could not answer — told a
+/// running simulation it had ended. Its Stop button vanished while QEMU kept
+/// going, leaving a process the window could no longer stop.
+fn track_session<F, T>(state: AppState, future: F, apply: impl FnOnce(T) + 'static)
+where
+    F: std::future::Future<Output = Answer<T>> + 'static,
+    T: 'static,
+{
+    tracked(state, future, apply, true);
+}
+
+fn tracked<F, T>(state: AppState, future: F, apply: impl FnOnce(T) + 'static, owns_session: bool)
+where
+    F: std::future::Future<Output = Answer<T>> + 'static,
+    T: 'static,
+{
+    state.app.in_flight.update(|n| *n += 1);
+    spawn_local(async move {
+        match future.await {
+            // Success clears nothing. It used to clear the error banner, and
+            // since every controller call comes through here, a background
+            // success — the toolchain re-probe chained onto the environment
+            // check, the pin report the pin map asks for on mount — dismissed
+            // a banner before it had been read. The banner goes when the user
+            // dismisses it or the next failure replaces it; the dock keeps a
+            // copy either way.
+            Ok(value) => apply(value),
+            Err(e) => {
+                if owns_session {
+                    // A session that failed to start is a session that is not
+                    // running — otherwise a tool that is not installed leaves
+                    // the Stop button up and the prompt refusing to send.
+                    state.app.session_running.set(false);
+                    // And the status bar's "Building…" becomes the failure
+                    // it is, rather than counting on for ever.
+                    end_activity(state, Some(-1));
+                }
+                // The banner is transient — dismissed, or replaced by the next
+                // failure. The dock keeps it, so "what did that error say?" is
+                // answerable after the fact.
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: e.message.clone(),
+                    level: Some(LogLevel::Error),
+                });
+                for cause in &e.causes {
+                    state.push_log(LogLine {
+                        stream: LogStream::Stderr,
+                        text: format!("  {cause}"),
+                        level: Some(LogLevel::Error),
+                    });
+                }
+                state.app.error.set(Some(e));
+            }
+        }
+        state.app.in_flight.update(|n| *n = n.saturating_sub(1));
+    });
+}

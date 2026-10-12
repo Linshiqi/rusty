@@ -1,0 +1,35 @@
+# The ESP32-C3's proven project: examples/blink-rust's shape and lockfile,
+# which the emulator's gate 7 boots, with a release profile made for editing
+# (no LTO, incremental). Offered first among the playgrounds because it
+# builds with stable Rust and needs nothing else installed.
+
+chip = "esp32c3"
+playground = 1
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "Cargo.lock.in"
+
+[[file]]
+path = "build.rs"
+from = "../build.rs.in"
+
+[[file]]
+path = "rust-toolchain.toml"
+from = "rust-toolchain.toml.in"
+
+[[file]]
+path = ".cargo/config.toml"
+from = "cargo-config.toml.in"
+
+[[file]]
+path = "src/main.rs"
+from = "main.rs.in"
+
+[[file]]
+path = ".rusty/sim.toml"
+from = "sim.toml.in"

@@ -1,0 +1,49 @@
+//! rusty's playground. Change anything here and press Run (Ctrl+F5): it
+//! builds, and the board on the right runs it. Press Run again while it runs
+//! to restart with your changes.
+//!
+//! The board is an ESP32-C3 with an LED on GPIO0 behind a resistor, and a
+//! button from GPIO4 to ground. Hold the button down while it runs and the
+//! LED blinks faster. What `println!` prints appears in the Output below.
+
+#![no_std]
+#![no_main]
+
+use esp_hal::clock::CpuClock;
+use esp_hal::delay::Delay;
+use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
+use esp_hal::main;
+use esp_println::println;
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    println!("{info}");
+    loop {}
+}
+
+esp_bootloader_esp_idf::esp_app_desc!();
+
+#[main]
+fn main() -> ! {
+    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+
+    let mut led = Output::new(peripherals.GPIO0, Level::Low, OutputConfig::default());
+    // The pull-up holds GPIO4 high; the button pulls it to ground.
+    let button = Input::new(
+        peripherals.GPIO4,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let delay = Delay::new();
+
+    println!("Hello from the playground!");
+    let mut blinks: u32 = 0;
+    loop {
+        led.toggle();
+        blinks += 1;
+        if blinks % 10 == 0 {
+            println!("{} blinks", blinks / 2);
+        }
+        let pause = if button.is_low() { 100 } else { 500 };
+        delay.delay_millis(pause);
+    }
+}

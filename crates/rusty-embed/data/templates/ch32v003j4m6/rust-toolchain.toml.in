@@ -1,0 +1,5 @@
+[toolchain]
+# Nightly, because the build compiles `core` for the CH32V003 itself, and
+# with the standard library's source to compile it from.
+channel = "nightly"
+components = ["rust-src"]

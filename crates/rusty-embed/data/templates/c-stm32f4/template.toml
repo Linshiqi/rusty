@@ -1,0 +1,29 @@
+# A WeAct "Black Pill" STM32F411CE in C: PC13's LED blinking, faster while
+# the KEY button on PA0 is held, written register by register with no
+# vendor SDK — CMake, a startup file and a linker script of its own. Built
+# with the Arm GNU Toolchain; not run on a board here. The wizard writes
+# every Black Pill part's C project from it: the name, the part and its
+# memory are filled in (`@NAME@`, `@CHIP@`, `@PART@`, `@FLASH@`, `@RAM@`),
+# and cmake/rusty-toolchain.cmake is written from the catalogue.
+
+chip = "stm32f411ce"
+
+[[file]]
+path = "CMakeLists.txt"
+from = "CMakeLists.txt.in"
+
+[[file]]
+path = "CMakePresets.json"
+from = "CMakePresets.json.in"
+
+[[file]]
+path = "link.ld"
+from = "link.ld.in"
+
+[[file]]
+path = "src/startup.c"
+from = "startup.c.in"
+
+[[file]]
+path = "src/main.c"
+from = "main.c.in"

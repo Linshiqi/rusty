@@ -1,0 +1,27 @@
+# An nRF52840 DK in C: LED1 on P0.13 blinking, faster while Button 1 on
+# P0.11 is held, written register by register with no nRF Connect SDK —
+# CMake, a startup file and a linker script of its own. Built with the Arm
+# GNU Toolchain; not run on a board here. The CMake files are the
+# STM32F4's, which name nothing about the part but the placeholders.
+
+chip = "nrf52840"
+
+[[file]]
+path = "CMakeLists.txt"
+from = "../c-stm32f4/CMakeLists.txt.in"
+
+[[file]]
+path = "CMakePresets.json"
+from = "../c-stm32f4/CMakePresets.json.in"
+
+[[file]]
+path = "link.ld"
+from = "link.ld.in"
+
+[[file]]
+path = "src/startup.c"
+from = "startup.c.in"
+
+[[file]]
+path = "src/main.c"
+from = "main.c.in"

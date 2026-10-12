@@ -1,0 +1,31 @@
+[tools]
+# Pinned, and it has to be. `style/input.css` opens with `@import
+# "tailwindcss"` — v4 syntax that v3 cannot parse — while Trunk's own default
+# is still 3.3.5. This machine happened to have a v4 binary on PATH, which
+# Trunk prefers over downloading, so every local build worked and the first
+# CI build failed on all three runners with a bare "exit status: 1" from a
+# tailwind nobody had chosen. A toolchain version that comes from whatever is
+# on PATH is not a version.
+tailwindcss = "4.3.0"
+
+[build]
+target = "./index.html"
+# Release builds optimise the wasm for size: every language's catalogue is
+# compiled in, and with a full UI beside it the blob is otherwise slow to load
+# on a cold start.
+wasm_opt = "z"
+
+[watch]
+# The backend has its own watcher under `cargo tauri dev`; watching it here too
+# means every backend edit triggers two rebuilds that race for `dist/`.
+ignore = ["../rusty-app"]
+
+[serve]
+# Deliberately nowhere near 1420. That is Tauri's conventional default, so
+# every Tauri app on the machine wants it — and 1421..1430 is where each of
+# them moves *next*, which is how this one and velo ended up one apart and
+# still able to collide. A port outside the range no other scaffold reaches
+# for is the only version of this that stays fixed. `tauri.conf.json`'s
+# `devUrl` and `.claude/launch.json` must match.
+port = 17425
+open = false

@@ -1,0 +1,5 @@
+fn main() {
+    // esp-hal ships the memory layout; this pulls it in last so its sections
+    // win. No `-Wl,` prefix: this target links with rust-lld directly.
+    println!("cargo:rustc-link-arg=-Tlinkall.x");
+}

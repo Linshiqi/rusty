@@ -1,0 +1,24 @@
+name: A request, or something confusing
+description: A feature you wanted, a chip that is not supported, or a part of it that made no sense.
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        "This was confusing" is worth as much as a crash report — a workbench
+        exists to remove that, so it is a defect like any other.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What were you trying to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: instead
+    attributes:
+      label: What would have helped
+      description: >
+        A guess is fine. What it does today and why that got in the way is
+        already the useful half.

@@ -1,0 +1,8 @@
+[build]
+# The CH32X035's QingKe V4C is RV32IMAC; ch32-hal's examples build for
+# riscv32imc, a target rustup ships, so stable Rust builds this.
+target = "riscv32imc-unknown-none-elf"
+
+[target.riscv32imc-unknown-none-elf]
+# Flash through a WCH-LinkE and watch SDI print, as ch32-hal's examples do.
+runner = "wlink -v flash --enable-sdi-print --watch-serial"

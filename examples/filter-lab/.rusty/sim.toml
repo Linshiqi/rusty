@@ -1,0 +1,35 @@
+version = 2
+
+[board]
+chip = "esp32c3"
+x = 460.0
+y = 40.0
+
+# A bench generator on GPIO3: a slow reading — a 5 Hz tone half a volt either
+# side of the middle — with a quarter volt of 50 Hz mains hum on it. The full
+# scale is the converter's at 11 dB on a C3, as the firmware configures it.
+[[part]]
+ref = "V1"
+symbol = "rusty:SignalGen"
+value = "Signal"
+x = 240.0
+y = 160.0
+
+[part.props]
+fullscale = "2.5"
+signal = "dc 1.25; sine f=5 a=0.5; sine f=50 a=0.25"
+
+[[part]]
+ref = "GND1"
+symbol = "rusty:GND"
+value = "GND"
+x = 240.0
+y = 300.0
+
+[[wire]]
+from = "V1.OUT"
+to = "U1.GPIO3"
+
+[[wire]]
+from = "V1.GND"
+to = "GND1.GND"

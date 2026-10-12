@@ -1,0 +1,5 @@
+fn main() {
+    // qingke-rt ships the linker script and ch32-hal the memory map it
+    // includes; the binary links through both.
+    println!("cargo:rustc-link-arg-bins=-Tlink.x");
+}

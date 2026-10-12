@@ -1,0 +1,10 @@
+# Built for the part, and run on it through a debug probe: `cargo run`
+# flashes the image and prints its defmt log.
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+runner = "probe-rs run --chip STM32F411CEUx"
+
+[env]
+DEFMT_LOG = "info"

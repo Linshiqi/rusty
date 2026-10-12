@@ -1,0 +1,10 @@
+//! Link scripts for the binary: cortex-m-rt's and defmt's. embassy-rp
+//! writes a script of its own, `link-rp.x`, for the RP2040's second-stage
+//! bootloader only. `--nmagic` because the flash and RAM regions are not
+//! page aligned.
+
+fn main() {
+    println!("cargo:rustc-link-arg-bins=--nmagic");
+    println!("cargo:rustc-link-arg-bins=-Tlink.x");
+    println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
+}

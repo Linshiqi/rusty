@@ -1,0 +1,10 @@
+# LF everywhere, checked out as LF even on Windows.
+#
+# `upstream.sha256` is fed to sha256sum, which reads a trailing CR as part of
+# the filename and reports every line as "no such file" — a checksum failure
+# that looks exactly like Espressif having edited the file. The C also travels
+# into a QEMU tree that is LF throughout.
+#
+# Windows runners default to core.autocrlf=true, so without this the
+# portability build fails on the one check whose whole job is to be trusted.
+* text eol=lf

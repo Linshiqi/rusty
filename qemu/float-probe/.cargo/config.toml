@@ -1,0 +1,9 @@
+[target.xtensa-esp32-none-elf]
+runner = "espflash flash --monitor --chip esp32"
+
+[build]
+target = "xtensa-esp32-none-elf"
+
+# Mandatory on Xtensa: there is no prebuilt core for this target.
+[unstable]
+build-std = ["alloc", "core"]

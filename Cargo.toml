@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/rusty-app", "crates/rusty-embed", "crates/rusty-ui", "crates/rusty-i18n", "crates/rusty-ipc", "crates/rusty-term", "crates/rusty-edit", "crates/rusty-lsp", "crates/rusty-dbg", "crates/rusty-git", "crates/rusty-draw", "crates/rusty-mcu"]
+# Test fixtures are real, standalone workspaces that rusty-core analyzes at test
+# time. They must not join this workspace or their deps would unify with ours
+# and the numbers under test would drift with our own dependency changes.
+exclude = ["crates/rusty-core/tests/fixtures"]
+
+[workspace.package]
+# The released version, bumped in every release commit, and what a
+# development build calls itself. The release workflow also stamps the tag
+# into it, so a forgotten bump cannot ship the wrong number — but a
+# `cargo tauri dev` at HEAD would still call itself the old one and be
+# offered its own release as an update. `tests/version_sync.rs` in rusty-app
+# holds this, tauri.conf.json and the newest CHANGELOG heading to one number.
+version = "0.6.77"
+edition = "2024"
+# 1.89 for `File::lock`: rusty windows are separate processes sharing one
+# workbench.toml, and a lock the OS holds is what serialises their writes.
+rust-version = "1.89"
+# Not MIT/Apache: this is source you may read, run and change, but not sell.
+# `license-file` rather than `license` because PolyForm is not one of the SPDX
+# identifiers cargo validates, and a wrong identifier is worse than none.
+license-file = "LICENSE.md"
+repository = "https://github.com/Linshiqi/rusty"
+authors = ["rusty contributors"]
+
+[workspace.lints.rust]
+# Deny, not forbid: the built-in shell's console-mode FFI is the one
+# sanctioned exception, opted in per module with a stated reason.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev]
+# rusty-core spends its time inside guppy/petgraph; unoptimized deps make
+# `cargo test` on a real workspace unbearably slow.
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 2

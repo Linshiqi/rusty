@@ -1,0 +1,736 @@
+//! Work out what an opened project is actually targeting.
+//!
+//! Embedded Rust spreads this across four files that can disagree with each
+//! other, and when they do the compiler's complaint points at none of them:
+//!
+//! | File | What it decides |
+//! |---|---|
+//! | `Cargo.toml` | HAL crate, and usually the chip via an `esp-hal` feature |
+//! | `.cargo/config.toml` | target triple, runner |
+//! | `rust-toolchain.toml` | whether you get the Xtensa compiler |
+//! | `memory.x` / `partitions.csv` | link-time layout |
+//!
+//! Detecting each independently and then *cross-checking* them is the point.
+//! A chip feature saying `esp32c3` next to a target triple saying
+//! `xtensa-esp32-none-elf` is a real and common mistake, and nothing in the
+//! toolchain will tell you which of the two you meant.
+
+use std::path::{Path, PathBuf};
+
+use crate::{
+    catalog::Catalog,
+    chip,
+    error::{Error, Result},
+    model::{EmbeddedProject, Problem, Runtime, Severity},
+};
+
+/// Crates whose presence identifies the framework in use.
+const FRAMEWORK_CRATES: &[(&str, &str)] = &[
+    ("esp-hal", "bare-metal HAL"),
+    ("esp-hal-embassy", "embassy time driver for esp-hal"),
+    ("esp-wifi", "Wi-Fi / BLE on bare metal"),
+    ("esp-idf-hal", "ESP-IDF HAL (std)"),
+    ("esp-idf-svc", "ESP-IDF services (std)"),
+    ("esp-idf-sys", "ESP-IDF bindings (std)"),
+    ("embassy-executor", "async executor"),
+    ("embedded-hal", "portable peripheral traits"),
+    ("defmt", "deferred formatting logs"),
+    ("esp-backtrace", "panic handler and backtraces"),
+    ("esp-println", "println over UART/JTAG"),
+];
+
+/// Inspect a project directory: a Cargo project here, a PlatformIO or
+/// CMake one in [`crate::buildsys`], whichever file is at the root.
+pub fn detect(root: &Path) -> Result<EmbeddedProject> {
+    match crate::buildsys::system_at(root) {
+        Some(crate::model::BuildSystem::Cargo) => {}
+        Some(other) => return crate::buildsys::detect(root, other),
+        None => return Err(Error::NotAProject(root.display().to_string())),
+    }
+    let manifest_path = root.join("Cargo.toml");
+
+    let manifest = read_toml(&manifest_path)?;
+    let mut evidence = vec!["Cargo.toml".to_string()];
+
+    let deps = collect_dependency_names(&manifest);
+    let frameworks: Vec<String> = FRAMEWORK_CRATES
+        .iter()
+        .filter(|(name, _)| deps.iter().any(|d| d == name))
+        .map(|(name, purpose)| format!("{name} — {purpose}"))
+        .collect();
+
+    let c_interop = detect_c_interop(root, &manifest, &deps);
+
+    let uses_defmt = deps.iter().any(|d| d == "defmt");
+    let uses_embassy = deps.iter().any(|d| d.starts_with("embassy-"));
+
+    // Runtime is decided by which HAL family is present, not by guessing —
+    // each vendor's table says which of its crates mean which. The
+    // project's own catalogue overlay counts, so a vendor added there is
+    // detected like a built-in one.
+    let catalog = Catalog::load(Some(root));
+    let uses = |crates: &[String]| deps.iter().any(|d| crates.contains(d));
+    let runtime = if catalog.vendors().iter().any(|v| uses(&v.std_crates)) {
+        Some(Runtime::EspIdf)
+    } else if catalog.vendors().iter().any(|v| uses(&v.bare_metal_crates)) {
+        Some(Runtime::BareMetal)
+    } else {
+        None
+    };
+
+    let (mut chip_id, mut chip_source) = chip_from_manifest(&manifest, &catalog);
+
+    let configured_target = read_build_target(root, &mut evidence)?;
+    let probe_chip = read_cargo_config(root)
+        .as_ref()
+        .and_then(probe_chip_from_runner);
+    let configured_toolchain = read_toolchain_channel(root, &mut evidence)?;
+
+    // Fall back to the target triple only when the manifest was silent, and
+    // only when the triple names exactly one part.
+    if chip_id.is_none()
+        && let Some(target) = &configured_target
+    {
+        let candidates = chip::chips_for_target(target);
+        if candidates.len() == 1 {
+            chip_id = Some(candidates[0].id.clone());
+            chip_source = Some(".cargo/config.toml target".to_string());
+        }
+    }
+
+    for extra in [
+        "memory.x",
+        "partitions.csv",
+        "sdkconfig.defaults",
+        "build.rs",
+    ] {
+        if root.join(extra).is_file() {
+            evidence.push(extra.to_string());
+        }
+    }
+
+    let mut project = EmbeddedProject {
+        root: root.display().to_string(),
+        chip: chip_id,
+        chip_source,
+        // Detection answers for the directory it was given; whether that is
+        // the opened project or a crate below it is the caller's knowledge.
+        firmware_dir: None,
+        // Where rusty keeps its playgrounds is the app's knowledge.
+        playground: None,
+        runtime,
+        configured_target,
+        configured_toolchain,
+        probe_chip,
+        frameworks,
+        uses_defmt,
+        uses_embassy,
+        c_interop,
+        evidence,
+        problems: Vec::new(),
+        build: Default::default(),
+    };
+    project.problems = diagnose(&project);
+    Ok(project)
+}
+
+/// The directory cargo, espflash and the emulator should run in.
+///
+/// Usually the project itself. The exception is the standard embedded
+/// workspace: host-testable crates as members, the bare-metal crate
+/// `exclude`d so `cargo test` at the root does not build `no_std` for the
+/// host. The chip is down there, and so is everything a build, a flash or a
+/// simulation needs.
+///
+/// **Only when there is exactly one candidate.** Two excluded firmware crates
+/// is a question rusty cannot answer — and answering it anyway means flashing
+/// one board with the other's binary, which is the failure this whole file is
+/// written to avoid. The root is returned instead and detection's "chip
+/// unknown" problem names both.
+///
+/// Identity for every ordinary project: a root that has its own chip is its
+/// own firmware directory, so nothing about a normal build changes.
+pub fn firmware_root(root: &Path) -> PathBuf {
+    if detect(root).is_ok_and(|p| p.chip.is_some()) {
+        return root.to_path_buf();
+    }
+    let mut candidates = firmware_candidates(root);
+    match candidates.len() {
+        1 => root.join(candidates.remove(0)),
+        _ => root.to_path_buf(),
+    }
+}
+
+/// Excluded directories that are firmware crates in their own right.
+///
+/// A crate is one when it names a chip by the same two tests applied to the
+/// root — an `esp-hal` chip feature, or a bare-metal triple in
+/// `.cargo/config.toml`. Anything else the workspace excluded (a fixture
+/// tree, a vendored copy) is not offered.
+fn firmware_candidates(root: &Path) -> Vec<String> {
+    let Ok(manifest) = read_toml(&root.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    let Some(excluded) = manifest
+        .get("workspace")
+        .and_then(|w| w.get("exclude"))
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    excluded
+        .iter()
+        .filter_map(toml::Value::as_str)
+        // A chip by the same two tests applied to the root: an `esp-hal` chip
+        // feature in the manifest, or a bare-metal triple in
+        // `.cargo/config.toml`. Recursing is bounded — an excluded directory
+        // is not itself a workspace root with excludes in practice, and even
+        // if it were, `detect` reads files rather than walking.
+        .filter(|name| {
+            let dir = root.join(name);
+            dir.join("Cargo.toml").is_file() && detect(&dir).is_ok_and(|inner| inner.chip.is_some())
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// Cross-check what the four files claim.
+///
+/// Ordered most-blocking first, because the panel shows them in order and the
+/// first one is usually the cause of the rest.
+fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
+    let mut problems = Vec::new();
+
+    let Some(chip_id) = &project.chip else {
+        // A workspace that excludes its firmware is the standard embedded
+        // layout: the host-testable crates are members, and the bare-metal
+        // one is left out so `cargo test` at the root does not try to build
+        // `no_std` for the host. The chip is down there, not here — and
+        // answering only "unknown" leaves somebody re-reading a root that was
+        // never going to have one.
+        let elsewhere = firmware_candidates(Path::new(&project.root));
+        // Named once: the English below reads it, and so does the argument a
+        // translation of the same sentence has to substitute for itself.
+        let named = elsewhere
+            .iter()
+            .map(|name| format!("`{name}/`"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let detail = if elsewhere.is_empty() {
+            "No `esp-hal` chip feature and no recognisable target triple. \
+             Without a chip, rusty cannot pick a toolchain, flash, or size \
+             the binary."
+                .to_string()
+        } else {
+            if elsewhere.len() == 1 {
+                format!(
+                    "This directory has no chip of its own — it is a workspace \
+                     whose firmware is excluded from it. The chip is in {named}, \
+                     and that is where rusty builds, flashes and simulates. \
+                     Nothing is broken; only this line could not be filled in."
+                )
+            } else {
+                // Two candidates is a question with no right answer, and
+                // picking one means flashing a board with the other's binary.
+                format!(
+                    "No chip here, and more than one excluded crate has one: \
+                     {named}. rusty will not choose between them — open the one \
+                     you mean as the project."
+                )
+            }
+        };
+        // One candidate is a layout, not a fault: everything that needs the
+        // chip finds it. Two is genuinely blocking, because nothing can.
+        //
+        // Each arm names its own kind rather than computing one, so the check
+        // that every diagnostic has a translation can read them off the source.
+        let problem = match elsewhere.len() {
+            1 => Problem::new(
+                Severity::Info,
+                "chip-in-firmware",
+                "Chip is in the firmware crate",
+                detail,
+            ),
+            0 => Problem::new(
+                Severity::Blocking,
+                "chip-none",
+                "Target chip unknown",
+                detail,
+            ),
+            _ => Problem::new(
+                Severity::Blocking,
+                "chip-ambiguous",
+                "Target chip unknown",
+                detail,
+            ),
+        };
+        problems.push(problem.arg("crates", &named));
+        return problems;
+    };
+
+    let Some(chip) = chip::by_id(chip_id) else {
+        problems.push(
+            Problem::new(
+                Severity::Warning,
+                "chip-unrecognised",
+                format!("Unrecognised chip `{chip_id}`"),
+                "rusty does not have this part in its catalogue, so chip-specific \
+                 checks are skipped. Flashing and building still work.",
+            )
+            .arg("chip", chip_id),
+        );
+        return problems;
+    };
+
+    // The expected triple depends on the runtime; without one, both are
+    // acceptable and there is nothing to check.
+    if let (Some(configured), Some(runtime)) = (&project.configured_target, project.runtime) {
+        match chip.target_for(runtime) {
+            Some(expected) if expected != configured => {
+                problems.push(
+                    Problem::new(
+                        Severity::Blocking,
+                        "target-mismatch",
+                        "Target triple does not match the chip",
+                        format!(
+                            "`.cargo/config.toml` builds for `{configured}`, but {} with \
+                             {} needs `{expected}`. The build will either fail to link or \
+                             produce a binary for the wrong core.",
+                            chip.name,
+                            runtime.label()
+                        ),
+                    )
+                    .arg("configured", configured)
+                    .arg("chip", &chip.name)
+                    .arg("runtime", runtime.label())
+                    .arg("expected", expected)
+                    .fix(format!(
+                        "# set target = \"{expected}\" in .cargo/config.toml"
+                    )),
+                );
+            }
+            None => {
+                problems.push(
+                    Problem::new(
+                        Severity::Blocking,
+                        "no-target-for-runtime",
+                        format!("{} has no {} target", chip.name, runtime.label()),
+                        format!(
+                            "There is no supported Rust target for {} on this part.",
+                            runtime.label()
+                        ),
+                    )
+                    .arg("chip", &chip.name)
+                    .arg("runtime", runtime.label()),
+                );
+            }
+            _ => {}
+        }
+    } else if project.configured_target.is_none() {
+        problems.push(
+            Problem::new(
+                Severity::Blocking,
+                "no-target",
+                "No target configured",
+                format!(
+                    "`.cargo/config.toml` sets no `[build] target`, so cargo will build \
+                     for this machine instead of {}. The result will compile and then \
+                     fail to do anything useful.",
+                    chip.name
+                ),
+            )
+            .arg("chip", &chip.name)
+            .fix(format!(
+                "# add [build] target = \"{}\" to .cargo/config.toml",
+                chip.bare_metal_target
+            )),
+        );
+    }
+
+    // The single most common first-build failure.
+    if chip.needs_esp_toolchain() {
+        match project.configured_toolchain.as_deref() {
+            Some("esp") => {}
+            Some(other) => problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "needs-esp",
+                    format!("{} needs the `esp` toolchain", chip.name),
+                    format!(
+                        "This part is {} and upstream rustc cannot emit code for it. \
+                         `rust-toolchain.toml` pins `{other}`, which will fail with an \
+                         unknown-target error. The `esp` toolchain ships a forked LLVM and \
+                         is installed by espup.",
+                        chip.arch.label()
+                    ),
+                )
+                .arg("chip", &chip.name)
+                .arg("arch", chip.arch.label())
+                .arg("pinned", other)
+                .fix("espup install"),
+            ),
+            None => problems.push(
+                Problem::new(
+                    Severity::Warning,
+                    "needs-esp-unpinned",
+                    format!(
+                        "{} needs the `esp` toolchain, and none is pinned",
+                        chip.name
+                    ),
+                    "Builds will use whatever toolchain happens to be default. Pin \
+                     it so the project builds the same way on every machine.",
+                )
+                .arg("chip", &chip.name)
+                .fix("# add [toolchain] channel = \"esp\" to rust-toolchain.toml"),
+            ),
+        }
+    } else if project.configured_toolchain.as_deref() == Some("esp") {
+        problems.push(
+            Problem::new(
+                Severity::Warning,
+                "esp-not-needed",
+                format!("{} does not need the `esp` toolchain", chip.name),
+                format!(
+                    "This part is {}, which stock Rust supports. Pinning `esp` still works \
+                     but forces everyone building this project to install espup.",
+                    chip.arch.label()
+                ),
+            )
+            .arg("chip", &chip.name)
+            .arg("arch", chip.arch.label()),
+        );
+    }
+
+    if project.uses_defmt {
+        // Through the constructor, like every other kind: the frontend's
+        // coverage test reads `Problem::new(` off this file, and a literal
+        // struct was the one diagnostic it could not see.
+        problems.push(Problem::new(
+            Severity::Info,
+            "defmt",
+            "defmt logging detected",
+            "The monitor will decode frames against this build's ELF. Reflash after \
+             changing log strings or the decoding drifts.",
+        ));
+    }
+
+    problems
+}
+
+// ─── file readers ────────────────────────────────────────────────────────────
+
+/// Parse a TOML *document*.
+///
+/// `toml::Value`'s `FromStr` parses a single value, not a document, so it
+/// rejects every real manifest at the first `[section]` header. `Table` is the
+/// document type.
+pub(crate) fn read_toml(path: &Path) -> Result<toml::Table> {
+    let text = std::fs::read_to_string(path).map_err(Error::reading(path))?;
+    text.parse::<toml::Table>().map_err(|source| Error::Toml {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+/// Dependency names from every section, including target-specific ones — an
+/// embedded manifest routinely puts the HAL under
+/// `[target.'cfg(target_arch = "riscv32")'.dependencies]`.
+fn collect_dependency_names(manifest: &toml::Table) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut push_table = |table: Option<&toml::Value>| {
+        if let Some(toml::Value::Table(t)) = table {
+            names.extend(t.keys().cloned());
+        }
+    };
+
+    push_table(manifest.get("dependencies"));
+    push_table(manifest.get("build-dependencies"));
+    push_table(manifest.get("dev-dependencies"));
+
+    if let Some(toml::Value::Table(targets)) = manifest.get("target") {
+        for spec in targets.values() {
+            push_table(spec.get("dependencies"));
+        }
+    }
+    names
+}
+
+/// The chip named by a HAL's feature.
+///
+/// These crates take the part as a feature (`features = ["esp32c3"]`), which
+/// makes the manifest the most authoritative source available offline.
+///
+/// Vendors are consulted in the catalogue's order, each through its own
+/// `chip_crates`, most authoritative first. Which crate gets *cited*
+/// matters: half a dozen `esp-*` crates take the same chip feature, and a
+/// user told their chip came from `esp-backtrace` would go and edit the
+/// wrong line. Plain alphabetical order reports exactly that, since
+/// `esp-backtrace` sorts before `esp-hal`.
+fn chip_from_manifest(
+    manifest: &toml::Table,
+    catalog: &Catalog,
+) -> (Option<String>, Option<String>) {
+    let known: Vec<String> = catalog.chips().iter().map(|c| c.id.clone()).collect();
+    let preferred: Vec<&str> = catalog
+        .vendors()
+        .iter()
+        .flat_map(|v| v.chip_crates.iter().map(String::as_str))
+        .collect();
+
+    if let Some(deps) = manifest.get("dependencies")
+        && let Some((id, source)) = chip_from_dependency_table(deps, &known, &preferred)
+    {
+        return (Some(id), Some(source));
+    }
+
+    if let Some(toml::Value::Table(targets)) = manifest.get("target") {
+        for spec in targets.values() {
+            if let Some(deps) = spec.get("dependencies")
+                && let Some((id, source)) = chip_from_dependency_table(deps, &known, &preferred)
+            {
+                return (Some(id), Some(source));
+            }
+        }
+    }
+    (None, None)
+}
+
+fn chip_from_dependency_table(
+    deps: &toml::Value,
+    known: &[String],
+    preferred: &[&str],
+) -> Option<(String, String)> {
+    let toml::Value::Table(deps) = deps else {
+        return None;
+    };
+
+    // A dependency with no `features` key is not a failure, it is simply not
+    // the one carrying the chip — keep looking.
+    let scan = |crate_name: &str, spec: &toml::Value| -> Option<(String, String)> {
+        let features = spec.get("features")?.as_array()?;
+        features
+            .iter()
+            .filter_map(|f| f.as_str())
+            .find_map(|feature| {
+                let normalized = chip::normalize(feature);
+                known
+                    .contains(&normalized)
+                    .then(|| (normalized, format!("{crate_name} feature `{feature}`")))
+            })
+    };
+
+    for preferred in preferred {
+        if let Some(spec) = deps.get(*preferred)
+            && let Some(found) = scan(preferred, spec)
+        {
+            return Some(found);
+        }
+    }
+
+    // Anything else that happens to carry a known part number. Last resort, so
+    // a HAL this build does not know about still gets the chip right.
+    deps.iter().find_map(|(name, spec)| scan(name, spec))
+}
+
+/// `[build] target` from `.cargo/config.toml`, accepting the legacy
+/// extension-less spelling that older templates still use.
+fn read_build_target(root: &Path, evidence: &mut Vec<String>) -> Result<Option<String>> {
+    for name in [".cargo/config.toml", ".cargo/config"] {
+        let path = root.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        evidence.push(name.to_string());
+        let config = read_toml(&path)?;
+        if let Some(target) = config
+            .get("build")
+            .and_then(|b| b.get("target"))
+            .and_then(|t| t.as_str())
+        {
+            return Ok(Some(target_name(target)));
+        }
+        return Ok(None);
+    }
+    Ok(None)
+}
+
+/// The project's `.cargo/config.toml` (or the legacy `config`), parsed, or
+/// `None` where there is none or it does not parse — `read_build_target`
+/// has already said so about a broken one.
+fn read_cargo_config(root: &Path) -> Option<toml::Table> {
+    [".cargo/config.toml", ".cargo/config"]
+        .iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| text.parse().ok())
+}
+
+/// The part a `probe-rs` runner names, from any `[target.…] runner` in the
+/// config: `probe-rs run --chip STM32F411CEUx` and `--chip=…` alike. A
+/// runner that is not probe-rs — espflash, wlink, a script — names nothing
+/// this is for, and two probe-rs runners naming different parts name
+/// neither: which one cargo uses depends on a target this does not know.
+pub(crate) fn probe_chip_from_runner(config: &toml::Table) -> Option<String> {
+    let targets = config.get("target")?.as_table()?;
+    let mut named: Vec<String> = targets
+        .values()
+        .filter_map(|target| target.get("runner"))
+        .filter_map(|runner| match runner {
+            toml::Value::String(line) => Some(
+                line.split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
+            ),
+            toml::Value::Array(words) => Some(
+                words
+                    .iter()
+                    .filter_map(|w| w.as_str().map(str::to_string))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .filter(|words| {
+            words.first().is_some_and(|program| {
+                let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+                name == "probe-rs" || name == "probe-rs.exe"
+            })
+        })
+        .filter_map(|words| {
+            words.iter().enumerate().find_map(|(at, word)| {
+                if word == "--chip" {
+                    words.get(at + 1).cloned()
+                } else {
+                    word.strip_prefix("--chip=").map(str::to_string)
+                }
+            })
+        })
+        .collect();
+    named.sort();
+    named.dedup();
+    match named.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// A target as cargo names it: a triple as written, and a target
+/// description — `riscv32ec-unknown-none-elf.json`, which ch32-hal's
+/// projects build for — by its file's stem, which is the directory cargo
+/// puts the build under and the triple everything else compares against.
+fn target_name(target: &str) -> String {
+    match target.strip_suffix(".json") {
+        Some(path) => path.rsplit(['/', '\\']).next().unwrap_or(path).to_string(),
+        None => target.to_string(),
+    }
+}
+
+fn read_toolchain_channel(root: &Path, evidence: &mut Vec<String>) -> Result<Option<String>> {
+    for name in ["rust-toolchain.toml", "rust-toolchain"] {
+        let path = root.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        evidence.push(name.to_string());
+        // The extension-less form is sometimes a bare channel name rather than
+        // TOML, which is why this does not just parse and index.
+        let text = std::fs::read_to_string(&path).map_err(Error::reading(&path))?;
+        if let Ok(value) = text.parse::<toml::Table>()
+            && let Some(channel) = value
+                .get("toolchain")
+                .and_then(|t| t.get("channel"))
+                .and_then(|c| c.as_str())
+        {
+            return Ok(Some(channel.to_string()));
+        }
+        let bare = text.trim();
+        if !bare.is_empty() && !bare.contains('\n') {
+            return Ok(Some(bare.to_string()));
+        }
+        return Ok(None);
+    }
+    Ok(None)
+}
+
+/// What C this project already meets, and the file that proves each claim.
+///
+/// The interesting cases are all real: a vendor SDK wrapped by `esp-idf-sys`,
+/// a driver compiled by `cc` in build.rs, a `staticlib` that C firmware
+/// links against. Naming them is what lets the rest of the workbench stop
+/// pretending a project is pure Rust when it is not.
+fn detect_c_interop(
+    root: &Path,
+    manifest: &toml::map::Map<String, toml::Value>,
+    deps: &[String],
+) -> crate::model::CInterop {
+    let mut interop = crate::model::CInterop::default();
+
+    const KNOWN: &[(&str, &str)] = &[
+        ("cc", "C sources compiled into the crate by build.rs"),
+        ("cmake", "a CMake project built by build.rs"),
+        (
+            "bindgen",
+            "C headers turned into Rust declarations at build time",
+        ),
+        (
+            "cbindgen",
+            "a C header generated from this crate's public API",
+        ),
+        (
+            "esp-idf-sys",
+            "the ESP-IDF — a C framework — wrapped for Rust",
+        ),
+    ];
+    for (name, purpose) in KNOWN {
+        if deps.iter().any(|d| d == name) {
+            interop.via.push(format!("{name} — {purpose}"));
+            interop.evidence.push("Cargo.toml".to_string());
+        }
+    }
+
+    // A crate C can link against says so in its manifest.
+    if let Some(kinds) = manifest
+        .get("lib")
+        .and_then(|lib| lib.get("crate-type"))
+        .and_then(toml::Value::as_array)
+    {
+        let exports = kinds
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .any(|kind| kind == "staticlib" || kind == "cdylib");
+        if exports {
+            interop.exports_to_c = true;
+            interop
+                .evidence
+                .push("Cargo.toml [lib] crate-type".to_string());
+        }
+    }
+
+    // C carried in the project. Shallow on purpose: a vendored SDK under
+    // target/ or a registry checkout is not this project's C, and walking
+    // into them would count tens of thousands of files to say so.
+    for directory in ["src", "csrc", "c_src", "include", "components"] {
+        let path = root.join(directory);
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        let count = entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| matches!(e, "c" | "h" | "cc" | "cpp" | "hpp"))
+            })
+            .count() as u32;
+        if count > 0 {
+            interop.sources += count;
+            interop.evidence.push(format!("{directory}/"));
+        }
+    }
+
+    interop.evidence.sort();
+    interop.evidence.dedup();
+    interop
+}
