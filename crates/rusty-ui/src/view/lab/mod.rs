@@ -68,6 +68,16 @@ pub fn SignalsTab() -> impl IntoView {
             ticker.clear();
         }
     });
+    // And once when a run starts or ends: a test prints its trace all at
+    // once as it finishes, after the last tick of its run, and was drawn as
+    // whatever the tick before had seen.
+    Effect::new(move |was: Option<bool>| {
+        let now = state.app.session_running.get();
+        if was.is_some_and(|was| was != now) {
+            tick.update(|n| *n += 1);
+        }
+        now
+    });
 
     // One loop of what the studied source plays, rendered as the backend
     // renders it — again only when the source or its text changes.

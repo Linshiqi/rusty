@@ -506,6 +506,17 @@ pub fn parse_telemetry(line: &str) -> Option<Telemetry> {
     (!channels.is_empty()).then_some(Telemetry { at_us, channels })
 }
 
+/// [`parse_telemetry`] for a line whose marker may come after other text,
+/// with that text. A test harness running a test with `--nocapture` writes
+/// `test name ... ` and then the test's first line, on one line; read from
+/// the line's start, that sample was lost and the record began a sample
+/// late. The text before is the caller's to keep, as `draw::split_draw`'s
+/// is.
+pub fn split_telemetry(line: &str) -> Option<(&str, Telemetry)> {
+    let at = line.find("[rusty:tel")?;
+    Some((&line[..at], parse_telemetry(&line[at..])?))
+}
+
 /// A tunable the firmware exposes, as it announces itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
@@ -848,6 +859,46 @@ mod tests {
         );
         assert_eq!(parse_telemetry("[rusty:gpio] 4=1"), None);
         assert_eq!(parse_telemetry("just a log line"), None);
+    }
+
+    /// A sample after a test harness's own words is still a sample, and the
+    /// words are handed back.
+    #[test]
+    fn telemetry_after_other_text_is_read_and_the_text_kept() {
+        let (before, sample) =
+            split_telemetry("test filter::tests::steps ... [rusty:tel@1000] x=1,y=0.5")
+                .expect("a sample");
+        assert_eq!(before, "test filter::tests::steps ... ");
+        assert_eq!(sample.at_us, Some(1000));
+        assert_eq!(sample.channels.len(), 2);
+        assert_eq!(
+            split_telemetry("[rusty:tel@0] x=1").map(|(b, _)| b),
+            Some("")
+        );
+        assert_eq!(split_telemetry("test steps ... ok"), None);
+    }
+
+    /// What rusty-draw's trace writes is what this reads, stamp for stamp
+    /// and value for value — the writer is held to the reader rather than
+    /// to a copy of its format.
+    #[test]
+    fn a_rusty_draw_trace_reads_back_whole() {
+        let mut out = String::new();
+        let mut trace = rusty_draw::TraceOn::new(&mut out, 250.0);
+        for n in 0..5 {
+            let x = n as f32 * 0.1;
+            trace.sample(&[("x", x), ("y", -x)]);
+        }
+        let samples: Vec<Telemetry> = out.lines().filter_map(parse_telemetry).collect();
+        assert_eq!(samples.len(), 5);
+        for (n, sample) in samples.iter().enumerate() {
+            assert_eq!(sample.at_us, Some(n as u64 * 4000));
+            let x = n as f32 * 0.1;
+            assert_eq!(
+                sample.channels,
+                vec![("x".to_string(), x), ("y".to_string(), -x)]
+            );
+        }
     }
 
     /// One bad channel must not cost the others: a sensor printing `nan` in

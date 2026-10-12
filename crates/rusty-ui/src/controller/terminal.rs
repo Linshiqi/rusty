@@ -189,6 +189,9 @@ pub(super) fn run_command_on(
 /// runs' verdicts, and which `FAILED` was this run's was a search.
 pub(super) fn run_tests_at_root(state: AppState, line: String) {
     state.clear_log();
+    // What a test traces is this run's: the last run's samples, on a clock
+    // that started again at zero, would read as one record with them.
+    super::session::clear_capture(state);
     save_all_then(state, move || {
         tests_begin(state);
         run_command_in(state, line, true, "test", |_| {});
@@ -360,8 +363,9 @@ pub fn run_test(state: AppState, filter: String) {
 /// first. Offered only where that runs it on this machine
 /// (`runs_examples`): a firmware crate's `cargo run` flashes a board.
 pub fn run_example(state: AppState, name: String) {
-    // A run of its own in an empty dock, as a test's is.
+    // A run of its own in an empty dock, as a test's is — its samples too.
     state.clear_log();
+    super::session::clear_capture(state);
     save_all_then(state, move || {
         run_command_in(
             state,

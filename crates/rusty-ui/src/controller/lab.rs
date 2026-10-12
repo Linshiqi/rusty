@@ -64,6 +64,7 @@ pub fn start_sweep(state: AppState) {
     state.lab.sweeping.set(Some(number));
     state.lab.swept.set(Vec::new());
     state.lab.sweep_missed.set(None);
+    state.lab.recorded.set(None);
     let restore = state
         .lab
         .playing
@@ -242,6 +243,75 @@ fn channel(state: AppState, name: &str) -> Option<Record> {
         let (_, points) = plot.channels.iter().find(|(known, _)| known == name)?;
         record::from_channel(points)
     })
+}
+
+/// What the filter did to each tone of what was recorded: the tones the
+/// input carries (`sweep::recorded`), each measured against the output, with
+/// nothing running — a test's trace is enough. The points go where a
+/// sweep's do, so the chart draws them beside the design's curve, and the
+/// numbers are said in a line under the controls.
+pub fn measure_recorded(state: AppState) {
+    let input = state.lab.sweep_input.get_untracked();
+    let output = state.lab.sweep_output.get_untracked();
+    state.lab.sweep_step.set(None);
+    let said = |text: String| {
+        state.lab.recorded.set(None);
+        state.lab.sweep_missed.set(Some(text));
+    };
+    let (Some(input), Some(output)) = (input, output) else {
+        return said(t!("lab.sweep-needs-output"));
+    };
+    if input == Of::Channel(output.clone()) {
+        return said(t!("lab.recorded-same"));
+    }
+    let going_in = match &input {
+        Of::Channel(name) => channel(state, name),
+        Of::Converter(pin) => state
+            .lab
+            .conversions
+            .with_untracked(|all| all.get(pin).and_then(|r| record::from_conversions(r))),
+        Of::Played => return said(t!("lab.recorded-needs-record")),
+    };
+    let (Some(going_in), Some(coming_out)) = (going_in, channel(state, &output)) else {
+        return said(t!("lab.recorded-no-record", record = describe(&input)));
+    };
+    match sweep::recorded(&going_in, &coming_out) {
+        Ok(points) => {
+            let tones = points
+                .iter()
+                .map(|point| {
+                    let db = rusty_embed::dsp::db(point.gain);
+                    let db = if db.abs() < 1.0 {
+                        format!("{db:.2}")
+                    } else {
+                        format!("{db:.1}")
+                    };
+                    format!("{} Hz {db} dB {:.0}°", point.freq, point.phase.to_degrees())
+                })
+                .collect::<Vec<_>>()
+                .join(t!("lab.recorded-joiner").as_str());
+            state.lab.sweep_missed.set(None);
+            state.lab.recorded.set(Some(t!(
+                "lab.recorded-result",
+                input = describe(&input),
+                output = output,
+                tones = tones
+            )));
+            state.lab.swept.set(points);
+        }
+        Err(sweep::Unread::Apart) => said(t!(
+            "lab.recorded-apart",
+            input = describe(&input),
+            output = output
+        )),
+        Err(sweep::Unread::NoTones) => said(t!("lab.recorded-no-tones", input = describe(&input))),
+        Err(sweep::Unread::Missed(Missed::Tone(refusal))) => {
+            said(crate::lab::dsp_refusal_text(&refusal))
+        }
+        Err(sweep::Unread::Missed(Missed::Silent)) => {
+            said(t!("lab.recorded-silent", record = describe(&input)))
+        }
+    }
 }
 
 /// When the emulator last switched a table, on its clock.

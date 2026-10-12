@@ -177,9 +177,18 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
     if state.dock.source.get_untracked() == "test" {
         tests_heard(state, &line.text);
     }
-    if let Some(sample) = rusty_embed::protocol::parse_telemetry(&line.text) {
+    if let Some((before, sample)) = rusty_embed::protocol::split_telemetry(&line.text) {
+        // A test harness's `test name ... ` before the test's first sample
+        // goes to the log, as it does before a drawing.
+        let before = before.trim_end().to_string();
         record_plot(state, sample);
         state.reveal_tab(crate::state::DockTab::Plot);
+        if !before.is_empty() {
+            state.push_log(LogLine {
+                text: before,
+                ..line
+            });
+        }
     } else if let Some(param) = rusty_embed::protocol::parse_param(&line.text) {
         // Newest wins, by name: the firmware re-announces after a change, and
         // what it says it took is the truth — a clamp is information, not a

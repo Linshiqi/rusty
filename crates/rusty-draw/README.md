@@ -50,3 +50,34 @@ No dependencies of its own. Without `std` (`default-features = false`),
 Anything with three coordinates draws: arrays and tuples of `f64`, `f32` and
 `i32`, and a type of your own through a one-line `impl Xyz`. Space is
 right-handed with Z up.
+
+## Traces
+
+A `Trace` samples named channels `rate` times a second and prints them as
+rusty's telemetry, stamped on the trace's own clock — so a filter tried in a
+test is seen in rusty's **Signals** tab: what went in and what came out in
+time, their spectra, and under **Response → Measure recorded** what the filter
+did to each tone of the input, beside a design's own curve.
+
+```rust
+use rusty_draw::Trace;
+use std::f32::consts::TAU;
+
+#[test]
+fn the_slow_tone_passes_and_the_fast_one_is_cut() {
+    let mut lpf = LowPass::new(0.05);
+    let mut trace = Trace::new(1000.0);
+    for _ in 0..4000 {
+        let t = trace.t();
+        let x = (TAU * 2.0 * t).sin() + 0.5 * (TAU * 200.0 * t).sin();
+        let y = lpf.update(x);
+        trace.sample(&[("x", x), ("y", y)]);
+    }
+}
+```
+
+Each sample is one line — `[rusty:tel@1000] x=0.488,y=0.0244` — and the trace
+is printed whole when it is dropped, as a scene is. Without `std`,
+`TraceOn` writes each line as it is sampled to any `core::fmt::Write`, which
+suits a loop a timer runs at a fixed rate; firmware with a clock of its own
+prints that instead.

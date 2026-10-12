@@ -461,6 +461,140 @@ impl<W: fmt::Write> Drop for SceneOn<W> {
     }
 }
 
+/// One sample's line: `[rusty:tel@<µs>] x=1,y=0.5`. A `,`, `=` or line
+/// break in a name is written `_`: those are the line's own punctuation.
+fn trace_line(out: &mut impl fmt::Write, at_us: u64, values: &[(&str, f32)]) -> fmt::Result {
+    write!(out, "[rusty:tel@{at_us}] ")?;
+    for (i, (name, value)) in values.iter().enumerate() {
+        if i > 0 {
+            out.write_char(',')?;
+        }
+        for c in name.chars() {
+            out.write_char(if matches!(c, ',' | '=' | '\r' | '\n') {
+                '_'
+            } else {
+                c
+            })?;
+        }
+        write!(out, "={value}")?;
+    }
+    out.write_char('\n')
+}
+
+/// Where the `n`th sample of a trace taken `rate` times a second is, in
+/// microseconds and in seconds.
+fn trace_clock(n: u64, rate: f64) -> (u64, f32) {
+    let seconds = n as f64 / rate;
+    ((seconds * 1e6 + 0.5) as u64, seconds as f32)
+}
+
+/// Samples for rusty's **Plot** and **Signals** tabs, taken `rate` times a
+/// second: one `[rusty:tel@<µs>] x=1,y=0.5` line each, stamped on the
+/// trace's own clock — the `n`th sample is at `n / rate` seconds.
+///
+/// A test has no firmware clock, and the Signals tab reads only stamped
+/// samples, because a rate is read off stamps: so the trace is the clock.
+/// Put a signal through a filter in a test, sample what goes in and what
+/// comes out, and the Signals tab draws both, their spectra, and — under
+/// **Response**, **Measure recorded** — what the filter did to each tone the
+/// input carries, beside a design's own curve.
+///
+/// ```
+/// use rusty_draw::Trace;
+/// use std::f32::consts::TAU;
+///
+/// let mut trace = Trace::new(1000.0);
+/// let mut y = 0.0;
+/// for _ in 0..4000 {
+///     let t = trace.t();
+///     // A slow tone and a fast one.
+///     let x = (TAU * 2.0 * t).sin() + 0.5 * (TAU * 200.0 * t).sin();
+///     y += 0.05 * (x - y);
+///     trace.sample(&[("x", x), ("y", y)]);
+/// }
+/// ```
+///
+/// Printed whole when it is dropped, in one `print!`, as a [`Scene`] is: a
+/// trace interleaved line by line with another test's would put two
+/// signals in one channel. Values are `f32`, which is what the line
+/// carries.
+#[cfg(feature = "std")]
+pub struct Trace {
+    rate: f64,
+    next: u64,
+    text: std::string::String,
+}
+
+#[cfg(feature = "std")]
+impl Trace {
+    /// A trace sampled `rate` times a second.
+    pub fn new(rate: f64) -> Trace {
+        Trace {
+            rate,
+            next: 0,
+            text: std::string::String::new(),
+        }
+    }
+
+    /// When the next sample is taken, in seconds from the first — what a
+    /// test computes the signal it feeds in at.
+    pub fn t(&self) -> f32 {
+        trace_clock(self.next, self.rate).1
+    }
+
+    /// One sample of each named channel, at [`Trace::t`]; the clock then
+    /// moves on a sample.
+    pub fn sample(&mut self, values: &[(&str, f32)]) -> &mut Self {
+        let (at, _) = trace_clock(self.next, self.rate);
+        // Writing to a `String` does not fail.
+        let _ = trace_line(&mut self.text, at, values);
+        self.next += 1;
+        self
+    }
+
+    /// Print it now, rather than when it goes out of scope.
+    pub fn show(self) {}
+}
+
+#[cfg(feature = "std")]
+impl Drop for Trace {
+    fn drop(&mut self) {
+        std::print!("{}", self.text);
+    }
+}
+
+/// A trace written a sample at a time to any [`fmt::Write`], for firmware
+/// with no `std` — on the trace's own clock, which is right for a loop a
+/// timer runs at a fixed rate. Firmware that keeps a clock of its own prints
+/// that instead: `[rusty:tel@<its microseconds>]`.
+pub struct TraceOn<W: fmt::Write> {
+    out: W,
+    rate: f64,
+    next: u64,
+}
+
+impl<W: fmt::Write> TraceOn<W> {
+    /// A trace sampled `rate` times a second, written to `out`.
+    pub fn new(out: W, rate: f64) -> TraceOn<W> {
+        TraceOn { out, rate, next: 0 }
+    }
+
+    /// When the next sample is taken, in seconds from the first.
+    pub fn t(&self) -> f32 {
+        trace_clock(self.next, self.rate).1
+    }
+
+    /// One sample of each named channel, written now; the clock then moves
+    /// on a sample.
+    pub fn sample(&mut self, values: &[(&str, f32)]) -> &mut Self {
+        let (at, _) = trace_clock(self.next, self.rate);
+        // As with a scene: a sink that refuses a line has nowhere to say so.
+        let _ = trace_line(&mut self.out, at, values);
+        self.next += 1;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -616,5 +750,40 @@ mod tests {
         let mut out = String::new();
         SceneOn::new(&mut out, "own").vector("v", &v);
         assert_eq!(lines(&out)[1], "[rusty:draw] vector 0.5 -2 4 v");
+    }
+
+    /// A trace stamps each sample on its own clock, `n / rate` seconds,
+    /// writes an `f32` as the `f32` it is, and keeps the line's punctuation
+    /// out of a name.
+    #[test]
+    fn a_trace_is_a_stamped_line_a_sample() {
+        let mut out = String::new();
+        let mut trace = TraceOn::new(&mut out, 3000.0);
+        assert_eq!(trace.t(), 0.0);
+        trace.sample(&[("x", 0.4), ("y", -1.5)]);
+        trace.sample(&[("a,b=c", 1.0)]);
+        trace.sample(&[("x", f32::NAN)]);
+        assert!((trace.t() - 0.001).abs() < 1e-7, "{}", trace.t());
+        assert_eq!(
+            lines(&out),
+            [
+                "[rusty:tel@0] x=0.4,y=-1.5",
+                "[rusty:tel@333] a_b_c=1",
+                "[rusty:tel@667] x=NaN",
+            ]
+        );
+    }
+
+    /// Buffered until it is dropped, and printed whole, with the same lines.
+    #[test]
+    fn a_trace_keeps_its_lines_until_it_is_dropped() {
+        let mut trace = Trace::new(1000.0);
+        trace.sample(&[("x", 1.0)]).sample(&[("x", 2.0)]);
+        assert_eq!(
+            lines(&trace.text),
+            ["[rusty:tel@0] x=1", "[rusty:tel@1000] x=2"]
+        );
+        assert!((trace.t() - 0.002).abs() < 1e-9);
+        trace.text.clear();
     }
 }

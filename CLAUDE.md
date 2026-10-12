@@ -964,6 +964,22 @@ is what it changed.
   work blamed code that costs nothing in release. `cargo tauri dev --config
   '{"build":{"beforeDevCommand":{"script":"trunk serve --release","cwd":"../rusty-ui"}}}'`
   serves an optimised one.
+- **Typing is measured with trusted keys, from the keydown to the frame
+  after it** (CDP `Input.dispatchKeyEvent`; `execCommand('insertText')`
+  skips every keydown handler — Vim, the pairs, the popup) with a
+  `longtask` observer beside it. Asked as "does the background analysis
+  stall typing": on cf-drone-rs's 1,000-line firmware file in a release
+  build, with rust-analyzer loading, 15–18 ms a key and no task over 50 ms,
+  while the server took 0.5–3.5 s to answer completion, colours and hints.
+  The analysis is another process; it costs answers, not keystrokes. What
+  costs keystrokes is a machine compiling: every core busy, 27–29 ms became
+  41–50 ms with spikes near 100, and still no task over 50 ms in the page —
+  the renderer starved, not busy. Running the load below normal priority,
+  and leaving two or four cores free, both measured the same, because a
+  chip at full load is slower for everything on it; neither was made a
+  change. A long session — 1,500 keystrokes and a dozen file switches —
+  ended with the latency, the heap and the listeners where they began, and
+  a test printing 4,000 samples at once made no long task either.
 
 ## Bracket pairs, and what a keystroke asks the server
 
@@ -5083,6 +5099,25 @@ half, `view/lab/` the four instruments of the Signals tab and
   passed on qemu-v9's release run and failed on the next push with a clean
   climb read as a climb of two. One witness now, and every pin line reaches
   the circuit: **two accounts of one event are not two readings**.
+- **A filter that is host code is tried with no board** (`docs/signals.md`,
+  *A filter tried in a test*). Asked for as "the instruments need a
+  simulation and a circuit; I want to write the signals myself and see the
+  filter keep the slow one". A test feeds the filter a signal it computes
+  and samples what goes in and what comes out with rusty-draw's `Trace`
+  (stamped telemetry on the trace's own clock), and the lab reads that as it
+  reads a firmware's. **Response → Measure recorded** (`sweep::recorded`)
+  is the sweep's measurement without the stepping: the input's tones found
+  in its spectrum (`tones_in`, Blackman, since Hann's first sidelobe is
+  read as a second tone), each fitted on both records over the stretch both
+  cover less its first quarter, drawn as dots and never joined. Held to the
+  exponential average's closed form in a test and in the app: 2 and 200 Hz
+  through α = 0.05 at 1 kHz, −0.25 dB −13° and −27.2 dB −52°. Three things
+  the path needed that a simulation never had: a test or example run clears
+  the capture (a second run's stamps start at zero again, and appended they
+  read as one record at a rate neither ran at), a sample after libtest's
+  `test name ... ` is still a sample (`protocol::split_telemetry`), and the
+  lab redraws once when a run ends, since a test prints its whole trace
+  after the last tick of its run.
 
 ## The math toolbox
 
@@ -5262,6 +5297,13 @@ of their own. So the picture comes from their code.
   `Ink`'s colour, the SVG element each drawn piece becomes, the size
   observer — shared by the Math panel and the Draw tab, so a vector is the
   same arrow in the same colours in both.
+- **The same crate traces** (`Trace`, `TraceOn`): named channels sampled
+  `rate` times a second, one `[rusty:tel@<µs>]` line a sample, stamped
+  `n / rate` because a test has no clock and the lab reads only stamped
+  samples. `Trace` prints whole on drop, as `Scene` does, so two tests
+  tracing at once cannot put two signals in one channel; `TraceOn` writes a
+  line a sample to a `fmt::Write`. rusty-embed's protocol test reads
+  `TraceOn`'s lines back, so the writer is held to the reader.
 
 ## WCH's parts: the CH32V003 and the CH32X035
 

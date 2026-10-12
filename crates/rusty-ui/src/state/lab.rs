@@ -95,6 +95,8 @@ pub struct Lab {
     pub sweep_step: RwSignal<Option<(usize, usize, f64)>>,
     /// Why the last sweep stopped before its end, when it did.
     pub sweep_missed: RwSignal<Option<String>>,
+    /// What the last measurement of a recording found, tone by tone.
+    pub recorded: RwSignal<Option<String>>,
     /// The filter being designed.
     pub design: RwSignal<Design>,
     /// The rate it is designed for, when somebody stated one; otherwise
@@ -126,6 +128,7 @@ impl Lab {
             sweep_number: RwSignal::new(0),
             sweep_step: RwSignal::new(None),
             sweep_missed: RwSignal::new(None),
+            recorded: RwSignal::new(None),
             // A second-order low-pass at 10 Hz: what the first preset's
             // slow reading wants, and a curve with something to see.
             design: RwSignal::new(Design::Butterworth {

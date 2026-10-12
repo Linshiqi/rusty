@@ -78,27 +78,40 @@ pub(super) fn ResponseView(
     };
     // What goes in is the converter's record while there is one: it is in
     // the counts a firmware's filter reads, so a gain against it is the
-    // filter's own and not the converter's scale besides.
+    // filter's own and not the converter's scale besides. With none — a
+    // test's trace, nothing running — the first channel it printed, which
+    // is what a trace samples first: what went in.
     Effect::new(move |_| {
-        let first = offered()
-            .into_iter()
-            .find(|of| matches!(of, Of::Converter(_)));
+        let offered = offered();
+        let first = offered
+            .iter()
+            .find(|of| matches!(of, Of::Converter(_)))
+            .or_else(|| offered.iter().find(|of| matches!(of, Of::Channel(_))))
+            .cloned();
+        let gone = state
+            .lab
+            .sweep_input
+            .with_untracked(|input| input.as_ref().is_none_or(|of| !offered.contains(of)));
         if let Some(first) = first
-            && state.lab.sweep_input.with_untracked(Option::is_none)
+            && gone
         {
             state.lab.sweep_input.set(Some(first));
         }
     });
-    // The first channel the firmware prints is what comes out, until
+    // What comes out is the first channel that is not what goes in, until
     // somebody says otherwise.
     Effect::new(move |_| {
         let list = channels();
-        if state
-            .lab
-            .sweep_output
-            .with_untracked(|out| out.as_ref().is_none_or(|name| !list.contains(name)))
-        {
-            state.lab.sweep_output.set(list.first().cloned());
+        let input = state.lab.sweep_input.get();
+        let not_input = |name: &&String| input.as_ref() != Some(&Of::Channel((*name).clone()));
+        if state.lab.sweep_output.with_untracked(|out| {
+            out.as_ref()
+                .is_none_or(|name| !list.contains(name) || input == Some(Of::Channel(name.clone())))
+        }) {
+            state
+                .lab
+                .sweep_output
+                .set(list.iter().find(not_input).or(list.first()).cloned());
         }
     });
 
@@ -176,6 +189,24 @@ pub(super) fn ResponseView(
                     </select>
                 </label>
                 <span class="flex-1" />
+                // A recording is measured with nothing running: the tones
+                // the input carries, each against the output.
+                {move || {
+                    let ready = !sweeping()
+                        && state.lab.sweep_input.with(Option::is_some)
+                        && state.lab.sweep_output.with(Option::is_some);
+                    view! {
+                        <button
+                            type="button"
+                            disabled=!ready
+                            title=t!("lab.measure-recorded-hint")
+                            on:click=move |_| controller::measure_recorded(state)
+                            class="rounded-[5px] px-2 py-0.5 text-footnote text-label-2 ring-1 ring-line hover:bg-sunken disabled:opacity-40"
+                        >
+                            {t!("lab.measure-recorded")}
+                        </button>
+                    }
+                }}
                 {move || {
                     if sweeping() {
                         view! {
@@ -211,6 +242,10 @@ pub(super) fn ResponseView(
                         t!("lab.sweep-step", step = step, of = of, freq = chart::tick(freq))
                     } else if let Some(why) = state.lab.sweep_missed.get() {
                         why
+                    } else if let Some(found) = state.lab.recorded.get() {
+                        found
+                    } else if !running() && channels().len() >= 2 {
+                        t!("lab.recorded-ready")
                     } else if !running() {
                         t!("lab.sweep-needs-run")
                     } else if channels().is_empty() {
@@ -223,20 +258,36 @@ pub(super) fn ResponseView(
             {move || {
                 let measured = state.lab.swept.get();
                 let plan = state.lab.sweep.get();
+                // The band is the plan's, and wide enough for every tone
+                // measured: a recording's tones are the signal's, not the
+                // plan's.
+                let lowest = measured.iter().map(|p| p.freq).fold(plan.from, f64::min);
+                let highest = measured.iter().map(|p| p.freq).fold(plan.to, f64::max);
+                let plan = crate::lab::sweep::Plan { from: lowest, to: highest, ..plan };
                 let rate = state.lab.design_rate.get().or_else(|| {
                     state.lab.sweep_output.get().and_then(|name| channel_rate(state, &name))
                 });
                 let curve = rate
                     .map(|rate| state.lab.design.with(|d| design_curve(d, rate, plan.from / 1.25, plan.to * 1.25)))
                     .unwrap_or_default();
-                view! { <ResponseChart measured=measured curve=curve from=plan.from / 1.25 to=plan.to * 1.25 /> }
+                // A sweep's steps are a band, joined; a recording's tones are
+                // the few the signal has, and a line between them would draw
+                // a response nobody measured.
+                let joined = state.lab.recorded.with(Option::is_none);
+                view! { <ResponseChart measured=measured curve=curve from=plan.from / 1.25 to=plan.to * 1.25 joined=joined /> }
             }}
         </div>
     }
 }
 
 #[component]
-fn ResponseChart(measured: Vec<Point>, curve: Vec<Point>, from: f64, to: f64) -> impl IntoView {
+fn ResponseChart(
+    measured: Vec<Point>,
+    curve: Vec<Point>,
+    from: f64,
+    to: f64,
+    joined: bool,
+) -> impl IntoView {
     const W: f64 = 1000.0;
     const H: f64 = 100.0;
     let db = |p: &Point| dsp::db(p.gain).max(-120.0);
@@ -255,8 +306,14 @@ fn ResponseChart(measured: Vec<Point>, curve: Vec<Point>, from: f64, to: f64) ->
     };
     let gain_curve = line(&curve, &db, (low, high));
     let phase_curve = line(&curve, &degrees, (-180.0, 180.0));
-    let gain_measured = line(&measured, &db, (low, high));
-    let phase_measured = line(&measured, &degrees, (-180.0, 180.0));
+    let (gain_measured, phase_measured) = if joined {
+        (
+            line(&measured, &db, (low, high)),
+            line(&measured, &degrees, (-180.0, 180.0)),
+        )
+    } else {
+        (String::new(), String::new())
+    };
     let dots = |value: &dyn Fn(&Point) -> f64, range: (f64, f64)| {
         measured
             .iter()

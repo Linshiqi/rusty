@@ -211,3 +211,33 @@ because the two records need not begin on the same sample. What goes in is the
 converter's record by default, in the counts a firmware's filter reads, so the
 gain is the filter's own and not the converter's scale besides. When the sweep
 ends, is stopped or goes wrong, the source plays what it played before.
+
+### A filter tried in a test, with no board
+
+A filter that is host code — a `LowPass` in a library crate — is tried the
+way it is unit-tested: a test feeds it a signal it computes, and samples what
+goes in and what comes out with rusty-draw's `Trace`, which prints one
+`[rusty:tel@<µs>]` line a sample on its own clock (`n / rate`). Run from its
+lens, the test's trace fills the same record the instruments read a
+firmware's telemetry from: Time draws the two lanes, Spectrum their spectra,
+and Design reads the rate off the stamps.
+
+**Response → Measure recorded** (`lab::sweep::recorded`) is the sweep's
+measurement with the stepping taken out. It finds the tones the input carries
+— the peaks of its spectrum through a Blackman window, its mean taken off,
+each at least a hundredth of the strongest, at most eight, placed between bins
+by a parabola through the logarithms — and measures each with `tone` on the
+input and the output, over the stretch both cover less its first quarter,
+which is the filter starting. Where a peak is placed matters less than it
+looks: a filter's output at a tone is the input's times the response there,
+so the ratio of two fits at one frequency is the response whatever frequency
+both were fitted at. The points are a recording's few tones, drawn as dots
+beside the design's curve and never joined, since a line between them would
+be a response nobody measured. Proven against the exponential average's
+closed form, `α / (1 − (1 − α)·e^(−jω))`: two tones at 2 and 200 Hz through
+α = 0.05 at 1 kHz read −0.25 dB −13° and −27.2 dB −52°, within a tenth of a
+decibel and a degree, in the test and in the app.
+
+A test or an example run clears the last run's capture as a simulation does:
+a second run's stamps start again at zero, and appended to the first they
+read as one record at a rate neither ran at.
