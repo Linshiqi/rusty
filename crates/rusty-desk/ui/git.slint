@@ -1295,3 +1295,91 @@ export component GitPrompt inherits Rectangle {
         }
     }
 }
+
+// Clone a repository: a URL, the folder it goes into, and the directory it
+// will make, said before it runs.
+export component ClonePrompt inherits Rectangle {
+    width: 460px;
+    height: column.preferred-height;
+    border-radius: 10px;
+    background: Theme.overlay;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: #00000055;
+    column := VerticalLayout {
+        padding: 16px;
+        spacing: 8px;
+        Text {
+            text: @tr("git.clone-title");
+            color: Theme.label;
+            font-size: Theme.body;
+            font-weight: 600;
+        }
+        Caption {
+            text: @tr("git.clone-url");
+        }
+        Field {
+            text <=> Shell.clone-url;
+            mono: true;
+            placeholder: @tr("git.clone-url-placeholder");
+            edited => {
+                Shell.clone-edited();
+            }
+            init => {
+                self.focus-all();
+            }
+        }
+        Caption {
+            text: @tr("git.clone-into");
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Field {
+                horizontal-stretch: 1;
+                text <=> Shell.clone-into;
+                placeholder: @tr("git.clone-into-placeholder");
+                edited => {
+                    Shell.clone-edited();
+                }
+            }
+            Button {
+                text: @tr("git.clone-choose");
+                clicked => {
+                    Shell.act("clone.choose");
+                }
+            }
+        }
+        if Shell.clone-creates != "": Text {
+            text: Shell.clone-creates;
+            color: Shell.clone-ready ? Theme.label-2 : Theme.crimson;
+            font-family: Theme.mono;
+            font-size: Theme.caption;
+            wrap: word-wrap;
+        }
+        Text {
+            text: @tr("git.clone-hint");
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button {
+                text: @tr("git.cancel");
+                clicked => {
+                    Shell.act("clone.cancel");
+                }
+            }
+            Button {
+                text: @tr("git.clone-run");
+                primary: true;
+                enabled: Shell.clone-ready;
+                clicked => {
+                    Shell.act("clone.run");
+                }
+            }
+        }
+    }
+}

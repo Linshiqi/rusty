@@ -23,6 +23,7 @@ mod activity;
 mod assistant;
 mod board;
 mod build;
+mod clone;
 mod crates;
 mod debug;
 mod device;
@@ -446,6 +447,7 @@ impl App {
         on!(on_ai_pick_model, |app, model| app.ai_pick_model(&model));
         on!(on_open_link, |_app, link| markdown_view::open_link(&link));
         on!(on_math_select, |app, index| app.math_select(index));
+        on!(on_clone_edited, |app| app.clone_edited());
         on!(on_math_toggle, |app, index| app.math_toggle(index));
         on!(on_math_row, |app, index, text| app.math_row(index, &text));
         on!(on_math_remove, |app, index| app.math_remove(index));
@@ -593,6 +595,8 @@ impl App {
             "environment.refresh" => self.probe_environment(),
             "environment.install-missing" => self.install_missing(),
             "project.new" => self.open_wizard(),
+            "project.clone" => self.clone_act("open"),
+            other if other.starts_with("clone.") => self.clone_act(&other["clone.".len()..]),
             "playground.reset" => self.reset_playground(),
             "playground.keep" => self.keep_playground(),
             "wizard.create" => self.wizard_create(),

@@ -90,6 +90,7 @@ pub fn start(window: &AppWindow) {
     let asking = std::env::var_os("RUSTY_PROBE_AI").is_some();
     let reading = std::env::var_os("RUSTY_PROBE_MD").is_some();
     let sums = std::env::var_os("RUSTY_PROBE_MATH").is_some();
+    let cloning = std::env::var_os("RUSTY_PROBE_CLONE").map(PathBuf::from);
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -217,6 +218,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if sums {
                     step.set(1600);
+                }
+                if cloning.is_some() {
+                    step.set(1800);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -699,6 +703,34 @@ pub fn start(window: &AppWindow) {
             1704 if sums => {
                 eprintln!("math: reference {} lines", shell.get_math_help_rows().row_count());
                 snapshot(&window, &dir.join("math-help.png"));
+                app.act("app.exit");
+            }
+            // Clone a repository named by RUSTY_PROBE_CLONE into the probe's
+            // directory, and the checkout opened.
+            1800 if cloning.is_some() => {
+                app.act("project.clone");
+                let source = cloning.clone().unwrap_or_default();
+                shell.set_clone_url(source.to_string_lossy().replace('\\', "/").as_str().into());
+                shell.set_clone_into(dir.join("clones").to_string_lossy().as_ref().into());
+                let _ = std::fs::create_dir_all(dir.join("clones"));
+                shell.invoke_clone_edited();
+            }
+            1802 if cloning.is_some() => {
+                eprintln!("clone: {:?} ready {}", shell.get_clone_creates(), shell.get_clone_ready());
+                snapshot(&window, &dir.join("clone.png"));
+                app.act("clone.run");
+                waited.set(0);
+            }
+            1803 if cloning.is_some() => {
+                let opened = app.root_path().is_some_and(|r| r.starts_with(dir.join("clones")));
+                if !opened {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1000 {
+                        step.set(1803);
+                    }
+                    return;
+                }
+                eprintln!("clone: opened {:?}", app.root_path());
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1289,7 +1321,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some()) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

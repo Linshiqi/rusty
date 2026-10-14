@@ -1106,6 +1106,14 @@ export global Shell {
     callback git-prompt-edited();
     callback git-prompt-done(bool);
 
+    // Clone: a URL, a folder, and the directory it will make.
+    in property <bool> clone-open;
+    in-out property <string> clone-url;
+    in-out property <string> clone-into;
+    in property <string> clone-creates;
+    in property <bool> clone-ready;
+    callback clone-edited();
+
     // A right-click menu, anywhere.
     in property <bool> menu-open;
     in property <length> menu-x;
