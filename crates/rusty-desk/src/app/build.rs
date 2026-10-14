@@ -44,6 +44,10 @@ impl App {
     /// One line a run printed: into the dock, a link when it names a place;
     /// to the activity view; and to the build's reading of its errors.
     pub fn heard(self: &Rc<Self>, text: &str) {
+        // A protocol line is read into what the board shows, not printed.
+        if text.contains("[rusty:") && self.absorb(text) {
+            return;
+        }
         let place = buildlog::place_on(text).map(|place| {
             let path = self.place_path(&place.path);
             (path, place.line as i32 - 1, place.col as i32 - 1)

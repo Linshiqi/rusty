@@ -293,6 +293,19 @@ tests green, and CLAUDE.md saying how it works.
    rusty's own emulator as the catalogue says, the pin channel, the parts
    and their behaviours, Plot, Waves, Signals, Flight and Draw, debugging
    in the simulator and on the board.
+   *Done so far:* Run on the simulator target runs the simulator's plan —
+   build, image, then rusty's QEMU or rusty's own emulator as the
+   catalogue names — the boot step with its monitor and, when the emulator
+   models the pins, its pin channel, the sheet declared down it before the
+   firmware's first instruction and its circuit walked beside it. Every
+   protocol line is read where every line arrives (`App::absorb`, behind
+   `App::heard`): levels and duties — a pin in one or the other, the newer
+   report deciding — the pin source, the display, tunables and declared
+   sensors; what the instruments read is consumed and waits for them; only
+   the firmware's own words reach the dock. Run while it runs restarts it.
+   A tool the plan lacks is a notification with its Install. Proven by the
+   probe on blink in rusty's QEMU v10: GPIO0 toggling from the emulator's
+   registers, the display line, Stop.
 7. **The rest of the workbench**: Git, project search, crates and features,
    disk and memory, the terminal, the assistant and its tools, Markdown
    pages.

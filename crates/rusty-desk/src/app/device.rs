@@ -173,9 +173,7 @@ impl App {
     /// Run, the title bar's one verb: the simulator, or the board.
     pub(super) fn run_verb(self: &Rc<Self>) {
         match self.run_target() {
-            Some(Chosen::Simulator) => {
-                self.note(0, t!("desk.not-yet-action", name = t!("desk.run")));
-            }
+            Some(Chosen::Simulator) => self.simulate(),
             _ => self.device_action(Verb::Flash),
         }
     }
