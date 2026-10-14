@@ -311,6 +311,14 @@ pub fn start(window: &AppWindow) {
                     shell.invoke_plot_set(tunable.name, asked);
                 }
             }
+            // With a sensor declared, the Flight tab and the loop closed
+            // through the plant.
+            576 if sim => {
+                if shell.get_flight_ready() {
+                    shell.invoke_show_panel("bottom".into(), "flight".into());
+                    app.act("flight.close");
+                }
+            }
             // The first slider under a part moved a quarter of its way, as a
             // hand would.
             575 if sim => {
@@ -396,6 +404,19 @@ pub fn start(window: &AppWindow) {
                 eprintln!("sim: the dock ends {tail:#?}");
             }
             // Half a second on: the LED the other way round, and the edges.
+            586 if sim => {
+                if shell.get_flight_closed() {
+                    eprintln!(
+                        "sim: flight closed, feeding {:?}; craft {:?} {:?}; motors {:?}; axes {:?}",
+                        shell.get_flight_feeds(),
+                        shell.get_flight_craft_text(),
+                        shell.get_flight_craft_source(),
+                        shell.get_flight_motors().iter().map(|m| m.text.to_string()).collect::<Vec<_>>(),
+                        shell.get_flight_axes().iter().map(|a| format!("{} {} {}", a.label, a.channel, a.value)).collect::<Vec<_>>()
+                    );
+                    snapshot(&window, &dir.join("flight.png"));
+                }
+            }
             588 if sim => {
                 shell.invoke_show_panel("bottom".into(), "waves".into());
                 eprintln!(

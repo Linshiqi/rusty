@@ -231,6 +231,22 @@ export struct BoardControl {
     live: bool,
 }
 
+// One axis of the Flight tab: what it is, the channel the firmware names
+// for it, and its newest value.
+export struct FlightAxis {
+    label: string,
+    channel: string,
+    value: string,
+    known: bool,
+}
+
+// A motor's duty, by its pin.
+export struct FlightMotor {
+    pin: int,
+    duty: float,
+    text: string,
+}
+
 // A row of the Draw tab's list: 0 a scene, 1 a note, 2 a mark, 3 the
 // angles' heading, 4 an angle, 5 the hand three arrows make.
 export struct DrawRow {
@@ -457,6 +473,22 @@ export global Shell {
     // A part pressed or let go, and which key of it; a slider moved.
     callback board-press(int, int, bool);
     callback board-control(int, string, float);
+
+    // The Flight tab.
+    in property <bool> flight-nothing: true;
+    in property <[FlightAxis]> flight-axes;
+    in property <bool> flight-horizon-known;
+    in property <float> flight-horizon-roll;
+    in property <float> flight-horizon-shift;
+    in property <[FlightMotor]> flight-motors;
+    in property <[DrawPiece]> flight-craft;
+    in property <bool> flight-craft-known;
+    in property <string> flight-craft-text;
+    in property <string> flight-craft-source;
+    in property <bool> flight-closed;
+    in property <bool> flight-ready;
+    in property <string> flight-feeds;
+    in property <string> flight-help;
 
     // The Draw tab.
     in property <bool> draw-empty: true;
