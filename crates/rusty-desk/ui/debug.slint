@@ -1,0 +1,206 @@
+// The Debug panel: what the session is doing, the call stack — a frame
+// picked shows its variables and its place — and the frame's variables.
+// And the transport, floating over the editor while a session is live:
+// continue or pause, the three steps, stop. Filled by `src/app/debug.rs`.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Shell } from "shell.slint";
+import { IconButton } from "widgets.slint";
+
+export component DebugPanel inherits Rectangle {
+    VerticalLayout {
+        HorizontalLayout {
+            height: 28px;
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 10px;
+            Text {
+                text: Shell.debug-status;
+                color: Shell.debug-stopped ? Theme.amber : Theme.label-2;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if Shell.debug-error != "": Text {
+                horizontal-stretch: 1;
+                text: Shell.debug-error;
+                color: Theme.crimson;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        HorizontalLayout {
+            vertical-stretch: 1;
+            // The call stack.
+            Rectangle {
+                width: 340px;
+                ScrollView {
+                    VerticalLayout {
+                        alignment: start;
+                        padding-top: 4px;
+                        Text {
+                            x: 12px;
+                            height: 22px;
+                            text: @tr("dock.debug.call-stack");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        for frame in Shell.debug-frames: Rectangle {
+                            height: 36px;
+                            background: frame.on ? Theme.sunken : touch.has-hover ? Theme.sunken.with-alpha(0.5) : transparent;
+                            touch := TouchArea {
+                                clicked => {
+                                    Shell.debug-frame(frame.level);
+                                }
+                            }
+                            VerticalLayout {
+                                padding-left: 12px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text {
+                                    text: frame.function;
+                                    color: Theme.label;
+                                    font-size: Theme.caption;
+                                    font-family: Theme.mono;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: frame.place;
+                                    color: Theme.label-3;
+                                    font-size: Theme.caption;
+                                    font-family: Theme.mono;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.line;
+            }
+            // The frame's variables.
+            ScrollView {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    alignment: start;
+                    padding-top: 4px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    Text {
+                        height: 22px;
+                        text: @tr("dock.debug.variables");
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    for variable in Shell.debug-variables: HorizontalLayout {
+                        height: 22px;
+                        spacing: 8px;
+                        Text {
+                            width: 140px;
+                            text: variable.name;
+                            color: Theme.slate;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: variable.value;
+                            color: Theme.label;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: variable.kind;
+                            color: Theme.label-4;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The transport: floating, so its arrival moves nothing.
+export component Transport inherits Rectangle {
+    width: row.preferred-width;
+    height: row.preferred-height;
+    border-radius: 8px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.line;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000055;
+    row := HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        if Shell.debug-running: IconButton {
+            icon: Icons.pause;
+            tip: @tr("debugger.pause") + " (F6)";
+            tint: Theme.amber;
+            clicked => {
+                Shell.act("debug.pause");
+            }
+        }
+        if !Shell.debug-running: IconButton {
+            icon: Icons.play;
+            tip: @tr("debugger.continue") + " (F5)";
+            tint: Theme.patina;
+            enabled: Shell.debug-stopped;
+            clicked => {
+                Shell.act("run.debug");
+            }
+        }
+        IconButton {
+            icon: Icons.step-over;
+            tip: @tr("debugger.step-over") + " (F10)";
+            enabled: Shell.debug-stopped;
+            clicked => {
+                Shell.act("debug.over");
+            }
+        }
+        IconButton {
+            icon: Icons.step-into;
+            tip: @tr("debugger.step-into") + " (F11)";
+            enabled: Shell.debug-stopped;
+            clicked => {
+                Shell.act("debug.into");
+            }
+        }
+        IconButton {
+            icon: Icons.step-out;
+            tip: @tr("debugger.step-out") + " (Shift+F11)";
+            enabled: Shell.debug-stopped;
+            clicked => {
+                Shell.act("debug.out");
+            }
+        }
+        IconButton {
+            icon: Icons.stop;
+            tip: @tr("debugger.stop") + " (Shift+F5)";
+            tint: Theme.crimson;
+            clicked => {
+                Shell.act("run.stop");
+            }
+        }
+    }
+}

@@ -33,6 +33,11 @@ export struct Row {
     number: int,
     pieces: [Piece],
     marks: [Mark],
+    // A breakpoint on the line: 0 none, 1 placed, 2 asked for and not
+    // placed (no code there), drawn hollow.
+    breakpoint: int,
+    // The debugger stopped here.
+    stopped: bool,
 }
 
 // A row of the completion popup: what it inserts, the note beside it, its
@@ -88,6 +93,8 @@ export global Code {
     in-out property <bool> on-card;
     // The pointer moved over a row (or off the rows, at -1), not pressed.
     callback hovered(int /* row */, length /* x */, length /* y */);
+    // A click beside a line's number: a breakpoint there, or none.
+    callback toggle-breakpoint(int /* row */);
 
     // The completion popup: under which line, from where along it, the
     // rows drawn and which the keys are on, and how many there are in all.
@@ -656,6 +663,10 @@ export component CodeView inherits Rectangle {
         for row[index] in Code.rows: Rectangle {
             height: Code.row-height;
             width: max(list.visible-width, Code.content-width);
+            // Where the debugger stopped, the whole line.
+            if row.stopped: Rectangle {
+                background: Theme.amber-fill;
+            }
             for mark in row.marks: Rectangle {
                 x: root.gutter + mark.x;
                 y: mark.kind == 1 ? 2px : mark.kind >= 5 ? parent.height - 4px : 0;
@@ -674,6 +685,29 @@ export component CodeView inherits Rectangle {
                     stroke: mark.kind == 5 ? Theme.crimson : mark.kind == 6 ? Theme.amber : Theme.slate;
                     stroke-width: 1px;
                 }
+            }
+            // The breakpoint's dot, left of the number; the stop's arrow on
+            // it. A click there sets or clears one.
+            if row.breakpoint > 0: Rectangle {
+                x: 4px;
+                y: (parent.height - self.height) / 2;
+                width: min(10px, parent.height - 4px);
+                height: self.width;
+                border-radius: self.width / 2;
+                background: row.breakpoint == 1 ? #e5484d : transparent;
+                border-width: row.breakpoint == 2 ? 1.5px : 0;
+                border-color: #e5484d;
+            }
+            if row.stopped: Path {
+                x: 2px;
+                y: (parent.height - self.height) / 2;
+                width: 12px;
+                height: 12px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 2 3 H 7 L 10 6 L 7 9 H 2 Z";
+                fill: Theme.amber;
+                stroke: transparent;
             }
             Text {
                 x: 0;
@@ -696,23 +730,33 @@ export component CodeView inherits Rectangle {
                 font-size: Code.font-size;
                 vertical-alignment: center;
             }
+            TouchArea {
+                x: 0;
+                width: root.gutter - 20px;
+                mouse-cursor: pointer;
+                clicked => {
+                    Code.toggle-breakpoint(index);
+                }
+            }
             touch := TouchArea {
+                x: root.gutter - 20px;
+                width: parent.width - self.x;
                 mouse-cursor: text;
                 pointer-event(event) => {
                     if (event.button == PointerEventButton.left) {
                         if (event.kind == PointerEventKind.down) {
-                            Code.pointer(0, index, self.mouse-x - root.gutter, self.mouse-y, event.modifiers);
+                            Code.pointer(0, index, self.mouse-x + self.x - root.gutter, self.mouse-y, event.modifiers);
                             sink.focus();
                         } else if (event.kind == PointerEventKind.up) {
-                            Code.pointer(2, index, self.mouse-x - root.gutter, self.mouse-y, event.modifiers);
+                            Code.pointer(2, index, self.mouse-x + self.x - root.gutter, self.mouse-y, event.modifiers);
                         }
                     }
                 }
                 moved => {
                     if (self.pressed) {
-                        Code.pointer(1, index, self.mouse-x - root.gutter, self.mouse-y, {});
+                        Code.pointer(1, index, self.mouse-x + self.x - root.gutter, self.mouse-y, {});
                     } else {
-                        Code.hovered(index, self.mouse-x - root.gutter, self.mouse-y);
+                        Code.hovered(index, self.mouse-x + self.x - root.gutter, self.mouse-y);
                     }
                 }
                 changed has-hover => {

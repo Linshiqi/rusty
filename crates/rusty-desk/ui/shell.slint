@@ -288,6 +288,53 @@ export struct LabParam {
     text: string,
 }
 
+// A row of the Search panel: a file and how many hits it holds, or a hit —
+// its line, and the line's text around the match.
+export struct SearchRow {
+    file: bool,
+    path: string,
+    count: int,
+    line: int,
+    before: string,
+    matched: string,
+    after: string,
+    index: int,
+}
+
+// A field of a register: its bits, its name, its value in the word read.
+export struct RegField {
+    bits: string,
+    name: string,
+    value: string,
+    description: string,
+}
+
+// A register of the picked peripheral, as read at the last stop.
+export struct RegRow {
+    offset: string,
+    name: string,
+    value: string,
+    description: string,
+    open: bool,
+    fields: [RegField],
+}
+
+// A frame of the debugger's call stack: where it is, and whether it is the
+// one whose variables are shown.
+export struct DebugFrame {
+    level: int,
+    function: string,
+    place: string,
+    on: bool,
+}
+
+// A local or an argument of the frame.
+export struct DebugVariable {
+    name: string,
+    value: string,
+    kind: string,
+}
+
 // One axis of the Flight tab: what it is, the channel the firmware names
 // for it, and its newest value.
 export struct FlightAxis {
@@ -530,6 +577,38 @@ export global Shell {
     // A part pressed or let go, and which key of it; a slider moved.
     callback board-press(int, int, bool);
     callback board-control(int, string, float);
+
+    // The debugger: a session live, running or stopped, what it says, its
+    // stack and the frame's variables.
+    in property <bool> debug-live;
+    in property <bool> debug-running;
+    in property <bool> debug-stopped;
+    in property <string> debug-status;
+    in property <string> debug-error;
+    in property <[DebugFrame]> debug-frames;
+    in property <[DebugVariable]> debug-variables;
+    callback debug-frame(int);
+
+    // The Search panel.
+    in property <bool> search-case;
+    in property <bool> search-word;
+    in property <bool> search-regex;
+    in property <bool> search-trouble;
+    in property <string> search-summary;
+    in property <[SearchRow]> search-rows;
+    callback search-edited(string, string);
+    callback search-open(int);
+
+    // The Registers tab.
+    in property <bool> registers-loaded;
+    in property <bool> registers-svd;
+    in property <[string]> registers-names;
+    in property <string> registers-picked;
+    in property <string> registers-dropped;
+    in property <string> registers-heading;
+    in property <[RegRow]> registers-rows;
+    callback registers-pick(string);
+    callback registers-toggle(string);
 
     // The Signals tab.
     in property <[LabSource]> lab-sources;

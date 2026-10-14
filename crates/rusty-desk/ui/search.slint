@@ -1,0 +1,181 @@
+// The Search panel: the project searched as it is typed, with the switches
+// a search box has, and every hit under its file. Filled by
+// `src/app/search.rs`.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Shell } from "shell.slint";
+import { Field } from "widgets.slint";
+
+// A switch in the search box: Aa, ab, .*
+component Toggle inherits Rectangle {
+    in property <string> text;
+    in property <string> tip;
+    in property <bool> on;
+    callback clicked;
+    width: 24px;
+    height: 22px;
+    border-radius: 4px;
+    background: root.on ? Theme.rust-fill : touch.has-hover ? Theme.sunken : transparent;
+    border-width: root.on ? 1px : 0;
+    border-color: Theme.rust;
+    Text {
+        text: root.text;
+        color: root.on ? Theme.rust : Theme.label-2;
+        font-size: Theme.caption;
+        font-family: Theme.mono;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SearchPanel inherits Rectangle {
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 4px;
+            Field {
+                horizontal-stretch: 1;
+                placeholder: @tr("search.placeholder");
+                trouble: Shell.search-trouble;
+                edited(text) => {
+                    Shell.search-edited("text", text);
+                }
+                init => {
+                    self.focus-all();
+                }
+            }
+            Toggle {
+                y: (parent.height - self.height) / 2;
+                text: "Aa";
+                tip: @tr("search.match-case");
+                on: Shell.search-case;
+                clicked => {
+                    Shell.search-edited("case", "");
+                }
+            }
+            Toggle {
+                y: (parent.height - self.height) / 2;
+                text: "ab";
+                tip: @tr("search.whole-word");
+                on: Shell.search-word;
+                clicked => {
+                    Shell.search-edited("word", "");
+                }
+            }
+            Toggle {
+                y: (parent.height - self.height) / 2;
+                text: ".*";
+                tip: @tr("search.regex");
+                on: Shell.search-regex;
+                clicked => {
+                    Shell.search-edited("regex", "");
+                }
+            }
+        }
+        Field {
+            height: 26px;
+            placeholder: @tr("search.include");
+            edited(text) => {
+                Shell.search-edited("include", text);
+            }
+        }
+        Field {
+            height: 26px;
+            placeholder: @tr("search.exclude");
+            edited(text) => {
+                Shell.search-edited("exclude", text);
+            }
+        }
+        Text {
+            text: Shell.search-summary;
+            color: Shell.search-trouble ? Theme.crimson : Theme.label-3;
+            font-size: Theme.caption;
+            wrap: word-wrap;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for row in Shell.search-rows: Rectangle {
+                height: 22px;
+                background: touch.has-hover && !row.file ? Theme.sunken : transparent;
+                touch := TouchArea {
+                    clicked => {
+                        if (!row.file) {
+                            Shell.search-open(row.index);
+                        }
+                    }
+                }
+                if row.file: HorizontalLayout {
+                    padding-left: 4px;
+                    padding-right: 6px;
+                    spacing: 6px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: row.path;
+                        color: Theme.label;
+                        font-size: Theme.caption;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: row.count;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                }
+                if !row.file: HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 6px;
+                    spacing: 6px;
+                    Text {
+                        width: 32px;
+                        text: row.line;
+                        color: Theme.label-4;
+                        font-size: Theme.caption;
+                        font-family: Theme.mono;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: row.before;
+                        color: Theme.label-2;
+                        font-size: Theme.caption;
+                        font-family: Theme.mono;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        max-width: 120px;
+                    }
+                    Rectangle {
+                        width: matched.preferred-width + 2px;
+                        background: Theme.find-match;
+                        border-radius: 2px;
+                        matched := Text {
+                            text: row.matched;
+                            color: Theme.label;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: row.after;
+                        color: Theme.label-2;
+                        font-size: Theme.caption;
+                        font-family: Theme.mono;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}

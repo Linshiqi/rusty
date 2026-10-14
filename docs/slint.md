@@ -359,7 +359,20 @@ tests green, and CLAUDE.md saying how it works.
    product example's three arrows and two right angles, rate-loop's loop
    closed through the plant, and filter-lab's played tone, converter and
    both channels, its spectrum, its design, and the recording measured at
-   5 and 50 Hz. All of it read through `rusty_embed::period`, read again
+   5 and 50 Hz.
+   Debugging (`app/debug.rs`): F5 boots the firmware frozen in the
+   simulator — built unoptimised, QEMU's gdbstub on the plan's port — and
+   attaches the chip's gdb, or, with a probe chosen, builds, flashes and
+   debugs on the board through probe-rs's debug adapter. Breakpoints are
+   the editor margin's: a click beside a number sets one, they are placed
+   when the session attaches and at once during one, and a dot moves where
+   the debugger moved the breakpoint. A stop opens the file at the frame
+   and marks the line; the Debug panel lists the stack and the frame's
+   variables; the transport floats over the code (F5, F6, F10, F11,
+   Shift+F11, Shift+F5). The Registers tab reads the chip's SVD and the
+   picked peripheral's block at every stop. Proven on blink: a breakpoint on
+   the line that sets the LED, the stop there with `on=true`, `led` and
+   `peripherals` listed, and Stop ending both the session and the run. All of it read through `rusty_embed::period`, read again
    only when a level or a press changes and re-weighted when a duty does;
    at most a redraw a frame. Fitted whole; the wheel zooms about the
    pointer, a drag pans, a double-click fits again. A press joins two

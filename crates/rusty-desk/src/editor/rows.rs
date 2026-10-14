@@ -22,7 +22,27 @@ pub struct Rows {
     metrics: Rc<RefCell<Metrics>>,
     found: Rc<RefCell<find::Marks>>,
     problems: Problems,
+    gutter: Rc<RefCell<Gutter>>,
     notify: ModelNotify,
+}
+
+/// What the margin shows besides the numbers: each file's breakpoints —
+/// placed, or asked for where the debugger found no code — and the line the
+/// debugger stopped at. Lines from zero; files as the project names them.
+#[derive(Default)]
+pub struct Gutter {
+    pub breakpoints: std::collections::BTreeMap<String, std::collections::BTreeMap<u32, bool>>,
+    pub stopped: Option<(String, u32)>,
+}
+
+impl Gutter {
+    /// Every breakpoint, as the debugger is told them.
+    pub fn all(&self) -> Vec<(String, u32)> {
+        self.breakpoints
+            .iter()
+            .flat_map(|(path, lines)| lines.keys().map(move |line| (path.clone(), *line)))
+            .collect()
+    }
 }
 
 impl Rows {
@@ -31,12 +51,14 @@ impl Rows {
         metrics: Rc<RefCell<Metrics>>,
         found: Rc<RefCell<find::Marks>>,
         problems: Problems,
+        gutter: Rc<RefCell<Gutter>>,
     ) -> Rows {
         Rows {
             doc,
             metrics,
             found,
             problems,
+            gutter,
             notify: ModelNotify::default(),
         }
     }
@@ -89,8 +111,25 @@ impl Model for Rows {
             ),
             None => place(&metrics, std::iter::once((text, Token::Plain))),
         };
+        let gutter = self.gutter.borrow();
+        let line = row as u32;
+        let breakpoint = match gutter
+            .breakpoints
+            .get(&doc.path)
+            .and_then(|lines| lines.get(&line))
+        {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => 0,
+        };
+        let stopped = gutter
+            .stopped
+            .as_ref()
+            .is_some_and(|(path, at)| *path == doc.path && *at == line);
         Some(Row {
             number: row as i32 + 1,
+            breakpoint,
+            stopped,
             pieces: ModelRc::new(VecModel::from(pieces)),
             marks: ModelRc::new(VecModel::from(marks(
                 &doc,
@@ -217,6 +256,8 @@ pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
     );
     Row {
         number: 0,
+        breakpoint: 0,
+        stopped: false,
         pieces: ModelRc::new(VecModel::from(pieces)),
         marks: ModelRc::default(),
     }

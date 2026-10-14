@@ -22,6 +22,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 mod activity;
 mod board;
 mod build;
+mod debug;
 mod device;
 mod drafts;
 mod draw;
@@ -33,7 +34,9 @@ mod navigate;
 mod part;
 mod playground;
 mod plot;
+mod registers;
 mod saving;
+mod search;
 mod servers;
 mod sheet;
 mod sim;
@@ -136,6 +139,9 @@ struct State {
     draw: draw::Drawings,
     flight: flight::Flight,
     lab: lab::Lab,
+    debug: debug::Debug,
+    registers: registers::Registers,
+    search: search::Search,
 }
 
 pub struct App {
@@ -354,6 +360,12 @@ impl App {
         on!(on_waves_resized, |app, width| app.waves_resized(width));
         on!(on_draw_resized, |app, w, h| app.draw_resized(w, h));
         on!(on_lab_pick_source, |app, index| app.lab_pick_source(index));
+        on!(on_debug_frame, |app, level| app.debug_frame(level));
+        on!(on_registers_pick, |app, name| app.registers_pick(&name));
+        on!(on_search_edited, |app, what, text| app
+            .search_edited(&what, &text));
+        on!(on_search_open, |app, index| app.search_open(index));
+        on!(on_registers_toggle, |app, name| app.registers_toggle(&name));
         on!(on_lab_source_text, |app, index, text| app
             .lab_source_text(index, &text));
         on!(on_lab_preset, |app, index, preset| app
@@ -441,6 +453,12 @@ impl App {
             }
         });
         let weak = Rc::downgrade(self);
+        self.editor.on_breakpoint(move |path, line| {
+            if let Some(app) = weak.upgrade() {
+                app.debug_toggle(path, line);
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.editor.on_edit(move |path| {
             if let Some(app) = weak.upgrade() {
                 app.sync_tabs();
@@ -508,7 +526,14 @@ impl App {
             "theme.light" => self.set_theme("light"),
             "project.menu" => self.open_picker(Mode::Projects),
             "app.menu" => self.open_picker(Mode::Commands),
-            "run.stop" => self.runner.stop(),
+            "run.stop" => {
+                // Debugging stops with the run that booted the target.
+                if self.state.borrow().debug.live() {
+                    self.debug_stop();
+                }
+                self.runner.stop();
+            }
+            "run.debug" => self.debug_verb(),
             "run.build" => self.build(Box::new(|_, _| {})),
             "run.run" => self.run_verb(),
             "run.flash" => self.device_action(device::Verb::Flash),
@@ -531,6 +556,11 @@ impl App {
             "draw.fit" => self.draw_look(None),
             "flight.close" => self.flight_close(true),
             "flight.open" => self.flight_close(false),
+            "registers.fetch" => self.fetch_svd(),
+            "debug.pause" => self.debug_control("pause"),
+            "debug.over" => self.debug_control("over"),
+            "debug.into" => self.debug_control("into"),
+            "debug.out" => self.debug_control("out"),
             "lab.sweep-start" => self.lab_sweep_start(),
             "lab.sweep-stop" => self.lab_sweep_stop(),
             "lab.measure-recorded" => self.lab_measure_recorded(),
@@ -1230,6 +1260,8 @@ impl App {
                 Glyph::Draw => icons.get_draw(),
                 Glyph::Flight => icons.get_flight(),
                 Glyph::Signals => icons.get_signals(),
+                Glyph::Debug => icons.get_bug(),
+                Glyph::Registers => icons.get_chip(),
             }
         };
         let state = self.state.borrow();
@@ -1238,6 +1270,7 @@ impl App {
             "waves" => !state.sim.trace.events.is_empty(),
             "draw" => !state.draw.is_empty(),
             "flight" => !state.sim.sensors.is_empty(),
+            "debug" | "registers" => state.debug.state.is_some(),
             "signals" => {
                 state.lab.has_signals()
                     || state

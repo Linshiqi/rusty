@@ -1,0 +1,189 @@
+// The Registers tab: the chip's peripherals down the left, the picked
+// one's registers on the right — each word as read at the last stop, and a
+// click opens its fields. Filled by `src/app/registers.rs`.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Shell } from "shell.slint";
+import { RowButton } from "widgets.slint";
+
+export component RegistersPanel inherits Rectangle {
+    if !Shell.registers-loaded: Text {
+        x: 14px;
+        y: 10px;
+        text: @tr("dock.registers.reading");
+        color: Theme.label-2;
+        font-size: Theme.small;
+    }
+    if Shell.registers-loaded && !Shell.registers-svd: VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        alignment: start;
+        Text {
+            text: @tr("dock.registers.no-svd");
+            color: Theme.label-2;
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: start;
+            RowButton {
+                height: 28px;
+                width: fetch.preferred-width + 24px;
+                clicked => {
+                    Shell.act("registers.fetch");
+                }
+                fetch := Text {
+                    x: 12px;
+                    text: @tr("dock.registers.fetch");
+                    color: Theme.rust;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    if Shell.registers-svd: HorizontalLayout {
+        // The peripherals.
+        Rectangle {
+            width: 180px;
+            ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    for name in Shell.registers-names: Rectangle {
+                        height: 24px;
+                        background: name == Shell.registers-picked ? Theme.sunken : touch.has-hover ? Theme.sunken.with-alpha(0.5) : transparent;
+                        touch := TouchArea {
+                            clicked => {
+                                Shell.registers-pick(name);
+                            }
+                        }
+                        Text {
+                            x: 14px;
+                            text: name;
+                            color: name == Shell.registers-picked ? Theme.rust : Theme.label-2;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if Shell.registers-dropped != "": Text {
+                        x: 14px;
+                        width: 160px;
+                        text: Shell.registers-dropped;
+                        color: Theme.label-4;
+                        font-size: Theme.caption;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        // The picked peripheral's registers.
+        ScrollView {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                Text {
+                    x: 14px;
+                    height: 26px;
+                    text: Shell.registers-heading;
+                    color: Theme.label;
+                    font-size: Theme.caption;
+                    font-family: Theme.mono;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                for register in Shell.registers-rows: VerticalLayout {
+                    Rectangle {
+                        height: 24px;
+                        background: row-touch.has-hover ? Theme.sunken.with-alpha(0.5) : transparent;
+                        row-touch := TouchArea {
+                            clicked => {
+                                Shell.registers-toggle(register.name);
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            spacing: 12px;
+                            Text {
+                                width: 56px;
+                                text: register.offset;
+                                color: Theme.label-4;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                width: 170px;
+                                text: register.name;
+                                color: Theme.label;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                width: 96px;
+                                text: register.value;
+                                color: Theme.rust;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: register.description;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                    for field in register.fields: HorizontalLayout {
+                        height: 20px;
+                        padding-left: 70px;
+                        spacing: 12px;
+                        Text {
+                            width: 56px;
+                            text: field.bits;
+                            color: Theme.label-4;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            width: 150px;
+                            text: field.name;
+                            color: Theme.label-2;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            width: 70px;
+                            text: field.value;
+                            color: Theme.rust;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: field.description;
+                            color: Theme.label-4;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

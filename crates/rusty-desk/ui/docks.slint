@@ -12,6 +12,9 @@ import { WavesPanel } from "waves.slint";
 import { DrawPanel } from "draw.slint";
 import { FlightPanel } from "flight.slint";
 import { SignalsPanel } from "signals.slint";
+import { DebugPanel } from "debug.slint";
+import { RegistersPanel } from "registers.slint";
+import { SearchPanel } from "search.slint";
 
 // The row of a dock's panels. A tab is its icon and, in front, its name.
 component DockHeader inherits Rectangle {
@@ -267,9 +270,7 @@ export component LeftDock inherits Rectangle {
         }
         Rectangle {
             if Shell.left-front == "project": ProjectTree { }
-            if Shell.left-front == "search": NotYet {
-                name: @tr("panel.search");
-            }
+            if Shell.left-front == "search": SearchPanel { }
             if Shell.left-front == "git": NotYet {
                 name: @tr("panel.git");
             }
@@ -327,6 +328,8 @@ export component BottomDock inherits Rectangle {
             if Shell.bottom-front == "draw": DrawPanel { }
             if Shell.bottom-front == "flight": FlightPanel { }
             if Shell.bottom-front == "signals": SignalsPanel { }
+            if Shell.bottom-front == "debug": DebugPanel { }
+            if Shell.bottom-front == "registers": RegistersPanel { }
             if Shell.bottom-front == "terminal": NotYet {
                 name: @tr("dock.tab.terminal");
             }
