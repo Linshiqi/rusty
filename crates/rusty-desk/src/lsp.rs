@@ -244,8 +244,8 @@ impl Servers {
     /// What a batch from the watcher amounted to, told to every server
     /// running — each hears it only if it asked the client to watch.
     pub fn watched(&self, events: Vec<(String, rusty_lsp::watched::FileChange)>) {
-        for client in self.running.borrow().iter().cloned() {
-            let events = events.clone();
+        for client in self.running.borrow().iter() {
+            let (client, events) = (client.clone(), events.clone());
             let _ = self.order.send(Box::new(move || {
                 let _ = client.did_change_watched_files(&events);
             }));
