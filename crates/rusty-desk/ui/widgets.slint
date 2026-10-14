@@ -1,0 +1,163 @@
+// The few controls every part of the window is built from. Flat, as Zed's
+// and VS Code's chrome are: colour lands on the glyph or the label, a fill
+// only says "the pointer is here" or "this is the one chosen".
+
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+
+// The tooltip: one for the window, drawn over everything by the app, and
+// placed by whichever control the pointer settled on.
+export global Tip {
+    in-out property <string> text;
+    in-out property <length> x;
+    in-out property <length> y;
+    in-out property <bool> shown;
+}
+
+// An icon that does something. Its tooltip names it, and its key when it has
+// one — the label is the whole of what a glyph cannot say.
+export component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> tip;
+    in property <brush> tint: Theme.label-2;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    in property <length> glyph: 16px;
+    callback clicked;
+
+    width: 28px;
+    height: 28px;
+    border-radius: Theme.radius;
+    background: !root.enabled ? transparent : root.active ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    opacity: root.enabled ? 1 : 0.4;
+
+    Icon {
+        path: root.icon;
+        size: root.glyph;
+        color: root.active ? Theme.rust : touch.has-hover && root.enabled ? Theme.label : root.tint;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            Tip.shown = false;
+            root.clicked();
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && root.tip != "" && !Tip.shown;
+        triggered => {
+            Tip.text = root.tip;
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
+// A word that does something: the primary one filled, the rest a hairline.
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    height: 28px;
+    min-width: label.preferred-width + 24px;
+    border-radius: Theme.radius;
+    background: root.primary ? (touch.has-hover ? Theme.rust.brighter(10%) : Theme.rust) : touch.has-hover ? Theme.hover : transparent;
+    border-width: root.primary ? 0 : 1px;
+    border-color: Theme.line-strong;
+    opacity: root.enabled ? 1 : 0.45;
+
+    label := Text {
+        text: root.text;
+        color: root.primary ? #ffffff : Theme.label;
+        font-size: Theme.body;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A row of a list that can be picked: a hover fill and a chosen fill.
+export component RowButton inherits Rectangle {
+    in property <bool> selected;
+    callback clicked;
+    callback double-clicked;
+    border-radius: 5px;
+    background: root.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+        double-clicked => {
+            root.double-clicked();
+        }
+    }
+    @children
+}
+
+// The bar between two regions that moves the boundary. `vertical` is a bar
+// that runs top to bottom and is dragged sideways. The travel is measured in
+// the window's coordinates: the bar moves as the boundary does, and measured
+// against itself the pointer would seem to stand still.
+export component Splitter inherits Rectangle {
+    in property <bool> vertical: true;
+    // How far the pointer has travelled since the press.
+    callback dragged(length);
+    callback pressed();
+    callback released();
+
+    property <length> from;
+
+    // A hairline to look at and a wider strip to take hold of.
+    // In a layout: one pixel across the way it is dragged, stretched the other.
+    min-width: root.vertical ? 1px : 0px;
+    max-width: root.vertical ? 1px : 100000px;
+    min-height: root.vertical ? 0px : 1px;
+    max-height: root.vertical ? 100000px : 1px;
+    background: touch.has-hover || touch.pressed ? Theme.rust : Theme.line;
+
+    touch := TouchArea {
+        x: root.vertical ? -3px : 0;
+        y: root.vertical ? 0 : -3px;
+        width: root.vertical ? 7px : root.width;
+        height: root.vertical ? root.height : 7px;
+        mouse-cursor: root.vertical ? MouseCursor.col-resize : MouseCursor.row-resize;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.from = root.vertical ? self.absolute-position.x + self.mouse-x : self.absolute-position.y + self.mouse-y;
+                root.pressed();
+            } else if (event.kind == PointerEventKind.up) {
+                root.released();
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.dragged((root.vertical ? self.absolute-position.x + self.mouse-x : self.absolute-position.y + self.mouse-y) - root.from);
+            }
+        }
+    }
+}
+
+// A small grey label above a group: the section heading every list uses.
+export component Caption inherits Text {
+    font-size: Theme.caption;
+    font-weight: 600;
+    color: Theme.label-3;
+    letter-spacing: 0.4px;
+}

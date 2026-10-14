@@ -5,12 +5,13 @@
 // it is handed. The rows are a ListView, so only the rows on screen exist.
 
 import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 
 export struct Piece {
     text: string,
     x: length,
-    color: color,
-    italic: bool,
+    // What it is (`Theme.token`), so a theme change recolours it.
+    kind: int,
 }
 
 export struct Row {
@@ -18,55 +19,49 @@ export struct Row {
     pieces: [Piece],
 }
 
-export component CodeView inherits Rectangle {
+// The document on screen, filled by `src/editor/`.
+export global Code {
     in property <[Row]> rows;
-    in property <length> row-height: 19px;
-    in property <length> gutter: 64px;
-    in property <length> font-size: 12.5px;
-    in property <string> font-family: "Cascadia Mono";
-    in property <length> content-width: 2000px;
     in property <int> caret-line;
     in property <length> caret-x;
-    in property <color> ink: #f0ebe5;
-    in property <color> ink-dim: #f0ebe566;
-    in property <string> probe-text;
-    out property <length> probe-width: probe.preferred-width;
-    out property <length> view-height: list.visible-height;
-    out property <string> composing: sink.preedit-text;
-    in-out property <length> scroll-y <=> list.content-y;
-
+    in property <length> content-width: 2000px;
+    in property <length> row-height: 19px;
+    in property <length> font-size: 12.5px;
+    in-out property <length> scroll-y;
+    in-out property <length> view-height;
     // True when the key was taken.
     callback key(KeyEvent) -> bool;
     callback typed(string);
     callback pressed(int, length);
+}
 
-    background: #232020;
+export component CodeView inherits Rectangle {
+    in property <length> gutter: 64px;
+
+    background: Theme.content;
 
     public function focus-input() {
         sink.focus();
     }
 
-    probe := Text {
-        visible: false;
-        text: root.probe-text;
-        font-family: root.font-family;
-        font-size: root.font-size;
-    }
-
     list := ListView {
         width: parent.width;
         height: parent.height;
-        for row[index] in root.rows: Rectangle {
-            height: root.row-height;
-            width: root.content-width;
+        content-y <=> Code.scroll-y;
+        changed visible-height => {
+            Code.view-height = self.visible-height;
+        }
+        for row[index] in Code.rows: Rectangle {
+            height: Code.row-height;
+            width: Code.content-width;
             Text {
                 x: 0;
                 width: root.gutter - 20px;
                 height: parent.height;
                 text: row.number;
-                color: index == root.caret-line ? root.ink : root.ink-dim;
-                font-family: root.font-family;
-                font-size: root.font-size;
+                color: index == Code.caret-line ? Theme.label : Theme.label-4;
+                font-family: Theme.mono;
+                font-size: Code.font-size;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }
@@ -74,16 +69,16 @@ export component CodeView inherits Rectangle {
                 x: root.gutter + piece.x;
                 height: parent.height;
                 text: piece.text;
-                color: piece.color;
-                font-italic: piece.italic;
-                font-family: root.font-family;
-                font-size: root.font-size;
+                color: Theme.token(piece.kind);
+                font-italic: piece.kind == 4;
+                font-family: Theme.mono;
+                font-size: Code.font-size;
                 vertical-alignment: center;
             }
             TouchArea {
                 pointer-event(event) => {
                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                        root.pressed(row.number - 1, self.mouse-x - root.gutter);
+                        Code.pressed(row.number - 1, self.mouse-x - root.gutter);
                         sink.focus();
                     }
                 }
@@ -94,25 +89,25 @@ export component CodeView inherits Rectangle {
     // Where the next key lands. Drawn here rather than by the TextInput, whose
     // own caret sits after whatever it is composing.
     Rectangle {
-        x: root.gutter + root.caret-x + list.content-x - 1px;
-        y: root.caret-line * root.row-height + list.content-y + 2px;
+        x: root.gutter + Code.caret-x + list.content-x - 1px;
+        y: Code.caret-line * Code.row-height + list.content-y + 2px;
         width: 2px;
-        height: root.row-height - 4px;
-        background: #e4703f;
-        visible: sink.preedit-text == "";
+        height: Code.row-height - 4px;
+        background: Theme.rust;
+        visible: sink.preedit-text == "" && sink.has-focus;
     }
 
     // Every character arrives here, typed or composed: an input method shows
     // its composition in place, at the caret, and commits it as an edit.
     // Keys that are not text go to `key` first and never reach it.
     sink := TextInput {
-        x: root.gutter + root.caret-x + list.content-x;
-        y: root.caret-line * root.row-height + list.content-y;
+        x: root.gutter + Code.caret-x + list.content-x;
+        y: Code.caret-line * Code.row-height + list.content-y;
         width: max(2px, self.preferred-width);
-        height: root.row-height;
-        font-family: root.font-family;
-        font-size: root.font-size;
-        color: root.ink;
+        height: Code.row-height;
+        font-family: Theme.mono;
+        font-size: Code.font-size;
+        color: Theme.label;
         vertical-alignment: center;
         single-line: true;
         text-cursor-width: 0px;
@@ -120,14 +115,14 @@ export component CodeView inherits Rectangle {
             if (self.preedit-text != "") {
                 return reject;
             }
-            if (root.key(event)) {
+            if (Code.key(event)) {
                 return accept;
             }
             reject
         }
         edited => {
             if (self.preedit-text == "" && self.text != "") {
-                root.typed(self.text);
+                Code.typed(self.text);
                 self.text = "";
             }
         }

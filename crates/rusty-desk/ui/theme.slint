@@ -1,0 +1,96 @@
+// The window's colours and type, one place. The palette is the WebView's
+// (`style/input.css`): warm surfaces, rust for what is active, patina, amber,
+// crimson and slate for state. Every colour has both themes here, so a token
+// cannot exist in one and leak into the other.
+
+import { Palette } from "std-widgets.slint";
+import { Shell } from "shell.slint";
+
+export global Theme {
+    // Dark when chosen, or when the system's is and nothing else was chosen.
+    out property <bool> dark: Shell.theme-choice == "dark" || (Shell.theme-choice != "light" && Palette.color-scheme != ColorScheme.light);
+
+    // Surfaces, back to front.
+    out property <color> window: dark ? #191715 : #ecebe8;
+    out property <color> sidebar: dark ? #1f1d1a : #f2f0ed;
+    out property <color> content: dark ? #232020 : #ffffff;
+    out property <color> raised: dark ? #2a2724 : #f7f6f4;
+    out property <color> sunken: dark ? #151312 : #e8e6e2;
+    out property <color> overlay: dark ? #2e2b28 : #ffffff;
+
+    // Hairlines.
+    out property <color> line: dark ? #ffffff1a : #0000001c;
+    out property <color> line-strong: dark ? #ffffff2b : #0000002e;
+
+    // Text, strongest first.
+    out property <color> label: dark ? #f0ebe5 : #1c1a17;
+    out property <color> label-2: dark ? #f0ebe5a3 : #1c1a179e;
+    out property <color> label-3: dark ? #f0ebe570 : #1c1a176b;
+    out property <color> label-4: dark ? #f0ebe542 : #1c1a1742;
+
+    // State.
+    out property <color> rust: dark ? #e4703f : #bd4a1f;
+    out property <color> rust-fill: dark ? #e4703f29 : #bd4a1f1f;
+    out property <color> patina: dark ? #4faa9a : #2b7466;
+    out property <color> patina-fill: dark ? #4faa9a26 : #2b74661f;
+    out property <color> amber: dark ? #dda33c : #96660a;
+    out property <color> amber-fill: dark ? #dda33c26 : #96660a21;
+    out property <color> crimson: dark ? #ef5570 : #bf2f47;
+    out property <color> crimson-fill: dark ? #ef557026 : #bf2f471c;
+    out property <color> slate: dark ? #6ba3d6 : #3d6a93;
+    out property <color> slate-fill: dark ? #6ba3d626 : #3d6a931c;
+
+    // What the pointer is over, and what is chosen.
+    out property <color> hover: dark ? #ffffff0f : #0000000a;
+    out property <color> selection: dark ? #e4703f2e : #bd4a1f21;
+    out property <color> text-selection: dark ? #264f78 : #add6ff;
+
+    // Syntax: the ANSI-and-token palette the editor and the terminal share.
+    out property <color> term-1: dark ? #ef6b56 : #b3341f;
+    out property <color> term-2: dark ? #92cf7b : #3f7a34;
+    out property <color> term-3: dark ? #e2bb52 : #8a6510;
+    out property <color> term-4: dark ? #7cb2e3 : #2f5f96;
+    out property <color> term-5: dark ? #d29ade : #8a4a8f;
+    out property <color> term-6: dark ? #5accbd : #217a70;
+    out property <color> term-11: dark ? #f5cd6e : #b0821a;
+    out property <color> term-12: dark ? #9bc9f2 : #3f7ac0;
+
+    // A token's colour, by the kind `src/editor/rows.rs` gives it: plain,
+    // keyword, string, number, comment, type, function, macro, punctuation,
+    // variable, namespace.
+    public pure function token(kind: int) -> color {
+        if (kind == 1) {
+            return term-5;
+        }
+        if (kind == 2) {
+            return term-2;
+        }
+        if (kind == 3) {
+            return term-3;
+        }
+        if (kind == 4 || kind == 10) {
+            return label-2;
+        }
+        if (kind == 5) {
+            return term-6;
+        }
+        if (kind == 6) {
+            return term-4;
+        }
+        if (kind == 7) {
+            return term-11;
+        }
+        if (kind == 9) {
+            return term-12;
+        }
+        label
+    }
+
+    // Type.
+    out property <length> body: 13px;
+    out property <length> small: 12px;
+    out property <length> caption: 11px;
+    out property <length> title: 20px;
+    out property <string> mono: "Cascadia Mono";
+    out property <length> radius: 6px;
+}

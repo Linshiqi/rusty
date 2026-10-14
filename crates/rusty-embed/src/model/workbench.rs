@@ -73,6 +73,55 @@ impl Default for EditorView {
     }
 }
 
+/// How the window is laid out and looks: the theme, the interface's scale and
+/// the three docks. A file and not the window's own storage, because a
+/// second window opens laid out as the first was left.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowLayout {
+    /// `system`, `dark` or `light`.
+    pub theme: String,
+    /// The interface's scale, 1.0 as designed.
+    pub zoom: f32,
+    pub left: DockLayout,
+    pub bottom: DockLayout,
+    pub right: DockLayout,
+}
+
+/// One dock: whether it is open, how wide (or for the bottom one, how tall)
+/// in logical pixels, and which of its panels was in front.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockLayout {
+    pub open: bool,
+    pub size: f32,
+    pub front: Option<String>,
+}
+
+impl Default for WindowLayout {
+    fn default() -> Self {
+        WindowLayout {
+            theme: "system".into(),
+            zoom: 1.0,
+            left: DockLayout {
+                open: true,
+                size: 260.0,
+                front: None,
+            },
+            bottom: DockLayout {
+                open: false,
+                size: 240.0,
+                front: None,
+            },
+            right: DockLayout {
+                open: false,
+                size: 420.0,
+                front: None,
+            },
+        }
+    }
+}
+
 /// Where rusty keeps its data, for the settings screen to show.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

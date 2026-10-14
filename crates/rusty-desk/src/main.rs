@@ -1,18 +1,47 @@
-//! rusty's desktop window, drawn with Slint.
+//! rusty's desktop window, drawn with Slint. docs/slint.md is the design.
+//!
+//! `rusty [project] [file]` opens the project and the file in it when given.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod actions;
+mod app;
+mod catalogue;
+mod docks;
 mod editor;
+mod keys;
+mod picker;
 mod probe;
+mod project;
+mod work;
+mod zoom;
 
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
     let mut args = std::env::args().skip(1);
-    let root = std::path::PathBuf::from(args.next().unwrap_or_else(|| ".".into()));
-    let file = args
-        .next()
-        .unwrap_or_else(|| "crates/rusty-ui/src/view/panels/files/surface/mod.rs".into());
+    let root = args.next().map(std::path::PathBuf::from);
+    let file = args.next();
+
+    let saved = rusty_embed::config::workbench();
     let window = AppWindow::new()?;
-    let _surface = editor::Surface::open(&window, &root, &file);
+    // After the window: Slint's translations are bundled with the component,
+    // and asked for before it exists the choice is lost and Slint follows the
+    // system — the two halves of the window then spoke two languages.
+    app::apply_locale(&app::chosen_locale(saved.locale.as_deref()));
+    let app = app::App::new(&window);
+    work::install(app.clone());
+    {
+        let app = app.clone();
+        window.window().on_close_requested(move || app.closing());
+    }
+    window.show()?;
+    zoom::apply(&window, saved.layout.zoom);
+    window.invoke_focus_window();
+
+    if let Some(root) = root {
+        app.open_project(root, file.map(|file| file.replace('\\', "/")));
+    }
     probe::start(&window);
-    window.run()
+    slint::run_event_loop()
 }

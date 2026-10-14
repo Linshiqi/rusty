@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Error, Result},
-    model::{AssistantChoice, EditorView, ProjectTabs, RelocateReport, StorageLocation},
+    model::{
+        AssistantChoice, EditorView, ProjectTabs, RelocateReport, StorageLocation, WindowLayout,
+    },
 };
 
 /// The fixed anchor. Everything else is reachable from here.
@@ -243,6 +245,9 @@ pub struct WorkbenchState {
     /// window drawing the editor differently from the first is not a shrug.
     #[serde(default)]
     pub editor: EditorView,
+    /// The window's layout and appearance (`rusty-desk`).
+    #[serde(default)]
+    pub layout: WindowLayout,
 }
 
 /// How many projects keep their tab strip. Beyond this the oldest is dropped:
@@ -292,7 +297,7 @@ fn workbench_path() -> Option<PathBuf> {
 mod file {
     use serde::{Deserialize, Serialize};
 
-    use crate::model::{AssistantChoice, EditorView, ProjectTabs};
+    use crate::model::{AssistantChoice, DockLayout, EditorView, ProjectTabs, WindowLayout};
 
     #[derive(Debug, Default, Serialize, Deserialize)]
     pub(super) struct Workbench {
@@ -323,6 +328,79 @@ mod file {
         /// `[editor]`, written only when something in it is off.
         #[serde(default, skip_serializing_if = "Editor::is_default")]
         pub editor: Editor,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub layout: Option<Layout>,
+    }
+
+    /// `[layout]`: written whole once the window has been laid out, and
+    /// read key by key, so a file from before a key existed still reads.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Layout {
+        #[serde(default = "system")]
+        pub theme: String,
+        #[serde(default = "one")]
+        pub zoom: f32,
+        #[serde(default)]
+        pub left: Option<Dock>,
+        #[serde(default)]
+        pub bottom: Option<Dock>,
+        #[serde(default)]
+        pub right: Option<Dock>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Dock {
+        pub open: bool,
+        pub size: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub front: Option<String>,
+    }
+
+    fn system() -> String {
+        "system".into()
+    }
+
+    fn one() -> f32 {
+        1.0
+    }
+
+    impl From<&Layout> for WindowLayout {
+        fn from(file: &Layout) -> Self {
+            let defaults = WindowLayout::default();
+            let dock = |dock: &Option<Dock>, default: DockLayout| {
+                dock.as_ref().map_or(default, |d| DockLayout {
+                    open: d.open,
+                    size: d.size,
+                    front: d.front.clone(),
+                })
+            };
+            WindowLayout {
+                theme: file.theme.clone(),
+                zoom: file.zoom,
+                left: dock(&file.left, defaults.left),
+                bottom: dock(&file.bottom, defaults.bottom),
+                right: dock(&file.right, defaults.right),
+            }
+        }
+    }
+
+    impl From<&WindowLayout> for Layout {
+        fn from(layout: &WindowLayout) -> Self {
+            let dock = |d: &DockLayout| {
+                Some(Dock {
+                    open: d.open,
+                    size: d.size,
+                    front: d.front.clone(),
+                })
+            };
+            Layout {
+                theme: layout.theme.clone(),
+                zoom: layout.zoom,
+                left: dock(&layout.left),
+                bottom: dock(&layout.bottom),
+                right: dock(&layout.right),
+            }
+        }
     }
 
     /// The editor's switches as the file spells them: each key present only
@@ -441,6 +519,11 @@ mod file {
                     .collect(),
                 skipped_update: file.skipped_update,
                 editor: EditorView::from(&file.editor),
+                layout: file
+                    .layout
+                    .as_ref()
+                    .map(WindowLayout::from)
+                    .unwrap_or_default(),
             }
         }
     }
@@ -479,6 +562,8 @@ mod file {
                     .collect(),
                 skipped_update: state.skipped_update.clone(),
                 editor: state.editor.into(),
+                layout: (state.layout != WindowLayout::default())
+                    .then(|| Layout::from(&state.layout)),
             }
         }
     }
@@ -830,6 +915,25 @@ mod tests {
                 minimap: false,
                 sticky_scroll: false,
                 indent_guides: false,
+            },
+            layout: crate::model::WindowLayout {
+                theme: "light".into(),
+                zoom: 1.25,
+                left: crate::model::DockLayout {
+                    open: false,
+                    size: 300.0,
+                    front: Some("git".into()),
+                },
+                bottom: crate::model::DockLayout {
+                    open: true,
+                    size: 180.0,
+                    front: Some("terminal".into()),
+                },
+                right: crate::model::DockLayout {
+                    open: true,
+                    size: 500.0,
+                    front: Some("board".into()),
+                },
             },
         };
         save_workbench_at(&path, &state).unwrap();
