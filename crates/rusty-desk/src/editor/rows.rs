@@ -12,20 +12,26 @@ use std::{cell::RefCell, rc::Rc};
 use rusty_edit::{Line, Token};
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
-use super::{Document, Metrics, Shared};
+use super::{Document, Metrics, Shared, find};
 use crate::{Mark, Piece, Row};
 
 pub struct Rows {
     doc: Shared,
     metrics: Rc<RefCell<Metrics>>,
+    found: Rc<RefCell<find::Marks>>,
     notify: ModelNotify,
 }
 
 impl Rows {
-    pub fn new(doc: Shared, metrics: Rc<RefCell<Metrics>>) -> Rows {
+    pub fn new(
+        doc: Shared,
+        metrics: Rc<RefCell<Metrics>>,
+        found: Rc<RefCell<find::Marks>>,
+    ) -> Rows {
         Rows {
             doc,
             metrics,
+            found,
             notify: ModelNotify::default(),
         }
     }
@@ -81,7 +87,12 @@ impl Model for Rows {
         Some(Row {
             number: row as i32 + 1,
             pieces: ModelRc::new(VecModel::from(pieces)),
-            marks: ModelRc::new(VecModel::from(marks(&doc, &metrics, row))),
+            marks: ModelRc::new(VecModel::from(marks(
+                &doc,
+                &metrics,
+                &self.found.borrow(),
+                row,
+            ))),
         })
     }
 
@@ -90,14 +101,32 @@ impl Model for Rows {
     }
 }
 
-/// The selections crossing `row` and the carets on it but the primary one.
-/// A selection that carries on past the line's end takes a space's width
-/// there, as every editor shows the line break it holds.
-fn marks(doc: &Document, metrics: &Metrics, row: usize) -> Vec<Mark> {
+/// What is drawn behind `row`'s text, back to front: find's scope and its
+/// matches, the selections crossing it, and the carets on it but the
+/// primary one. A span that carries on past the line's end takes a space's
+/// width there, as every editor shows the line break it holds.
+fn marks(doc: &Document, metrics: &Metrics, found: &find::Marks, row: usize) -> Vec<Mark> {
     let (start, end) = (doc.lines.start(row), doc.lines.end(row));
     let text = doc.lines.text(&doc.text, row);
     let x_at = |at: usize| metrics.x_of(text, text[..at - start].chars().count());
     let mut marks = Vec::new();
+    let mut span = |from: usize, to: usize, kind: i32| {
+        let (a, b) = (from.max(start), to.min(end));
+        if from > end || to < start || a > b {
+            return;
+        }
+        let x = x_at(a);
+        let past = to > end;
+        let width = x_at(b) - x + if past { metrics.ascii() } else { 0.0 };
+        marks.push(Mark { x, width, kind });
+    };
+    if let Some((from, to)) = found.scope {
+        span(from, to, 4);
+    }
+    for at in found.on(start, end) {
+        let (from, to) = found.matches[at];
+        span(from, to, if found.current == Some(at) { 3 } else { 2 });
+    }
     for (index, cursor) in doc.cursors.iter().enumerate() {
         if !cursor.is_caret() && cursor.start() <= end && cursor.end() > start {
             let from = cursor.start().max(start);

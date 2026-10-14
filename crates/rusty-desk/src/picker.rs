@@ -18,6 +18,10 @@ pub enum Pick {
     Action(&'static str),
     File(String),
     Project(String),
+    /// A line of the document on screen, counted from one, and a column.
+    Line(usize, Option<usize>),
+    /// A row that only says something: picking it closes the picker.
+    Nothing,
 }
 
 /// How many rows are shown. Past this the query is what narrows it.
@@ -59,6 +63,23 @@ pub fn files(query: &str, paths: &[String]) -> Vec<(String, String, Pick)> {
             (name, dir, Pick::File(path.clone()))
         })
         .collect()
+}
+
+/// `:42`, `:42:7` or `:42,7` — VS Code's go-to-line in the finder — as a
+/// line and a column counted from one. `Some((None, None))` for a `:`
+/// with nothing after it yet; `None` for a query that is not one.
+pub fn line_target(query: &str) -> Option<(Option<usize>, Option<usize>)> {
+    let rest = query.trim_start().strip_prefix(':')?.trim();
+    if rest.is_empty() {
+        return Some((None, None));
+    }
+    let mut parts = rest.splitn(2, [':', ',']);
+    let line = parts.next()?.trim().parse::<usize>().ok()?;
+    let col = match parts.next().map(str::trim) {
+        Some("") | None => None,
+        Some(col) => Some(col.parse::<usize>().ok()?),
+    };
+    Some((Some(line.max(1)), col.map(|col| col.max(1))))
 }
 
 /// The recent projects matching `query`, then the ways to have another:
@@ -141,6 +162,17 @@ fn subsequence(needle: &[char], hay: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_colon_is_a_line_and_maybe_a_column() {
+        assert_eq!(line_target(":42"), Some((Some(42), None)));
+        assert_eq!(line_target(": 42:7"), Some((Some(42), Some(7))));
+        assert_eq!(line_target(":42,7"), Some((Some(42), Some(7))));
+        assert_eq!(line_target(":"), Some((None, None)));
+        assert_eq!(line_target(":0"), Some((Some(1), None)));
+        assert_eq!(line_target(":x"), None);
+        assert_eq!(line_target("main.rs"), None);
+    }
 
     fn paths(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

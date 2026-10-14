@@ -7630,6 +7630,7 @@ version = "0.6.77"
 dependencies = [
  "arboard",
  "image",
+ "regex",
  "rfd",
  "rusty-edit",
  "rusty-embed",

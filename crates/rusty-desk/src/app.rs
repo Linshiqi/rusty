@@ -234,6 +234,11 @@ impl App {
             "settings.open" => self.open_tab(Tab::Page("settings")),
             "welcome.open" => self.open_tab(Tab::Page("welcome")),
             "file.save" => self.save(),
+            "find.open" => self.editor.find_open(false),
+            "find.replace" => self.editor.find_open(true),
+            "find.next" => self.editor.find_next(true),
+            "find.previous" => self.editor.find_next(false),
+            "editor.go-to-line" => self.open_picker_with(Mode::Files, ":"),
             "tab.close" => {
                 let id = self.active_tab().map(|tab| tab.id());
                 if let Some(id) = id {
@@ -741,9 +746,15 @@ impl App {
     // ---- the picker ------------------------------------------------------
 
     fn open_picker(self: &Rc<Self>, mode: Mode) {
+        self.open_picker_with(mode, "");
+    }
+
+    /// The picker open with `text` already typed: `:` for a line.
+    fn open_picker_with(self: &Rc<Self>, mode: Mode, text: &str) {
         self.state.borrow_mut().picker = Some((mode, Vec::new()));
         if let Some(window) = self.window() {
             let shell = window.global::<Shell>();
+            shell.set_picker_text(text.into());
             shell.set_picker_hint(SharedString::from(match mode {
                 Mode::Commands => t!("desk.palette-hint"),
                 Mode::Files => t!("desk.finder-hint"),
@@ -751,7 +762,7 @@ impl App {
             }));
             shell.set_picker_open(true);
         }
-        self.picker_query("");
+        self.picker_query(text);
     }
 
     fn picker_query(self: &Rc<Self>, query: &str) {
@@ -760,6 +771,7 @@ impl App {
         };
         let found = match mode {
             Mode::Commands => picker::commands(query),
+            Mode::Files if picker::line_target(query).is_some() => self.line_rows(query),
             Mode::Files => {
                 let state = self.state.borrow();
                 let files = state.project.as_ref().map_or(&[][..], |p| &p.files);
@@ -805,10 +817,51 @@ impl App {
             Some(Pick::Action(id)) => self.act(id),
             Some(Pick::File(path)) => self.open_file(path),
             Some(Pick::Project(path)) => self.open_project(PathBuf::from(path), None),
+            Some(Pick::Line(line, col)) => self.editor.go_to(line, col),
+            Some(Pick::Nothing) => self.front_focus(),
             None => {
                 // Escape or a click outside: back to whatever had the keys.
                 self.front_focus();
             }
+        }
+    }
+
+    /// The finder's rows for `:` and a line: the line to go to, or with
+    /// nothing typed yet, where the caret is and how far the file goes.
+    fn line_rows(&self, query: &str) -> Vec<(String, String, Pick)> {
+        let Some((Some(Tab::File(path)), Some((line, col, ..)), Some(count))) = Some((
+            self.active_tab(),
+            self.editor.status(),
+            self.editor.line_count(),
+        )) else {
+            return Vec::new();
+        };
+        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        match picker::line_target(query) {
+            Some((Some(to), Some(at))) => vec![(
+                t!(
+                    "desk.go-to-column",
+                    line = to.min(count).to_string(),
+                    col = at.to_string()
+                ),
+                name,
+                Pick::Line(to, Some(at)),
+            )],
+            Some((Some(to), None)) => vec![(
+                t!("desk.go-to-line", line = to.min(count).to_string()),
+                name,
+                Pick::Line(to, None),
+            )],
+            _ => vec![(
+                t!(
+                    "desk.go-to-prompt",
+                    line = line.to_string(),
+                    col = col.to_string(),
+                    count = count.to_string()
+                ),
+                name,
+                Pick::Nothing,
+            )],
         }
     }
 

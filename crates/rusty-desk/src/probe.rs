@@ -27,12 +27,11 @@ use slint::{
     platform::{Key, WindowEvent},
 };
 
-use crate::{AppWindow, Code, Shell, work};
+use crate::{AppWindow, Code, Find, Shell, work};
 
 /// Refuse to probe in the data directory somebody works in.
 pub fn ready() -> Result<(), &'static str> {
-    if std::env::var_os("RUSTY_PROBE").is_some() && std::env::var_os("RUSTY_CONFIG_DIR").is_none()
-    {
+    if std::env::var_os("RUSTY_PROBE").is_some() && std::env::var_os("RUSTY_CONFIG_DIR").is_none() {
         return Err("the probe keeps what it types as a draft: \
              give it a data directory of its own with RUSTY_CONFIG_DIR");
     }
@@ -44,6 +43,8 @@ pub fn start(window: &AppWindow) {
         return;
     };
     let saves = std::env::var_os("RUSTY_PROBE_SAVES").is_some();
+    // The text before find replaced everything, to hold the undo to.
+    let before: Rc<RefCell<Option<String>>> = Rc::default();
     std::fs::create_dir_all(&dir).expect("the probe's directory");
     let waiting: Rc<Cell<Option<Instant>>> = Rc::default();
     let latencies: Rc<RefCell<Vec<Duration>>> = Rc::default();
@@ -95,6 +96,13 @@ pub fn start(window: &AppWindow) {
             }
         };
         let key = |text: slint::SharedString| chord(&[], text);
+        let draft = || {
+            let editor = app.editor();
+            editor
+                .current_path()
+                .and_then(|path| editor.draft_of(&path))
+                .map(|(text, ..)| text)
+        };
         match n {
             25 => snapshot(&window, &dir.join("open.png")),
             41 => key(Key::End.into()),
@@ -188,12 +196,59 @@ pub fn start(window: &AppWindow) {
                     let formatted = disk == "fn main() {\n    let x = 1;\n}\n";
                     eprintln!(
                         "save: {} on disk",
-                        if formatted { "formatted" } else { "NOT formatted" }
+                        if formatted {
+                            "formatted"
+                        } else {
+                            "NOT formatted"
+                        }
                     );
                 }
                 code.invoke_typed("// kept for next time\n".into());
             }
-            236 => {
+            // Find: opened on the word at the top, a query typed, a step,
+            // every `fn` replaced, the replacement undone in one step.
+            240 => {
+                chord(&[Key::Control], Key::Home.into());
+                before.replace(draft());
+                chord(&[Key::Control], "f".into());
+            }
+            241 => {
+                for letter in ["f", "n"] {
+                    key(letter.into());
+                }
+            }
+            242 => key(Key::Return.into()),
+            244 => snapshot(&window, &dir.join("find.png")),
+            245 => {
+                chord(&[Key::Control], "h".into());
+                for letter in ["F", "N"] {
+                    key(letter.into());
+                }
+                window.global::<Find>().invoke_replace(true);
+            }
+            247 => snapshot(&window, &dir.join("replaced.png")),
+            248 => {
+                key(Key::Escape.into());
+                chord(&[Key::Control], "z".into());
+            }
+            249 => {
+                let undone = before.borrow().as_deref() == draft().as_deref();
+                eprintln!(
+                    "find: replace all undone in one step: {}",
+                    if undone { "yes" } else { "NO" }
+                );
+                // Go to line 3, from the finder's `:`.
+                app.act("editor.go-to-line");
+            }
+            250 => {
+                key("3".into());
+                key(Key::Return.into());
+            }
+            251 => {
+                let caret = app.editor().status().map(|(line, ..)| line);
+                eprintln!("go to line 3: the caret is on line {caret:?}");
+            }
+            260 => {
                 app.act("app.exit");
                 let kept = rusty_embed::config::data_dir()
                     .and_then(|data| std::fs::read_dir(data.join("backups")).ok())

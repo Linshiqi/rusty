@@ -94,6 +94,9 @@ export global Shell {
 
     // The picker: the command palette and the file finder are one list.
     in-out property <bool> picker-open;
+    // What the field holds: empty, or what it was opened with (`:` for a
+    // line), with the caret after it.
+    in-out property <string> picker-text;
     in property <string> picker-hint;
     in property <[PickRow]> picker-rows;
     in-out property <int> picker-selected;

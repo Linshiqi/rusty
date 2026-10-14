@@ -339,6 +339,10 @@ export component EditorArea inherits Rectangle {
         code.focus-input();
     }
 
+    public function focus-find(replace: bool) {
+        code.focus-find(replace);
+    }
+
     VerticalLayout {
         TabStrip { }
         Rectangle {
