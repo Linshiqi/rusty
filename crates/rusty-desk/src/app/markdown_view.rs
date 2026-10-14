@@ -3,7 +3,10 @@
 //! editor's own highlighter, so a fence and the file it was copied from are
 //! the same colours.
 
+use std::path::Path;
+
 use rusty_edit::Files;
+use rusty_i18n::t;
 use slint::{ModelRc, VecModel};
 
 use crate::{
@@ -11,8 +14,12 @@ use crate::{
     markdown::{self, Block},
 };
 
-/// A document's blocks, ready to draw.
-pub(super) fn blocks(files: &Files, text: &str) -> ModelRc<MdBlock> {
+/// A document's blocks, ready to draw. `place` is the project's root and
+/// the document's folder in it, for the pictures it names: a picture is
+/// found from the document's folder and never above the root, and one on
+/// another machine is named rather than fetched — fetching it would tell its
+/// host who opened the file.
+pub(super) fn blocks(files: &Files, text: &str, place: Option<(&Path, &str)>) -> ModelRc<MdBlock> {
     let rows: Vec<MdBlock> = markdown::blocks(text)
         .into_iter()
         .map(|block| match block {
@@ -61,6 +68,30 @@ pub(super) fn blocks(files: &Files, text: &str) -> ModelRc<MdBlock> {
                 kind: 3,
                 ..MdBlock::default()
             },
+            Block::Image { src, alt } => {
+                let remote = src.contains("://");
+                let picture = place.filter(|_| !remote).and_then(|(root, dir)| {
+                    let relative = if dir.is_empty() {
+                        src.clone()
+                    } else {
+                        format!("{dir}/{src}")
+                    };
+                    let path = rusty_edit::absolute(root, &relative).ok()?;
+                    slint::Image::load_from_path(&path).ok()
+                });
+                let note = match (&picture, remote) {
+                    (Some(_), _) => alt,
+                    (None, true) => format!("{alt} — {}", t!("markdown.image-remote")),
+                    (None, false) => t!("markdown.image-failed", path = src.clone(), error = alt),
+                };
+                MdBlock {
+                    kind: 5,
+                    shown: picture.is_some(),
+                    image: picture.unwrap_or_default(),
+                    marker: note.into(),
+                    ..MdBlock::default()
+                }
+            }
             Block::Table { rows } => {
                 let rows: Vec<MdRow> = rows
                     .iter()
@@ -86,6 +117,61 @@ pub(super) fn blocks(files: &Files, text: &str) -> ModelRc<MdBlock> {
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
+}
+
+/// Whether a file is Markdown, by its name.
+fn is_markdown(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".mdx")
+}
+
+impl super::App {
+    /// A Markdown file in front is read as a page unless its source was
+    /// asked for: reading is the common case in a workbench — a README, a
+    /// book — so the page is the default, and the toggle says which way it
+    /// will go.
+    pub(super) fn sync_markdown(&self) {
+        use slint::ComponentHandle;
+        let Some(window) = self.window() else { return };
+        let shell = window.global::<crate::Shell>();
+        let path = match self.active_tab() {
+            Some(super::Tab::File(path)) if is_markdown(&path) => Some(path),
+            _ => None,
+        };
+        let page = path
+            .as_ref()
+            .is_some_and(|p| !self.state.borrow().markdown_source.contains(p));
+        shell.set_md_file(path.is_some());
+        shell.set_md_page(page);
+        let (Some(path), true) = (path, page) else {
+            return;
+        };
+        let Some((text, ..)) = self.editor.draft_of(&path) else {
+            return;
+        };
+        let root = self.root();
+        let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+        shell.set_md_blocks(blocks(
+            &self.files,
+            &text,
+            root.as_deref().map(|root| (root, dir)),
+        ));
+    }
+
+    /// The page and its source, swapped for the file in front.
+    pub(super) fn markdown_toggle(self: &std::rc::Rc<Self>) {
+        let Some(super::Tab::File(path)) = self.active_tab() else {
+            return;
+        };
+        {
+            let mut state = self.state.borrow_mut();
+            let source = &mut state.markdown_source;
+            if !source.remove(&path) {
+                source.insert(path);
+            }
+        }
+        self.sync_markdown();
+    }
 }
 
 /// A link clicked on a page: a web address goes to the system's browser,

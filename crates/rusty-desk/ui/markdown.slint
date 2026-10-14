@@ -69,6 +69,32 @@ export component MarkdownView inherits VerticalLayout {
             height: 1px;
             background: Theme.line;
         }
+        if block.kind == 5 && block.shown: VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+            // Its own size when that fits, smaller and whole when not.
+            Image {
+                source: block.image;
+                min-width: 0px;
+                max-width: self.source.width * 1px;
+                max-height: min(480px, self.source.height * 1px);
+                image-fit: contain;
+                horizontal-alignment: left;
+            }
+            if block.marker != "": Text {
+                text: block.marker;
+                color: Theme.label-3;
+                font-size: root.font-size * 0.9;
+                wrap: word-wrap;
+            }
+        }
+        if block.kind == 5 && !block.shown: Text {
+            text: block.marker;
+            color: Theme.label-3;
+            font-size: root.font-size * 0.9;
+            font-italic: true;
+            wrap: word-wrap;
+        }
         if block.kind == 4: Rectangle {
             border-radius: 6px;
             border-width: 1px;

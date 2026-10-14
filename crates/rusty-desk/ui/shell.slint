@@ -318,6 +318,9 @@ export struct MdBlock {
     marker: string,
     lines: [CodeLine],
     rows: [MdRow],
+    // A picture (kind 5), when it could be read; `marker` says what it is.
+    image: image,
+    shown: bool,
 }
 
 // A line of the assistant's transcript: 0 a question (with what was
@@ -852,6 +855,11 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // A Markdown file in front: read as a page, or its source.
+    in property <bool> md-file;
+    in property <bool> md-page;
+    in property <[MdBlock]> md-blocks;
 
     // The assistant.
     in property <bool> ai-ready;
