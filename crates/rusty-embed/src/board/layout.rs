@@ -25,12 +25,12 @@
 //! author asks. `arrange` is a command, not a rule that runs; a board
 //! somebody laid out by hand is theirs.
 
-use rusty_embed::{Instance, KIT_REFERENCE, Wire};
+use crate::{Instance, KIT_REFERENCE, Wire};
 
 use super::geometry::{EditPart, ROW_PITCH, SNAP, part_box, pin_point, wire_ends};
 
 /// A box on the sheet: `(x0, y0, x1, y1)`.
-pub(super) type Rect = (f64, f64, f64, f64);
+pub type Rect = (f64, f64, f64, f64);
 
 /// How far a part keeps from its neighbours, and a wire from a body.
 ///
@@ -54,12 +54,12 @@ const LABEL_MARGIN: f64 = ROW_PITCH;
 /// A part's box as it is *drawn*, labels included — what the layout has to
 /// keep apart, since what a reader sees on top of something else is the
 /// drawing and not the body.
-pub(super) fn drawn_box(part: &EditPart) -> Rect {
+pub fn drawn_box(part: &EditPart) -> Rect {
     grown(part_box(part), LABEL_MARGIN)
 }
 
 /// Whether two boxes share any area, once both have been given their gap.
-pub(super) fn overlaps(a: Rect, b: Rect, gap: f64) -> bool {
+pub fn overlaps(a: Rect, b: Rect, gap: f64) -> bool {
     a.0 - gap < b.2 && b.0 - gap < a.2 && a.1 - gap < b.3 && b.1 - gap < a.3
 }
 
@@ -184,12 +184,7 @@ fn met(path: &[(f64, f64)], others: &[Vec<(f64, f64)>]) -> usize {
 /// direction: a part dropped into a crowded corner should end up beside
 /// the crowd, not hurled to the right of everything. The first ring that
 /// has room wins, and the point nearest the pointer within it.
-pub(super) fn free_spot(
-    taken: &[Rect],
-    size: (f64, f64),
-    wanted: (f64, f64),
-    grid: f64,
-) -> (f64, f64) {
+pub fn free_spot(taken: &[Rect], size: (f64, f64), wanted: (f64, f64), grid: f64) -> (f64, f64) {
     let grid = if grid > 0.0 { grid } else { SNAP };
     let fits = |at: (f64, f64)| {
         let half = (size.0 / 2.0, size.1 / 2.0);
@@ -231,7 +226,7 @@ pub(super) fn free_spot(
 }
 
 /// The boxes every part but `except` occupies.
-pub(super) fn taken_boxes(parts: &[EditPart], except: Option<usize>) -> Vec<Rect> {
+pub fn taken_boxes(parts: &[EditPart], except: Option<usize>) -> Vec<Rect> {
     parts
         .iter()
         .enumerate()
@@ -245,7 +240,7 @@ pub(super) fn taken_boxes(parts: &[EditPart], except: Option<usize>) -> Vec<Rect
 /// Three kinds of thing, because they cost different amounts to hit: a
 /// body is a wall, a wire shared lane-for-lane is two lines drawn as one,
 /// and a wire merely crossed is what every schematic has some of.
-pub(super) struct Around<'a> {
+pub struct Around<'a> {
     /// Every *other* part's drawn box.
     pub parts: &'a [Rect],
     /// The bodies of the wire's own two parts, without the label margin.
@@ -288,7 +283,7 @@ struct Scored {
 ///
 /// The ends themselves are not returned: a wire's ends are its pins, and
 /// the caller already has them.
-pub(super) fn route(
+pub fn route(
     a: (f64, f64),
     out_a: (f64, f64),
     b: (f64, f64),
@@ -416,7 +411,7 @@ pub(super) fn route(
 /// Only the untouched ones: a wire somebody has bent is a wire somebody
 /// has an opinion about, and rerouting it would throw that away. `arrange`
 /// is the command that clears them all first.
-pub(super) fn reroute(parts: &[EditPart], wires: &mut [Wire], only_empty: bool) {
+pub fn reroute(parts: &[EditPart], wires: &mut [Wire], only_empty: bool) {
     let boxes = box_index(parts);
     // What is already on the sheet, so the next wire can keep off it.
     // Grown one wire at a time in the order they are stored, which is why
@@ -454,14 +449,14 @@ pub(super) fn reroute(parts: &[EditPart], wires: &mut [Wire], only_empty: bool) 
 /// `reroute` over a one-wire slice was what this was, and it had no way to
 /// see the rest of the board: a wire drawn by hand could land exactly on
 /// top of one already there, which is two wires drawn as one line.
-pub(super) fn route_beside(parts: &[EditPart], wires: &[Wire], wire: &mut Wire) {
+pub fn route_beside(parts: &[EditPart], wires: &[Wire], wire: &mut Wire) {
     lay(parts, &drawn_paths(parts, wires, None), wire);
 }
 
 /// Re-lay one wire of the sheet: its own bends dropped, and routed clear of
 /// every *other* wire — what "straighten" means once a bare elbow can run
 /// through a part.
-pub(super) fn relay(parts: &[EditPart], wires: &mut [Wire], index: usize) {
+pub fn relay(parts: &[EditPart], wires: &mut [Wire], index: usize) {
     let Some(mut one) = wires.get(index).cloned() else {
         return;
     };
@@ -538,7 +533,7 @@ fn obstacles_for(boxes: &[(String, Rect, Rect)], wire: &Wire) -> (Vec<Rect>, Vec
 /// and leaving a line through a body because it was once right is the mess
 /// this whole module is about. So the test is the drawing, not who drew it:
 /// a route that crosses nothing is never touched.
-pub(super) fn reroute_broken(parts: &[EditPart], wires: &mut [Wire]) -> usize {
+pub fn reroute_broken(parts: &[EditPart], wires: &mut [Wire]) -> usize {
     let boxes = box_index(parts);
     let mut fixed = 0;
     for wire in wires.iter_mut() {
@@ -599,7 +594,7 @@ struct Placement {
 ///
 /// The devkit does not move — it is the thing everything else is placed
 /// against, and moving it would drag the whole board across the canvas.
-pub(super) fn arrange(parts: &mut [EditPart], wires: &mut [Wire]) {
+pub fn arrange(parts: &mut [EditPart], wires: &mut [Wire]) {
     let Some(kit) = parts.iter().position(|p| p.is_kit()) else {
         return;
     };
@@ -754,7 +749,7 @@ fn snap(value: f64) -> f64 {
 /// line of another net over the same point is not joined to it, and a dot
 /// there would say it was. Computed from the drawn paths rather than the
 /// net model, because what a reader needs marked is what is drawn.
-pub(super) fn junctions(parts: &[EditPart], wires: &[Wire]) -> Vec<(f64, f64)> {
+pub fn junctions(parts: &[EditPart], wires: &[Wire]) -> Vec<(f64, f64)> {
     let paths: Vec<Vec<(f64, f64)>> = wires
         .iter()
         .filter_map(|wire| {
@@ -892,7 +887,7 @@ fn on_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_embed::PinRef;
+    use crate::PinRef;
 
     fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
         (x, y, x + w, y + h)
@@ -1266,8 +1261,8 @@ mod tests {
 
     // ---- fixtures -------------------------------------------------------
 
-    fn symbol(reference: &str, pins: &[(&str, f64, f64)]) -> rusty_embed::Symbol {
-        rusty_embed::Symbol {
+    fn symbol(reference: &str, pins: &[(&str, f64, f64)]) -> crate::Symbol {
+        crate::Symbol {
             library: "test".into(),
             name: "part".into(),
             reference: reference.into(),
@@ -1275,10 +1270,10 @@ mod tests {
             description: None,
             pins: pins
                 .iter()
-                .map(|(number, x, y)| rusty_embed::Pin {
+                .map(|(number, x, y)| crate::Pin {
                     number: (*number).into(),
                     name: (*number).into(),
-                    kind: rusty_embed::PinKind::Passive,
+                    kind: crate::PinKind::Passive,
                     at: (*x, *y),
                     length: 2.54,
                     angle: 0,

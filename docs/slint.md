@@ -306,6 +306,20 @@ tests green, and CLAUDE.md saying how it works.
    A tool the plan lacks is a notification with its Install. Proven by the
    probe on blink in rusty's QEMU v10: GPIO0 toggling from the emulator's
    registers, the display line, Stop.
+   The board beside the code, in the right dock: the old window's drawing
+   — `art`, `geometry`, `edit`, `layout`, `glow`, `readout`, with their
+   seventy-two tests — moved into `rusty_embed::board` for both windows,
+   and `board::picture` composing the devkit and every part's body into
+   one SVG the window draws as an image. What moves is the window's own
+   over it: each wire coloured by its net's level, each lamp's lens as
+   bright as its current, each switch's cap held under the pointer, and
+   every word — a lead's name, a reference, a value — as the window's text,
+   never turned. All of it read through `rusty_embed::period`, read again
+   only when a level or a press changes and re-weighted when a duty does;
+   at most a redraw a frame. Fitted whole; the wheel zooms about the
+   pointer, a drag pans, a double-click fits again. A press joins two
+   GPIOs or drives one, as the sheet says — proven on the C3 playground,
+   GPIO4 low while its button was held and high after.
 7. **The rest of the workbench**: Git, project search, crates and features,
    disk and memory, the terminal, the assistant and its tools, Markdown
    pages.

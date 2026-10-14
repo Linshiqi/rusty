@@ -96,14 +96,13 @@ pub fn start(window: &AppWindow) {
         if (30..=40).contains(&n) && shell.get_active_kind() != "file" {
             return;
         }
-        // The firmware has spoken once a line of its own is in the dock.
+        // The emulator has spoken once the board's wires have levels — or,
+        // on a board with none, once the firmware's own words are in the
+        // dock after the boot.
         if sim
             && n == 502
             && shell.get_notes().row_count() == 0
-            && !shell
-                .get_output()
-                .iter()
-                .any(|line| line.kind == 0 && !line.text.trim_start().starts_with("Compiling"))
+            && !shell.get_board_wires().iter().any(|wire| wire.tone != 0)
         {
             return;
         }
@@ -160,9 +159,30 @@ pub fn start(window: &AppWindow) {
                 }
             }
             500 if sim => app.act("run.run"),
+            // The first switch on the board held down, as a hand would.
+            560 if sim => {
+                if let Some(cap) = shell.get_board_switches().iter().next() {
+                    shell.invoke_board_press(cap.index, true);
+                }
+            }
+            570 if sim => {
+                if let Some(cap) = shell.get_board_switches().iter().next() {
+                    snapshot(&window, &dir.join("pressed.png"));
+                    eprintln!("sim: held {}: {}", cap.index, app.sim_report());
+                    shell.invoke_board_press(cap.index, false);
+                }
+            }
             578 if sim => {
                 snapshot(&window, &dir.join("simulating.png"));
                 eprintln!("sim: {:?}; {}", shell.get_activity(), app.sim_report());
+                eprintln!(
+                    "sim: board words {:?}",
+                    shell
+                        .get_board_words()
+                        .iter()
+                        .map(|w| format!("{:?}@{:.0},{:.0}", w.text, w.x, w.y))
+                        .collect::<Vec<_>>()
+                );
                 eprintln!(
                     "sim: notes {:?}",
                     shell.get_notes().iter().map(|n| n.text).collect::<Vec<_>>()
@@ -174,9 +194,14 @@ pub fn start(window: &AppWindow) {
                     .map(|line| line.text.to_string())
                     .collect();
                 eprintln!("sim: the dock ends {tail:#?}");
+            }
+            // Half a second on: the LED the other way round.
+            591 if sim => {
+                snapshot(&window, &dir.join("simulating-2.png"));
+                eprintln!("sim: then {}", app.sim_report());
                 app.act("run.stop");
             }
-            590 if sim => {
+            600 if sim => {
                 eprintln!("sim: after Stop {:?} (state {})", shell.get_activity(), shell.get_activity_state());
                 app.act("app.exit");
             }

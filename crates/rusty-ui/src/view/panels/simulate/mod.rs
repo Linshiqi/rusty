@@ -23,21 +23,16 @@ use std::collections::{BTreeSet, HashSet};
 
 use leptos::{ev, prelude::*};
 
-mod art;
+use rusty_embed::board::{art, edit, geometry, glow, layout, readout};
 mod board;
 mod controls;
-mod edit;
 mod faces;
-mod geometry;
 mod gestures;
-mod glow;
 mod inspector;
-mod layout;
 mod library;
 mod menu;
 mod parts;
 mod reading;
-mod readout;
 mod signal_fields;
 mod wires;
 mod words;

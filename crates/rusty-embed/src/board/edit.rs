@@ -10,7 +10,7 @@
 //! keeps the signals, calls these, and sets `dirty` — so a command is one
 //! line there and its behaviour is here.
 
-use rusty_embed::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
+use crate::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
 
 use super::geometry::{
     EditPart, GroupStart, SNAP, Snapshot, branch_route, part_box, simplify_route, turned_anchor,
@@ -25,7 +25,7 @@ use super::layout;
 const HISTORY_CAP: usize = 64;
 
 /// Push a snapshot, dropping the oldest once the cap is reached.
-pub(super) fn remember(past: &mut Vec<Snapshot>, now: Snapshot) {
+pub fn remember(past: &mut Vec<Snapshot>, now: Snapshot) {
     if past.len() >= HISTORY_CAP {
         past.remove(0);
     }
@@ -34,7 +34,7 @@ pub(super) fn remember(past: &mut Vec<Snapshot>, now: Snapshot) {
 
 /// The next free `prefix<n>`: `D3` when `D1` and `D2` are placed. A deleted
 /// `D2` is reused, as KiCad's annotation does. Never the devkit's `U1`.
-pub(super) fn next_reference(list: &[EditPart], prefix: &str) -> String {
+pub fn next_reference(list: &[EditPart], prefix: &str) -> String {
     let prefix = prefix.trim_end_matches(['?', '_']);
     let prefix = if prefix.is_empty() { "U" } else { prefix };
     (1..)
@@ -56,7 +56,7 @@ pub(super) fn next_reference(list: &[EditPart], prefix: &str) -> String {
 /// dozen wherever another editor's canvas had them, which here is often the
 /// same square inch. Two bodies in one place is not a drawing anybody can
 /// read.
-pub(super) fn add(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize {
+pub fn add(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize {
     let index = place_raw(list, symbol, x, y);
     // Its own box is known only once it is in the list — the drawing
     // decides its size — so it is placed and then moved if it has to be.
@@ -79,11 +79,11 @@ fn place_raw(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize
     // reading under mains hum and a little noise — rather than silence: a
     // new part with nothing to look at is a part nobody learns from.
     let mut props = std::collections::BTreeMap::new();
-    if rusty_embed::nets::behaviour_of(symbol) == rusty_embed::nets::Behaviour::Generator
-        && let Some(first) = rusty_embed::signal::presets().first()
+    if crate::nets::behaviour_of(symbol) == crate::nets::Behaviour::Generator
+        && let Some(first) = crate::signal::presets().first()
     {
         props.insert(
-            rusty_embed::generator::SIGNAL.to_string(),
+            crate::generator::SIGNAL.to_string(),
             first.signal.to_string(),
         );
     }
@@ -106,7 +106,7 @@ fn place_raw(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize
 /// Rename a part, and every wire end that named it. Refused — `false` —
 /// for a blank name, the devkit's, or one another part already wears;
 /// a sheet with two `D1`s is a sheet whose wires no longer say which.
-pub(super) fn rename(list: &mut [EditPart], wires: &mut [Wire], index: usize, name: &str) -> bool {
+pub fn rename(list: &mut [EditPart], wires: &mut [Wire], index: usize, name: &str) -> bool {
     let name = name.trim();
     if name.is_empty() || name == KIT_REFERENCE {
         return false;
@@ -136,13 +136,13 @@ pub(super) fn rename(list: &mut [EditPart], wires: &mut [Wire], index: usize, na
     true
 }
 
-pub(super) fn set_value(list: &mut [EditPart], index: usize, value: &str) {
+pub fn set_value(list: &mut [EditPart], index: usize, value: &str) {
     if let Some(part) = list.get_mut(index) {
         part.inst.value = value.trim().to_string();
     }
 }
 
-pub(super) fn set_prop(list: &mut [EditPart], index: usize, key: &str, value: &str) {
+pub fn set_prop(list: &mut [EditPart], index: usize, key: &str, value: &str) {
     if let Some(part) = list.get_mut(index) {
         if value.trim().is_empty() {
             part.inst.props.remove(key);
@@ -160,7 +160,7 @@ pub(super) fn set_prop(list: &mut [EditPart], index: usize, key: &str, value: &s
 /// for free; the two things that do not are the board's own art, which the
 /// view turns with it, and the row names, which are placed after the turn
 /// like every other label because text is never turned.
-pub(super) fn rotate(list: &mut [EditPart], index: usize) {
+pub fn rotate(list: &mut [EditPart], index: usize) {
     if let Some(part) = list.get_mut(index) {
         let rot = (part.inst.rot + 90) % 360;
         let (x, y) = turned_anchor(part, rot, part.inst.mirror);
@@ -173,7 +173,7 @@ pub(super) fn rotate(list: &mut [EditPart], index: usize) {
 /// Mirror left-to-right — KiCad's X key. Not a second rotation: a part
 /// on the chip's right wants its pins on the near edge *in the same
 /// order*, and turning it 180° reverses them.
-pub(super) fn mirror(list: &mut [EditPart], index: usize) {
+pub fn mirror(list: &mut [EditPart], index: usize) {
     if let Some(part) = list.get_mut(index) {
         let mirror = !part.inst.mirror;
         let (x, y) = turned_anchor(part, part.inst.rot, mirror);
@@ -183,7 +183,7 @@ pub(super) fn mirror(list: &mut [EditPart], index: usize) {
     }
 }
 
-pub(super) fn nudge(list: &mut [EditPart], index: usize, dx: f64, dy: f64) {
+pub fn nudge(list: &mut [EditPart], index: usize, dx: f64, dy: f64) {
     if let Some(part) = list.get_mut(index) {
         part.inst.x += dx;
         part.inst.y += dy;
@@ -193,7 +193,7 @@ pub(super) fn nudge(list: &mut [EditPart], index: usize, dx: f64, dy: f64) {
 /// Move every part in `start` by one displacement from where it stood
 /// when the drag began — never by a delta from the last frame, which
 /// accumulates snapping into drift.
-pub(super) fn translate(list: &mut [EditPart], start: &[GroupStart], dx: f64, dy: f64) {
+pub fn translate(list: &mut [EditPart], start: &[GroupStart], dx: f64, dy: f64) {
     for (index, (x, y)) in start {
         if let Some(part) = list.get_mut(*index) {
             part.inst.x = x + dx;
@@ -203,7 +203,7 @@ pub(super) fn translate(list: &mut [EditPart], start: &[GroupStart], dx: f64, dy
 }
 
 /// Remove a part and every wire that touched it. The devkit stays.
-pub(super) fn remove(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, index: usize) -> bool {
+pub fn remove(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, index: usize) -> bool {
     if index >= list.len() || list[index].is_kit() {
         return false;
     }
@@ -214,7 +214,7 @@ pub(super) fn remove(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, index: usi
 
 /// Remove several parts at once — Delete on a rubber-band selection.
 /// Highest index first, so each removal leaves the rest where they were.
-pub(super) fn remove_many(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, indices: &[usize]) {
+pub fn remove_many(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, indices: &[usize]) {
     let mut order: Vec<usize> = indices.to_vec();
     order.sort_unstable();
     order.dedup();
@@ -225,7 +225,7 @@ pub(super) fn remove_many(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, indic
 
 /// A copy beside the original, numbered afresh, with no wires: wires are
 /// connections somebody made, and a copy of a connection is a short.
-pub(super) fn duplicate(list: &mut Vec<EditPart>, index: usize) -> Option<usize> {
+pub fn duplicate(list: &mut Vec<EditPart>, index: usize) -> Option<usize> {
     let original = list.get(index).filter(|p| !p.is_kit())?.clone();
     let prefix: String = original
         .inst
@@ -253,7 +253,7 @@ fn key_of(part: &EditPart, number: &str) -> Option<PinRef> {
 }
 
 /// Whether a wire end names this pin, whichever spelling it used.
-pub(super) fn end_is(list: &[EditPart], end: &PinRef, index: usize, number: &str) -> bool {
+pub fn end_is(list: &[EditPart], end: &PinRef, index: usize, number: &str) -> bool {
     let Some(part) = list.get(index) else {
         return false;
     };
@@ -264,12 +264,7 @@ pub(super) fn end_is(list: &[EditPart], end: &PinRef, index: usize, number: &str
 }
 
 /// Every wire touching a pin.
-pub(super) fn wires_at(
-    list: &[EditPart],
-    wires: &[Wire],
-    index: usize,
-    number: &str,
-) -> Vec<usize> {
+pub fn wires_at(list: &[EditPart], wires: &[Wire], index: usize, number: &str) -> Vec<usize> {
     wires
         .iter()
         .enumerate()
@@ -284,7 +279,7 @@ pub(super) fn wires_at(
 /// This is what the ghost under the pointer shows while the wire is being
 /// pulled, and it is `connect` less the push, so a preview cannot promise
 /// a shape the connection does not deliver.
-pub(super) fn connection(
+pub fn connection(
     list: &[EditPart],
     wires: &[Wire],
     from: (usize, &str),
@@ -317,7 +312,7 @@ pub(super) fn connection(
 }
 
 /// Join two pins, and answer with the index of the wire made.
-pub(super) fn connect(
+pub fn connect(
     list: &[EditPart],
     wires: &mut Vec<Wire>,
     from: (usize, &str),
@@ -337,7 +332,7 @@ pub(super) fn connect(
 /// between the two pins, folded where two segments run straight on. The
 /// refusals are `connect`'s, for its reasons: a pin to itself, and a pair
 /// already joined.
-pub(super) fn connect_drawn(
+pub fn connect_drawn(
     list: &[EditPart],
     wires: &mut Vec<Wire>,
     from: (usize, &str),
@@ -373,7 +368,7 @@ pub(super) fn connect_drawn(
 /// made as a wire to one of the trunk's own pins exactly as `branch` makes
 /// one, with the corners the author laid before it. `route` runs from the
 /// start pin to the point on the trunk where the click landed.
-pub(super) fn branch_drawn(
+pub fn branch_drawn(
     list: &[EditPart],
     wires: &mut Vec<Wire>,
     from: (usize, &str),
@@ -417,7 +412,7 @@ pub(super) fn branch_drawn(
 /// the trunk's pins to name and lays the bends along the trunk so the two
 /// draw as a T; the refusals are `connect`'s, for the same reasons: a wire
 /// to itself, and a pair already joined.
-pub(super) fn branch(
+pub fn branch(
     list: &[EditPart],
     wires: &mut Vec<Wire>,
     from: (usize, &str),
@@ -444,7 +439,7 @@ pub(super) fn branch(
 }
 
 /// Drop every wire at a pin.
-pub(super) fn disconnect_pin(list: &[EditPart], wires: &mut Vec<Wire>, index: usize, number: &str) {
+pub fn disconnect_pin(list: &[EditPart], wires: &mut Vec<Wire>, index: usize, number: &str) {
     let doomed = wires_at(list, wires, index, number);
     for at in doomed.into_iter().rev() {
         wires.remove(at);
@@ -452,7 +447,7 @@ pub(super) fn disconnect_pin(list: &[EditPart], wires: &mut Vec<Wire>, index: us
 }
 
 /// Drop every wire touching a part.
-pub(super) fn disconnect_all(list: &[EditPart], wires: &mut Vec<Wire>, index: usize) {
+pub fn disconnect_all(list: &[EditPart], wires: &mut Vec<Wire>, index: usize) {
     let Some(part) = list.get(index) else {
         return;
     };
@@ -460,14 +455,14 @@ pub(super) fn disconnect_all(list: &[EditPart], wires: &mut Vec<Wire>, index: us
     wires.retain(|w| w.from.part != reference && w.to.part != reference);
 }
 
-pub(super) fn remove_wire(wires: &mut Vec<Wire>, index: usize) {
+pub fn remove_wire(wires: &mut Vec<Wire>, index: usize) {
     if index < wires.len() {
         wires.remove(index);
     }
 }
 
 /// Forget a wire's bends, so it routes itself again.
-pub(super) fn straighten(list: &[EditPart], wires: &mut [Wire], index: usize) {
+pub fn straighten(list: &[EditPart], wires: &mut [Wire], index: usize) {
     // The author's bends go, and the wire is laid out afresh rather than
     // left as the bare elbow: on a clear sheet those are the same line,
     // and on a crowded one the bare elbow is a wire through somebody's
@@ -479,10 +474,10 @@ pub(super) fn straighten(list: &[EditPart], wires: &mut [Wire], index: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_embed::nets::kit_rows;
-    use rusty_embed::{Fill, Graphic, Pin, PinKind};
+    use crate::nets::kit_rows;
+    use crate::{Fill, Graphic, Pin, PinKind};
 
-    use crate::view::panels::simulate::geometry::{KIT_SYMBOL, kit_symbol};
+    use crate::board::geometry::{KIT_SYMBOL, kit_symbol};
 
     fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
         Symbol {
@@ -518,7 +513,7 @@ mod tests {
     }
 
     fn sheet() -> Vec<EditPart> {
-        let rows = kit_rows(rusty_embed::nets::Pinout::numbered(&[
+        let rows = kit_rows(crate::nets::Pinout::numbered(&[
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21,
         ]));
         vec![EditPart {
@@ -620,7 +615,7 @@ mod tests {
     /// lamp's legs.
     #[test]
     fn a_branch_onto_a_wire_names_one_of_its_pins_and_starts_at_the_drop() {
-        use crate::view::panels::simulate::geometry::{wire_ends, wire_path, wire_under};
+        use crate::board::geometry::{wire_ends, wire_path, wire_under};
 
         let mut list = sheet();
         let d = add(&mut list, &led(), 100.0, 100.0);
@@ -756,7 +751,7 @@ mod tests {
 
     /// Where a pin is and which way its wire leaves it, on the sheet.
     fn end(list: &[EditPart], index: usize, number: &str) -> ((f64, f64), (f64, f64)) {
-        use crate::view::panels::simulate::geometry::{pin_out, pin_point};
+        use crate::board::geometry::{pin_out, pin_point};
         let part = &list[index];
         let pin = part.pin(number).expect("the pin");
         (pin_point(part, pin), pin_out(part, pin))
@@ -767,7 +762,7 @@ mod tests {
     /// polyline the preview showed; and it refuses what `connect` refuses.
     #[test]
     fn a_drawn_wire_is_the_route_it_was_drawn_as() {
-        use crate::view::panels::simulate::geometry::{Drawing, wire_ends, wire_path};
+        use crate::board::geometry::{Drawing, wire_ends, wire_path};
         let mut list = sheet();
         let d = add(&mut list, &led(), 100.0, 100.0);
         let (start, out) = end(&list, 0, "4");
@@ -803,7 +798,7 @@ mod tests {
     /// and the point where the click landed.
     #[test]
     fn a_drawn_wire_ending_on_a_wire_branches_through_the_click() {
-        use crate::view::panels::simulate::geometry::{Drawing, wire_ends, wire_path};
+        use crate::board::geometry::{Drawing, wire_ends, wire_path};
         let mut list = sheet();
         let d = add(&mut list, &led(), 100.0, 100.0);
         let mut wires = Vec::new();

@@ -54,6 +54,9 @@ pub mod setup;
 pub mod activity;
 // Where a build's errors are, from what the compiler printed. Pure.
 pub mod buildlog;
+// The board sheet drawn and edited — the parts' art, the geometry, the
+// layout. Pure: both windows draw the same board from it.
+pub mod board;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,

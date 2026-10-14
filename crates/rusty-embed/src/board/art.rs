@@ -18,8 +18,8 @@
 //! pins down the two long sides: a chip, which is what most of them are, and
 //! an honest one — the outline says "some part", the pin names say the rest.
 
-use rusty_embed::nets::{Behaviour, behaviour_of, is_ground, ohms};
-use rusty_embed::{Pin, Symbol};
+use crate::nets::{Behaviour, behaviour_of, is_ground, ohms};
+use crate::{Pin, Symbol};
 
 use super::geometry::local;
 
@@ -34,7 +34,7 @@ const KEYPAD_HALF: f64 = KEYPAD_PITCH * 2.4;
 
 /// What is printed on a matrix keypad's keys, row by row — the arrangement
 /// every 4x4 pad on a desk has.
-pub(super) const KEYPAD_LABELS: [[char; 4]; 4] = [
+pub const KEYPAD_LABELS: [[char; 4]; 4] = [
     ['1', '2', '3', 'A'],
     ['4', '5', '6', 'B'],
     ['7', '8', '9', 'C'],
@@ -45,7 +45,7 @@ pub(super) const KEYPAD_LABELS: [[char; 4]; 4] = [
 /// layout reserved. One rule for the drawing, for the paint over it and for
 /// the press, so a key that lights is the key that was hit and the key the
 /// firmware reads.
-pub(super) fn keypad_keys(plan: &Layout) -> Vec<(char, f64, f64, f64)> {
+pub fn keypad_keys(plan: &Layout) -> Vec<(char, f64, f64, f64)> {
     let Some((fx, fy, fw, fh)) = plan.face else {
         return Vec::new();
     };
@@ -75,7 +75,7 @@ pub(super) fn keypad_keys(plan: &Layout) -> Vec<(char, f64, f64, f64)> {
 /// part drawn with no lenses reads as a broken symbol where eight reads as
 /// a strip somebody has not measured. Capped, because a sheet is a drawing
 /// and a reel of a hundred and forty-four is wider than any screen.
-pub(super) fn strip_count(value: &str) -> usize {
+pub fn strip_count(value: &str) -> usize {
     let text = value.trim();
     let digits = match text.rsplit_once(['x', 'X', '\u{d7}']) {
         Some((_, tail)) => tail.trim(),
@@ -92,7 +92,7 @@ pub(super) fn strip_count(value: &str) -> usize {
 /// Where each of a strip's LEDs sits, as `(x, y, half-width)`, from the row
 /// its layout reserved. One rule for the drawing and for the paint over it,
 /// so a lit pixel cannot land beside the lens it is meant to be in.
-pub(super) fn strip_lenses(plan: &Layout) -> Vec<(f64, f64, f64)> {
+pub fn strip_lenses(plan: &Layout) -> Vec<(f64, f64, f64)> {
     let Some((fx, fy, fw, fh)) = plan.face else {
         return Vec::new();
     };
@@ -111,7 +111,7 @@ pub(super) fn strip_lenses(plan: &Layout) -> Vec<(f64, f64, f64)> {
 /// One pin of the drawn part: which pin it is, what it is called, where its
 /// wire attaches, and the direction the lead runs away from the body.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Spot {
+pub struct Spot {
     pub number: String,
     pub name: String,
     pub at: (f64, f64),
@@ -120,7 +120,7 @@ pub(super) struct Spot {
 
 /// The part's drawing, in sheet pixels around its anchor, y down.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Layout {
+pub struct Layout {
     pub spots: Vec<Spot>,
     /// `(x0, y0, x1, y1)` — the box the drawing occupies, legs included.
     pub bounds: (f64, f64, f64, f64),
@@ -265,7 +265,7 @@ fn anode_first<'a>(pins: &[&'a Pin]) -> Vec<&'a Pin> {
 
 /// The drawing's geometry: where every pin's wire lands, how big the part
 /// is, and where its light and its screen are.
-pub(super) fn layout(symbol: &Symbol, value: &str) -> Layout {
+pub fn layout(symbol: &Symbol, value: &str) -> Layout {
     let pins = visible(symbol);
     let none = Layout {
         spots: Vec::new(),
@@ -699,7 +699,7 @@ fn out_of(pin: &Pin) -> (f64, f64) {
 /// The part as SVG, in the same frame as [`layout`]: everything that does
 /// not change while the firmware runs. What does — a lit lens, a sunk cap,
 /// a digit's segments, a screen's text — the view paints over it.
-pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
+pub fn markup(symbol: &Symbol, value: &str) -> String {
     let plan = layout(symbol, value);
     let mut out = String::new();
     let look = look(symbol);
@@ -961,7 +961,7 @@ pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
 /// Whether the drawing already carries the part's value, so the sheet
 /// does not print it underneath as well: a rail and a label are their
 /// value, and a second copy of it under the symbol reads as a mistake.
-pub(super) fn draws_own_value(symbol: &Symbol) -> bool {
+pub fn draws_own_value(symbol: &Symbol) -> bool {
     matches!(look(symbol), Look::Supply | Look::Label | Look::Ground)
 }
 
@@ -984,7 +984,7 @@ fn escape(text: &str) -> String {
 /// multiplier and gold for the tolerance, exactly as the part in the
 /// drawer is printed. A value nothing can be read from wears three grey
 /// bands — the honest "some resistor", rather than a made-up number.
-pub(super) fn bands(value: &str) -> Vec<&'static str> {
+pub fn bands(value: &str) -> Vec<&'static str> {
     const COLOURS: [&str; 10] = [
         "#1b1b1b", // black
         "#7a4a1e", // brown
@@ -1029,7 +1029,7 @@ pub(super) fn bands(value: &str) -> Vec<&'static str> {
 mod tests {
     use super::super::geometry::{MM_PX, kit_symbol};
     use super::*;
-    use rusty_embed::PinKind;
+    use crate::PinKind;
 
     /// A strip's length is its value, and the part grows with it: the
     /// lenses the drawing puts on the board and the ones the view paints
@@ -1354,7 +1354,7 @@ mod tests {
             .map(|n| Pin {
                 number: n.to_string(),
                 name: format!("IO{n}"),
-                kind: rusty_embed::PinKind::Bidirectional,
+                kind: crate::PinKind::Bidirectional,
                 at: (0.0, 0.0),
                 length: 2.54,
                 angle: 0,
@@ -1391,8 +1391,7 @@ mod tests {
     /// to scale, and its pins are rows on it.
     #[test]
     fn the_devkit_keeps_its_row_geometry() {
-        let rows =
-            rusty_embed::nets::kit_rows(rusty_embed::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));
+        let rows = crate::nets::kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));
         let kit = kit_symbol("esp32c3", &rows);
         let plan = layout(&kit, "");
         assert_eq!(plan.spots.len(), rows.len());

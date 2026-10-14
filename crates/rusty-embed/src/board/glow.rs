@@ -4,7 +4,7 @@
 //! to what flows through it, across the few milliamps a sheet runs at. And
 //! the eye sees the average of a lamp under PWM — above a few hundred hertz
 //! nobody sees the pulses, only a dimmer lamp. So a lamp is drawn from the
-//! average current `rusty_embed::period` reads for it, and both its resistor
+//! average current `crate::period` reads for it, and both its resistor
 //! and its duty decide how bright it is.
 //!
 //! The screen's own curve is undone on the way. A pixel's value is its
@@ -22,13 +22,13 @@ use super::geometry::rgb_color;
 /// quoted at, where indicator LEDs are specified (`circuit`'s `LAMP_AT`).
 /// Above it a lamp is drawn no brighter, because a screen has no brighter
 /// to give.
-pub(super) const FULL_AMPS: f64 = 0.010;
+pub const FULL_AMPS: f64 = 0.010;
 
 /// The screen's curve, undone.
 const GAMMA: f64 = 2.2;
 
 /// How brightly a lamp carrying `amps` on average is drawn, from 0 to 1.
-pub(super) fn of_current(amps: f64) -> f64 {
+pub fn of_current(amps: f64) -> f64 {
     // `>` is false for NaN as well as for a lamp run backwards.
     if amps > 0.0 {
         (amps / FULL_AMPS).min(1.0).powf(1.0 / GAMMA)
@@ -39,7 +39,7 @@ pub(super) fn of_current(amps: f64) -> f64 {
 
 /// How brightly a lamp the rules call lit for `share` of a period is drawn:
 /// as though lit meant fully, which is all the rules can say about it.
-pub(super) fn of_share(share: f64) -> f64 {
+pub fn of_share(share: f64) -> f64 {
     of_current(share * FULL_AMPS)
 }
 
@@ -50,7 +50,7 @@ pub(super) fn of_share(share: f64) -> f64 {
 /// corners the colours a lens has always been drawn in, and the brightness
 /// is the brightest channel's — so red at a tenth of its duty is a dim red
 /// and not a darker, browner colour.
-pub(super) fn lens(red: f64, green: f64, blue: f64) -> (String, f64) {
+pub fn lens(red: f64, green: f64, blue: f64) -> (String, f64) {
     let (r, g, b) = (of_share(red), of_share(green), of_share(blue));
     let brightest = r.max(g).max(b);
     if brightest <= 0.0 {
@@ -76,7 +76,7 @@ pub(super) fn lens(red: f64, green: f64, blue: f64) -> (String, f64) {
 
 /// A colour `t` of the way from `dark` to `lit`: a segment of a digit lit
 /// for part of the period.
-pub(super) fn mix(dark: &str, lit: &str, t: f64) -> String {
+pub fn mix(dark: &str, lit: &str, t: f64) -> String {
     let t = t.clamp(0.0, 1.0);
     let (from, to) = (channels(dark), channels(lit));
     let mut mixed = [0.0; 3];
