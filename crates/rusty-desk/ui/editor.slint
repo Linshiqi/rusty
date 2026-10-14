@@ -1,5 +1,6 @@
-// The code surface: rows of coloured pieces placed by the Rust side, a caret,
-// and one TextInput that only ever holds what an input method is composing.
+// The code surface: rows of coloured pieces and marks placed by the Rust
+// side, the primary caret, and one TextInput that only ever holds what an
+// input method is composing.
 //
 // Rust measures and places everything (`src/editor/`); this file draws what
 // it is handed. The rows are a ListView, so only the rows on screen exist.
@@ -14,9 +15,18 @@ export struct Piece {
     kind: int,
 }
 
+// Something drawn on a row behind or under its text: a selection (0), a
+// caret that is not the primary one (1).
+export struct Mark {
+    x: length,
+    width: length,
+    kind: int,
+}
+
 export struct Row {
     number: int,
     pieces: [Piece],
+    marks: [Mark],
 }
 
 // The document on screen, filled by `src/editor/`.
@@ -24,15 +34,20 @@ export global Code {
     in property <[Row]> rows;
     in property <int> caret-line;
     in property <length> caret-x;
+    in property <bool> has-document;
     in property <length> content-width: 2000px;
     in property <length> row-height: 19px;
     in property <length> font-size: 12.5px;
     in-out property <length> scroll-y;
+    in-out property <length> scroll-x;
     in-out property <length> view-height;
+    in-out property <length> view-width;
     // True when the key was taken.
     callback key(KeyEvent) -> bool;
     callback typed(string);
-    callback pressed(int, length);
+    // A press (0), a move while pressed (1), a release (2), on a row, at a
+    // point in it, with the modifiers held.
+    callback pointer(int /* kind */, int /* row */, length /* x */, length /* y */, KeyboardModifiers);
 }
 
 export component CodeView inherits Rectangle {
@@ -47,13 +62,25 @@ export component CodeView inherits Rectangle {
     list := ListView {
         width: parent.width;
         height: parent.height;
+        content-width: max(self.visible-width, Code.content-width);
         content-y <=> Code.scroll-y;
+        content-x <=> Code.scroll-x;
         changed visible-height => {
             Code.view-height = self.visible-height;
         }
+        changed visible-width => {
+            Code.view-width = self.visible-width;
+        }
         for row[index] in Code.rows: Rectangle {
             height: Code.row-height;
-            width: Code.content-width;
+            width: max(list.visible-width, Code.content-width);
+            for mark in row.marks: Rectangle {
+                x: root.gutter + mark.x;
+                y: mark.kind == 1 ? 2px : 0;
+                width: mark.kind == 1 ? 2px : mark.width;
+                height: mark.kind == 1 ? parent.height - 4px : parent.height;
+                background: mark.kind == 1 ? Theme.rust : Theme.text-selection;
+            }
             Text {
                 x: 0;
                 width: root.gutter - 20px;
@@ -75,11 +102,21 @@ export component CodeView inherits Rectangle {
                 font-size: Code.font-size;
                 vertical-alignment: center;
             }
-            TouchArea {
+            touch := TouchArea {
+                mouse-cursor: text;
                 pointer-event(event) => {
-                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                        Code.pressed(row.number - 1, self.mouse-x - root.gutter);
-                        sink.focus();
+                    if (event.button == PointerEventButton.left) {
+                        if (event.kind == PointerEventKind.down) {
+                            Code.pointer(0, index, self.mouse-x - root.gutter, self.mouse-y, event.modifiers);
+                            sink.focus();
+                        } else if (event.kind == PointerEventKind.up) {
+                            Code.pointer(2, index, self.mouse-x - root.gutter, self.mouse-y, event.modifiers);
+                        }
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        Code.pointer(1, index, self.mouse-x - root.gutter, self.mouse-y, {});
                     }
                 }
             }
@@ -94,7 +131,7 @@ export component CodeView inherits Rectangle {
         width: 2px;
         height: Code.row-height - 4px;
         background: Theme.rust;
-        visible: sink.preedit-text == "" && sink.has-focus;
+        visible: Code.has-document && sink.preedit-text == "" && sink.has-focus;
     }
 
     // Every character arrives here, typed or composed: an input method shows

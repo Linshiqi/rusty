@@ -6,21 +6,56 @@
 //! `sync_*` per region, so what is on screen is always a function of the
 //! state rather than of whichever callback ran last.
 
-use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::{Arc, mpsc},
+    time::Duration,
+};
 
+use rusty_edit::text_file::{self, TextFile};
 use rusty_embed::WindowLayout;
 use rusty_i18n::{Locale, t};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::{
     AppWindow, DocTab, Icons, Note, PanelTab, PickRow, Recent, Shell, TreeRow, actions,
     docks::{Dock, Glyph},
-    editor::{Document, Surface},
+    editor::{
+        self, Document, Surface,
+        backup::{self, Backup, Keeper},
+    },
     keys,
     picker::{self, Mode, Pick},
     project::Project,
     work,
 };
+
+/// How long after the last keystroke a draft is backed up.
+const BACKUP_AFTER: Duration = Duration::from_secs(1);
+/// How long a save waits for rustfmt before saving what it has — VS Code's
+/// budget for its own format-on-save.
+const FORMAT_BUDGET: Duration = Duration::from_secs(1);
+/// How long a closing window waits for its drafts to reach the disk.
+const KEEP_BUDGET: Duration = Duration::from_secs(5);
+
+/// What happens once a file is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum After {
+    Stay,
+    Close,
+}
+
+/// What rustfmt made of a file being saved.
+enum Format {
+    Changed(String),
+    Unchanged,
+    /// It did not answer within [`FORMAT_BUDGET`]; the save goes ahead.
+    Late,
+    Failed(String),
+}
 
 /// A document on the strip: a file, or a page.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +111,11 @@ pub struct App {
     window: slint::Weak<AppWindow>,
     editor: Rc<Surface>,
     state: RefCell<State>,
+    keeper: Keeper,
+    /// A timer per draft, restarted by every edit, that backs it up.
+    backup_timers: RefCell<HashMap<String, Timer>>,
+    /// A backup that failed is said once, not once a second.
+    backup_warned: Cell<bool>,
 }
 
 impl App {
@@ -83,9 +123,15 @@ impl App {
         let saved = rusty_embed::config::workbench();
         let files = Arc::new(rusty_edit::Files::new());
         let editor = Surface::new(window, files);
+        let keeper = Keeper::start(backup::directory(), |reason| {
+            work::deliver(reason, |app, reason| app.backup_failed(reason))
+        });
         let app = Rc::new(App {
             window: window.as_weak(),
             editor,
+            keeper,
+            backup_timers: RefCell::default(),
+            backup_warned: Cell::new(false),
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 recents: saved.recent_projects.clone(),
@@ -97,6 +143,10 @@ impl App {
         app.wire(window);
         app.sync_all();
         app
+    }
+
+    pub fn editor(&self) -> &Rc<Surface> {
+        &self.editor
     }
 
     fn window(&self) -> Option<AppWindow> {
@@ -160,8 +210,8 @@ impl App {
         let weak = Rc::downgrade(self);
         self.editor.on_edit(move |path| {
             if let Some(app) = weak.upgrade() {
-                let _ = path;
                 app.sync_tabs();
+                app.back_up_soon(path);
             }
         });
         let weak = Rc::downgrade(self);
@@ -203,6 +253,7 @@ impl App {
             "project.menu" => self.open_picker(Mode::Projects),
             "app.menu" => self.open_picker(Mode::Commands),
             "app.exit" => {
+                self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();
             }
             other => {
@@ -252,6 +303,10 @@ impl App {
     }
 
     fn project_opened(self: &Rc<Self>, project: Project) {
+        // The project going keeps its drafts, as a closing window does.
+        self.keep_drafts();
+        self.backup_timers.borrow_mut().clear();
+        let opened = project.root.clone();
         let root = project.root.to_string_lossy().into_owned();
         rusty_embed::config::record_recent(&root);
         {
@@ -271,6 +326,7 @@ impl App {
             }
         }
         self.sync_all();
+        self.bring_back_drafts(opened);
     }
 
     fn tree_click(self: &Rc<Self>, index: usize) {
@@ -304,53 +360,222 @@ impl App {
         let Some(root) = self.state.borrow().project.as_ref().map(|p| p.root.clone()) else {
             return;
         };
-        let files = self.editor.files();
         work::spawn(
             move || {
-                files
-                    .open(&root, &path)
-                    .map_err(|error| (path, error.to_string()))
+                let read = rusty_edit::text_file::read_text(&root, &path);
+                (path, read.map_err(|error| error.to_string()))
             },
-            |app, opened| match opened {
-                Ok(opened) if opened.binary => app.note(
-                    1,
-                    t!("desk.open-failed", path = opened.path, reason = "binary"),
-                ),
-                Ok(opened) => {
-                    let path = opened.path.clone();
-                    app.editor.show_new(Document::from_disk(opened));
+            |app, (path, read)| {
+                // Opened meanwhile — a draft brought back from last time is
+                // the case — and the document that is open is the one to
+                // keep: read again it would replace the draft with the disk.
+                if app.editor.holds(&path) {
                     app.open_tab(Tab::File(path));
+                    return;
                 }
-                Err((path, reason)) => {
-                    app.note(2, t!("desk.open-failed", path = path, reason = reason))
+                let refused =
+                    |why: String| t!("desk.open-failed", path = path.clone(), reason = why);
+                match read {
+                    Ok(TextFile::Text {
+                        text,
+                        charset,
+                        ending,
+                    }) => {
+                        let mut document = Document::new(path.clone(), text, charset, ending);
+                        document.language = editor::language_of(&path).map(str::to_string);
+                        app.editor.show_new(document);
+                        app.open_tab(Tab::File(path));
+                    }
+                    Ok(TextFile::Binary) => app.note(1, refused(t!("desk.binary"))),
+                    Ok(TextFile::TooLarge) => app.note(1, refused(t!("desk.too-large"))),
+                    Err(reason) => app.note(2, refused(reason)),
                 }
             },
         );
     }
 
+    fn root(&self) -> Option<PathBuf> {
+        self.state.borrow().project.as_ref().map(|p| p.root.clone())
+    }
+
+    // ---- saving ----------------------------------------------------------
+
     fn save(self: &Rc<Self>) {
-        let Some((path, text)) = self.editor.draft() else {
+        if let Some(path) = self.editor.current_path() {
+            self.save_file(path, After::Stay);
+        }
+    }
+
+    /// Save a file: Rust through rustfmt first, within a budget, and the
+    /// answer used only while the draft is still the text it was sent.
+    fn save_file(self: &Rc<Self>, path: String, after: After) {
+        let (Some(root), Some((text, ..)), Some(version)) = (
+            self.root(),
+            self.editor.draft_of(&path),
+            self.editor.version_of(&path),
+        ) else {
             return;
         };
-        let Some(root) = self.state.borrow().project.as_ref().map(|p| p.root.clone()) else {
+        if !path.ends_with(".rs") {
+            self.write_file(path, after);
+            return;
+        }
+        work::spawn(
+            move || {
+                let format = format_within(&root, &path, text);
+                (path, format)
+            },
+            move |app, (path, format)| {
+                match format {
+                    Format::Changed(text) => {
+                        app.editor.replace(&path, version, text);
+                    }
+                    Format::Failed(reason) => {
+                        app.note(1, t!("desk.format-failed", reason = reason));
+                    }
+                    Format::Unchanged | Format::Late => {}
+                }
+                app.write_file(path, after);
+            },
+        );
+    }
+
+    /// Write a file's draft as it stands now, in what it was read as.
+    fn write_file(self: &Rc<Self>, path: String, after: After) {
+        let (Some(root), Some((text, charset, ending))) =
+            (self.root(), self.editor.draft_of(&path))
+        else {
             return;
         };
         work::spawn(
             move || {
-                rusty_edit::save(&root, &path, &text)
+                text_file::save_text(&root, &path, &text, charset, ending)
                     .map(|()| (path.clone(), text))
                     .map_err(|error| (path, error.to_string()))
             },
-            |app, saved| match saved {
+            move |app, saved| match saved {
                 Ok((path, text)) => {
-                    app.editor.saved(&path, text);
+                    app.editor.saved(&path, &text);
+                    // Gone if nothing was typed while it was written; kept
+                    // anew if something was.
+                    app.back_up(&path);
                     app.sync_tabs();
+                    if after == After::Close {
+                        app.close_tab(&Tab::File(path).id());
+                    }
                 }
                 Err((path, reason)) => {
-                    app.note(2, t!("desk.open-failed", path = path, reason = reason))
+                    app.note(2, t!("desk.save-failed", path = path, reason = reason))
                 }
             },
         );
+    }
+
+    // ---- drafts kept between runs ----------------------------------------
+
+    /// A draft was edited: back it up once typing has stopped for a moment.
+    fn back_up_soon(self: &Rc<Self>, path: &str) {
+        let weak = Rc::downgrade(self);
+        let owned = path.to_string();
+        self.backup_timers
+            .borrow_mut()
+            .entry(path.to_string())
+            .or_default()
+            .start(TimerMode::SingleShot, BACKUP_AFTER, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.back_up(&owned);
+                }
+            });
+    }
+
+    /// Keep `path`'s draft, or forget it where the text is the disk's.
+    fn back_up(&self, path: &str) {
+        let Some(root) = self.root() else { return };
+        match self.editor.backup_of(path) {
+            Some(draft) => self.keeper.write(&root, draft),
+            None => self.keeper.remove(&root, path),
+        }
+    }
+
+    /// Keep every open draft and forget every backup of a file now saved:
+    /// the project is going, or the window is.
+    fn keep_drafts(&self) {
+        let Some(root) = self.root() else { return };
+        for (path, draft) in self.editor.backups() {
+            match draft {
+                Some(draft) => self.keeper.write(&root, draft),
+                None => self.keeper.remove(&root, &path),
+            }
+        }
+    }
+
+    fn keep_drafts_and_wait(&self) {
+        self.keep_drafts();
+        if !self.keeper.flush(KEEP_BUDGET) {
+            eprintln!("rusty: the drafts were still being written when the window closed");
+        }
+    }
+
+    /// Put back the drafts kept for the project at `root`, each over the
+    /// disk's text so that it is unsaved, marked so, and one undo from it.
+    fn bring_back_drafts(self: &Rc<Self>, root: PathBuf) {
+        let asked = root.clone();
+        self.keeper.read(&asked.clone(), move |kept| {
+            let found: Vec<(Backup, String)> = kept
+                .into_iter()
+                .map(|draft| {
+                    // A file gone or no longer text has nothing under the
+                    // draft: saving it writes the draft whole.
+                    let disk = match text_file::read_text(&asked, &draft.path) {
+                        Ok(TextFile::Text { text, .. }) => text,
+                        _ => String::new(),
+                    };
+                    (draft, disk)
+                })
+                .collect();
+            work::deliver(found, move |app, found| app.drafts_back(&root, found));
+        });
+    }
+
+    fn drafts_back(self: &Rc<Self>, root: &Path, found: Vec<(Backup, String)>) {
+        // Another project opened meanwhile: these stay kept for next time.
+        if found.is_empty() || self.root().as_deref() != Some(root) {
+            return;
+        }
+        let mut first = None;
+        for (draft, disk) in found {
+            let path = draft.path.clone();
+            if !self.editor.holds(&path) {
+                let mut document = Document::new(path.clone(), disk, draft.charset, draft.ending);
+                document.language = editor::language_of(&path).map(str::to_string);
+                self.editor.add(document);
+            }
+            self.editor.restore(&path, draft.text);
+            let mut state = self.state.borrow_mut();
+            let tab = Tab::File(path);
+            if !state.tabs.contains(&tab) {
+                state.tabs.push(tab.clone());
+            }
+            first.get_or_insert(tab);
+        }
+        // In front only when nothing else is: a file opened meanwhile stays
+        // where it is, caret and scroll included.
+        let on_a_page = !matches!(self.active_tab(), Some(Tab::File(_)));
+        if on_a_page {
+            let mut state = self.state.borrow_mut();
+            state.active = first.and_then(|tab| state.tabs.iter().position(|t| *t == tab));
+        }
+        if on_a_page {
+            self.front_tab();
+        } else {
+            self.sync_tabs();
+        }
+    }
+
+    fn backup_failed(self: &Rc<Self>, reason: String) {
+        if !self.backup_warned.replace(true) {
+            self.note(2, t!("desk.backup-failed", reason = reason));
+        }
     }
 
     // ---- tabs ------------------------------------------------------------
@@ -383,7 +608,35 @@ impl App {
         }
     }
 
+    /// Close a tab; a file with changes not saved asks first — save, throw
+    /// the changes away, or keep the tab — as every editor does.
     fn close_tab(self: &Rc<Self>, id: &str) {
+        let tab = self
+            .state
+            .borrow()
+            .tabs
+            .iter()
+            .find(|t| t.id() == id)
+            .cloned();
+        if let Some(Tab::File(path)) = tab
+            && self.editor.is_dirty(&path)
+        {
+            match ask_to_save(&path) {
+                Some(true) => self.save_file(path, After::Close),
+                Some(false) => {
+                    if let Some(root) = self.root() {
+                        self.keeper.remove(&root, &path);
+                    }
+                    self.drop_tab(id);
+                }
+                None => {}
+            }
+            return;
+        }
+        self.drop_tab(id);
+    }
+
+    fn drop_tab(self: &Rc<Self>, id: &str) {
         let closed = {
             let mut state = self.state.borrow_mut();
             let Some(at) = state.tabs.iter().position(|t| t.id() == id) else {
@@ -399,6 +652,7 @@ impl App {
             closed
         };
         if let Tab::File(path) = closed {
+            self.backup_timers.borrow_mut().remove(&path);
             self.editor.close(&path);
         }
         self.front_tab();
@@ -570,51 +824,12 @@ impl App {
 
     // ---- closing ---------------------------------------------------------
 
-    /// The window is asked to close. With nothing unsaved it closes; with
-    /// something unsaved it asks first — save, close without saving, or
-    /// stay — and a save that fails keeps the window open with the reason.
+    /// The window is asked to close, and closes: VS Code's hot exit. What
+    /// is not saved is kept as a draft and is back, unsaved, the next time
+    /// the project opens — so closing asks nothing.
     pub fn closing(self: &Rc<Self>) -> slint::CloseRequestResponse {
-        use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
-        use slint::CloseRequestResponse::{HideWindow, KeepWindowShown};
-
-        let drafts = self.editor.dirty_drafts();
-        if drafts.is_empty() {
-            return HideWindow;
-        }
-        let names: Vec<&str> = drafts
-            .iter()
-            .map(|(path, _)| path.rsplit('/').next().unwrap_or(path))
-            .collect();
-        let answer = MessageDialog::new()
-            .set_level(MessageLevel::Warning)
-            .set_title(t!("desk.unsaved-title"))
-            .set_description(t!(
-                "desk.unsaved-detail",
-                count = drafts.len().to_string(),
-                names = names.join(", ")
-            ))
-            .set_buttons(MessageButtons::YesNoCancel)
-            .show();
-        match answer {
-            MessageDialogResult::Yes => {
-                let Some(root) = self.state.borrow().project.as_ref().map(|p| p.root.clone())
-                else {
-                    return KeepWindowShown;
-                };
-                for (path, text) in drafts {
-                    if let Err(error) = rusty_edit::save(&root, &path, &text) {
-                        self.note(
-                            2,
-                            t!("desk.open-failed", path = path, reason = error.to_string()),
-                        );
-                        return KeepWindowShown;
-                    }
-                }
-                HideWindow
-            }
-            MessageDialogResult::No => HideWindow,
-            _ => KeepWindowShown,
-        }
+        self.keep_drafts_and_wait();
+        slint::CloseRequestResponse::HideWindow
     }
 
     // ---- notifications ---------------------------------------------------
@@ -798,15 +1013,19 @@ impl App {
         let Some(window) = self.window() else { return };
         let shell = window.global::<Shell>();
         let file = matches!(self.active_tab(), Some(Tab::File(_)));
-        let caret = self
-            .editor
-            .caret()
-            .filter(|_| file)
-            .map(|(line, col)| format!("Ln {line}, Col {col}"))
-            .unwrap_or_default();
+        let (caret, encoding, eol) = match self.editor.status().filter(|_| file) {
+            Some((line, col, charset, ending)) => (
+                t!("desk.caret", line = line.to_string(), col = col.to_string()),
+                charset,
+                ending,
+            ),
+            None => (String::new(), "", ""),
+        };
         shell.set_caret(caret.into());
+        shell.set_encoding(encoding.into());
+        shell.set_eol(eol.into());
         let language = match self.active_tab() {
-            Some(Tab::File(path)) => language_of(&path),
+            Some(Tab::File(path)) => editor::language_of(&path).unwrap_or("Plain text"),
             _ => "",
         };
         shell.set_language(language.into());
@@ -842,6 +1061,46 @@ impl App {
     }
 }
 
+/// Ask whether to save `path` before its tab closes: `Some(true)` save,
+/// `Some(false)` throw the changes away, `None` keep the tab open.
+fn ask_to_save(path: &str) -> Option<bool> {
+    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let answer = MessageDialog::new()
+        .set_level(MessageLevel::Warning)
+        .set_title(t!("desk.unsaved-title"))
+        .set_description(t!("desk.unsaved-detail", name = name))
+        .set_buttons(MessageButtons::YesNoCancel)
+        .show();
+    match answer {
+        MessageDialogResult::Yes => Some(true),
+        MessageDialogResult::No => Some(false),
+        _ => None,
+    }
+}
+
+/// rustfmt's answer for a file being saved, or [`Format::Late`] once
+/// [`FORMAT_BUDGET`] has passed — the format runs on, and its answer is
+/// dropped when it comes.
+fn format_within(root: &Path, path: &str, text: String) -> Format {
+    let (answer, answered) = mpsc::channel();
+    let (root, path) = (root.to_path_buf(), path.to_string());
+    std::thread::spawn(move || {
+        let _ = answer.send(rusty_edit::format_rust(&root, &path, &text).map(|f| {
+            if f.changed {
+                Format::Changed(f.text)
+            } else {
+                Format::Unchanged
+            }
+        }));
+    });
+    match answered.recv_timeout(FORMAT_BUDGET) {
+        Ok(Ok(format)) => format,
+        Ok(Err(error)) => Format::Failed(error.to_string()),
+        Err(_) => Format::Late,
+    }
+}
+
 /// The language to start in: the one chosen, or the system's when nothing
 /// was — and English when the system's is one rusty does not speak.
 pub fn chosen_locale(saved: Option<&str>) -> String {
@@ -859,19 +1118,4 @@ pub fn apply_locale(tag: &str) {
     let locale = Locale::parse(tag).unwrap_or_default();
     rusty_i18n::set_locale(locale);
     let _ = slint::select_bundled_translation(locale.tag());
-}
-
-/// The language a file is in, as the status bar names it.
-fn language_of(path: &str) -> &'static str {
-    match path.rsplit('.').next() {
-        Some("rs") => "Rust",
-        Some("toml") => "TOML",
-        Some("md") => "Markdown",
-        Some("c" | "h") => "C",
-        Some("cpp" | "cc" | "hpp" | "cxx") => "C++",
-        Some("json") => "JSON",
-        Some("py") => "Python",
-        Some("x" | "ld") => "Linker script",
-        _ => "Plain text",
-    }
 }

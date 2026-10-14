@@ -179,9 +179,15 @@ tests green, and CLAUDE.md saying how it works.
    (diagnostics, completion, hover, signature, actions, rename,
    navigation, inlay hints, semantic colours), the minimap, sticky scroll,
    indent guides, test lenses. And the gaps the comparison with VS Code
-   found: closing asks about unsaved files and drafts survive a restart,
-   line endings and encodings are kept, the line commands, F12/F8, the
-   selection reaching code actions, completion's documentation.
+   found: drafts survive closing and a restart (hot exit — closing the
+   window asks nothing, closing a tab with changes does), line endings and
+   encodings are kept, the line commands, F12/F8, the selection reaching
+   code actions, completion's documentation.
+   *Done:* the editing core — selection, every caret and selection key
+   VS Code has, multiple cursors, undo in VS Code's units, the clipboard
+   with whole lines, bracket pairs, indentation, the line commands,
+   painting off the thread — hot exit, encodings and line endings, and
+   rustfmt on save within a one-second budget.
 3. **The project panels**: files, search, Git, crates, features, disk,
    memory, the environment, the wizard, the first-run setup, the
    playground.

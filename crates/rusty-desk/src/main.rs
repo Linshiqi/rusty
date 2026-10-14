@@ -19,6 +19,10 @@ mod zoom;
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
+    if let Err(refusal) = probe::ready() {
+        eprintln!("rusty: {refusal}");
+        std::process::exit(2);
+    }
     let mut args = std::env::args().skip(1);
     let root = args.next().map(std::path::PathBuf::from);
     let file = args.next();

@@ -39,6 +39,8 @@ mod highlight;
 #[cfg(feature = "backend")]
 mod search;
 #[cfg(feature = "backend")]
+pub mod text_file;
+#[cfg(feature = "backend")]
 mod tree;
 #[cfg(feature = "backend")]
 mod watch;

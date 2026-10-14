@@ -95,6 +95,12 @@ export component StatusBar inherits Rectangle {
         if Shell.caret != "": Item {
             text: Shell.caret;
         }
+        if Shell.encoding != "": Item {
+            text: Shell.encoding;
+        }
+        if Shell.eol != "": Item {
+            text: Shell.eol;
+        }
         if Shell.language != "": Item {
             text: Shell.language;
         }
