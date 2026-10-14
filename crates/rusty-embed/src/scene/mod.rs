@@ -8,8 +8,9 @@
 //! shape is few enough that painting back to front is the whole of depth.
 
 pub mod model;
+pub mod sketch;
 
-use rusty_embed::spatial::{Frame, Vec3};
+use crate::spatial::{Frame, Vec3};
 
 /// The field of view, top to bottom.
 pub const FOV: f64 = 35.0 * std::f64::consts::PI / 180.0;

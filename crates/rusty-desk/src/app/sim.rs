@@ -255,11 +255,15 @@ impl App {
             // read these once they arrive.
             return true;
         }
-        if let Some((before, _drawn)) = rusty_embed::draw::split_draw(text) {
+        if let Some((before, drawn)) = rusty_embed::draw::split_draw(text) {
             drop(state);
+            // Text before the marker is kept for the log: a harness running
+            // one test at a time writes `test name ... ` on the line the
+            // test's first print lands on.
             if !before.trim().is_empty() {
                 self.runner.say(before, run::kind_of(before));
             }
+            self.drawn(drawn);
             return true;
         }
         false

@@ -23,7 +23,7 @@ mod inlay;
 mod ipc;
 mod lab;
 mod paint;
-mod scene;
+use rusty_embed::scene;
 mod state;
 mod testrun;
 mod theme;
