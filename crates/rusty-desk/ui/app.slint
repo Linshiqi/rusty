@@ -1,0 +1,36 @@
+// The window. For now it is the code surface alone, while the editor is
+// proven; the shell around it comes next (docs/slint.md).
+
+import { CodeView, Row, Piece } from "editor.slint";
+
+export { Row, Piece }
+
+export component AppWindow inherits Window {
+    title: "rusty";
+    preferred-width: 1200px;
+    preferred-height: 800px;
+    default-font-size: 13px;
+
+    in property <[Row]> rows <=> view.rows;
+    in property <int> caret-line <=> view.caret-line;
+    in property <length> caret-x <=> view.caret-x;
+    in property <length> content-width <=> view.content-width;
+    in property <string> probe-text <=> view.probe-text;
+    out property <length> probe-width <=> view.probe-width;
+    out property <length> view-height <=> view.view-height;
+    out property <length> row-height <=> view.row-height;
+    in-out property <length> scroll-y <=> view.scroll-y;
+
+    callback key <=> view.key;
+    callback typed <=> view.typed;
+    callback pressed <=> view.pressed;
+
+    public function focus-input() {
+        view.focus-input();
+    }
+
+    view := CodeView {
+        width: parent.width;
+        height: parent.height;
+    }
+}
