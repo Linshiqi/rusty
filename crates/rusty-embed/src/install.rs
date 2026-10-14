@@ -74,6 +74,32 @@ pub struct ToolDownload {
     pub extract: CommandPlan,
 }
 
+/// How a tool rusty can install is installed.
+pub enum Install {
+    /// An archive fetched and unpacked into the data directory: QEMU, the
+    /// debuggers, a cross C compiler, the LLDB adapter.
+    Download(ToolDownload),
+    /// The commands of its recipe, in order: `cargo install`, `rustup`,
+    /// espup.
+    Commands(Vec<CommandPlan>),
+}
+
+/// Which of the two ways `tool` installs, and its plan — the one dispatch,
+/// by the tool's name, for every window that installs.
+pub fn install(tool: &str) -> Result<Install> {
+    Ok(if tool.starts_with("qemu-system-") {
+        Install::Download(qemu_download(tool)?)
+    } else if tool == "codelldb" {
+        Install::Download(codelldb_download()?)
+    } else if tool.ends_with("-gdb") {
+        Install::Download(gdb_download(tool)?)
+    } else if tool.ends_with("-gcc") {
+        Install::Download(gcc_download(tool)?)
+    } else {
+        Install::Commands(install_steps(tool)?)
+    })
+}
+
 /// How to install a tool the plan reported missing, as inspectable steps —
 /// one click in the panel, the dock shows every line, and only a failure
 /// sends anyone to the manual instructions.

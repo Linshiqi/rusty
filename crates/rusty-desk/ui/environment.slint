@@ -1,0 +1,152 @@
+// The Environment page: the answer first — ready, or what is missing and
+// the one button that installs it — then every tool in the group of work
+// it serves, its state and its own Install on the right. Filled by
+// `src/app/environment.rs`.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { Button, IconButton } from "widgets.slint";
+import { Shell, EnvRow } from "shell.slint";
+
+component ToolRow inherits Rectangle {
+    in property <EnvRow> tool;
+    height: 46px;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 12px;
+        Icon {
+            y: (parent.height - self.height) / 2;
+            path: root.tool.installed ? Icons.check : root.tool.needed ? Icons.close : Icons.minus;
+            size: 14px;
+            color: root.tool.installed ? Theme.patina : root.tool.needed ? Theme.crimson : Theme.label-3;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.tool.name;
+                color: Theme.label;
+                font-size: Theme.body;
+                font-weight: 600;
+            }
+            Text {
+                text: root.tool.purpose;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: root.tool.state;
+            color: root.tool.installed ? Theme.label-2 : root.tool.needed ? Theme.crimson : Theme.label-3;
+            font-size: Theme.small;
+            font-family: root.tool.installed ? Theme.mono : "";
+            vertical-alignment: center;
+        }
+        if root.tool.installable: Button {
+            y: (parent.height - self.height) / 2;
+            text: @tr("toolchain.install");
+            primary: root.tool.needed;
+            enabled: Shell.env-installing == "";
+            clicked => {
+                Shell.env-install(root.tool.name, root.tool.command);
+            }
+        }
+    }
+}
+
+export component EnvironmentPage inherits Rectangle {
+    background: Theme.content;
+    ScrollView {
+        VerticalLayout {
+            padding: 28px;
+            padding-top: 24px;
+            spacing: 14px;
+            alignment: start;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: @tr("panel.toolchain");
+                    color: Theme.label;
+                    font-size: Theme.title;
+                    font-weight: 700;
+                    horizontal-stretch: 1;
+                }
+                IconButton {
+                    icon: Icons.refresh;
+                    tip: @tr("toolchain.refresh");
+                    enabled: !Shell.env-probing;
+                    clicked => {
+                        Shell.act("environment.refresh");
+                    }
+                }
+            }
+            // The answer, before any list.
+            Rectangle {
+                height: verdict.preferred-height;
+                border-radius: 9px;
+                background: Shell.env-kind == 0 ? Theme.patina-fill : Shell.env-kind == 1 ? Theme.amber-fill : Theme.crimson-fill;
+                verdict := HorizontalLayout {
+                    padding: 14px;
+                    spacing: 12px;
+                    Icon {
+                        path: Shell.env-kind == 0 ? Icons.check : Icons.warn;
+                        size: 18px;
+                        color: Shell.env-kind == 0 ? Theme.patina : Shell.env-kind == 1 ? Theme.amber : Theme.crimson;
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: Shell.env-probing ? @tr("toolchain.reading") : Shell.env-verdict;
+                            color: Theme.label;
+                            font-size: Theme.body;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+                        if Shell.env-detail != "" && !Shell.env-probing: Text {
+                            text: Shell.env-detail;
+                            color: Theme.label-2;
+                            font-size: Theme.small;
+                            wrap: word-wrap;
+                        }
+                        if Shell.env-installing != "": Text {
+                            text: Shell.env-installing;
+                            color: Theme.label-2;
+                            font-size: Theme.small;
+                        }
+                    }
+                    if Shell.env-can-install: Button {
+                        y: (parent.height - self.height) / 2;
+                        text: @tr("environment.install-missing");
+                        primary: true;
+                        clicked => {
+                            Shell.act("environment.install-missing");
+                        }
+                    }
+                }
+            }
+            for row in Shell.env-rows: Rectangle {
+                height: row.header ? 30px : 46px;
+                if row.header: Text {
+                    x: 2px;
+                    y: parent.height - self.height - 2px;
+                    text: row.name;
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    font-weight: 600;
+                }
+                if !row.header: Rectangle {
+                    border-radius: 7px;
+                    background: Theme.raised;
+                    ToolRow {
+                        tool: row;
+                    }
+                }
+            }
+        }
+    }
+}

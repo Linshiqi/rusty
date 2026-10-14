@@ -53,6 +53,29 @@ export struct ProblemRow {
     count: int,
 }
 
+// A line of the Output dock, and how it is drawn: as printed (0), the
+// command run (1), an error (2), a warning (3), a run that ended well (4).
+export struct OutputLine {
+    text: string,
+    kind: int,
+}
+
+// A row of the Environment page: a group's heading, or a tool — its
+// purpose, its version or that it is missing, whether this project needs
+// it, and whether rusty can install it.
+export struct EnvRow {
+    header: bool,
+    name: string,
+    purpose: string,
+    state: string,
+    installed: bool,
+    needed: bool,
+    installable: bool,
+    // What installs it: a target as `target:<triple>`, else the tool's
+    // own command, shown.
+    command: string,
+}
+
 export struct Recent {
     name: string,
     path: string,
@@ -101,6 +124,22 @@ export global Shell {
     in property <string> encoding;
     in property <string> eol;
     in property <string> chip;
+    // Who makes it, what builds the project, and where the chip was read.
+    in property <string> chip-tip;
+
+    // The Environment page: the answer (ready 0, missing 1, cannot start
+    // 2), what it means, and every tool.
+    in property <bool> env-probing;
+    in property <int> env-kind;
+    in property <string> env-verdict;
+    in property <string> env-detail;
+    in property <bool> env-can-install;
+    in property <string> env-installing;
+    in property <[EnvRow]> env-rows;
+    callback env-install(string /* name */, string /* command */);
+
+    // What the window ran, line by line.
+    in property <[OutputLine]> output;
 
     // What the language servers found, file by file.
     in property <[ProblemRow]> problems;

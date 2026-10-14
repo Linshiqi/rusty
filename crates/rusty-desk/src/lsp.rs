@@ -97,7 +97,12 @@ pub fn start(root: &Path, project: Option<&EmbeddedProject>) -> Started {
     // than the host — except a target the project carries as a description
     // (a CH32's `.json`), which rust-analyzer's cargo reads from the config
     // for itself, and whose stem no rustc knows as a triple.
+    // Not in the standard layout, whose firmware is a crate of its own one
+    // folder down: the target is that crate's, read from its own config,
+    // and given to the server at the root it would analyse the host
+    // crates for the chip.
     let target = project
+        .filter(|p| p.firmware_dir.is_none())
         .filter(|_| {
             chip.as_ref()
                 .is_none_or(|chip| chip.toolchain != ToolchainRequirement::NightlyBuildStd)

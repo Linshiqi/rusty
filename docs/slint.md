@@ -218,6 +218,21 @@ tests green, and CLAUDE.md saying how it works.
    the first-run setup, the wizard and the playground. **The window names
    no part**: every difference between two chips is a key of the
    catalogue, and a test holds `rusty-desk`'s source to that.
+   *Done so far:* detection as the old window ran it (the firmware crate
+   found below a workspace, the playground marked); the chip in the status
+   bar, its vendor, build system and where it was read in the tooltip; the
+   run target in the title bar; the project's problems first in Problems,
+   their fix a button on the note that names them; the Output dock, where
+   whatever the window runs is shown line by line with how it ended, one
+   run at a time, stoppable; the Environment page — the verdict and the
+   one button that installs what is missing, then each tool in the group
+   of work it serves — reading `rusty_embed::setup`'s answer, which the
+   old window's page now reads too (its rules moved there, tests and
+   all), and installing one tool at a time through `rusty_embed::install`,
+   the first failure ending the queue; and the first run, a note when the
+   machine cannot build that opens the page. `the_window_names_no_part`
+   scans every source and `.slint` file for a catalogue id, a family's
+   name or a vendor's — proven by planting one.
 5. **Build, flash, watch.** The build system's own plan run in the dock,
    its errors in Problems and on the lines they are about, the size of the
    image against the part's memory; flashing through the part's flasher to

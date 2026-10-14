@@ -12,8 +12,15 @@ component Item inherits Rectangle {
     in property <string> icon;
     in property <string> tip;
     in property <brush> tint: Theme.label-2;
+    // Text somebody else wrote — a language server's progress, a crate
+    // name, a whole path — gives way first and is cut with an ellipsis,
+    // the whole of it in the tooltip; everything else keeps its width.
+    in property <bool> elide;
     callback clicked;
-    width: row.preferred-width;
+    min-width: root.elide ? row.min-width : row.preferred-width;
+    preferred-width: row.preferred-width;
+    max-width: root.elide ? min(row.preferred-width, 22rem) : row.preferred-width;
+    horizontal-stretch: root.elide ? 1 : 0;
     background: touch.has-hover ? Theme.hover : transparent;
     row := HorizontalLayout {
         padding-left: 8px;
@@ -30,6 +37,7 @@ component Item inherits Rectangle {
             color: root.tint;
             font-size: Theme.caption;
             vertical-alignment: center;
+            overflow: TextOverflow.elide;
         }
     }
     touch := TouchArea {
@@ -63,8 +71,9 @@ export component StatusBar inherits Rectangle {
         height: 1px;
         background: Theme.line;
     }
+    // One row, so the server's words give way to the caret rather than
+    // running under it.
     HorizontalLayout {
-        alignment: start;
         Item {
             icon: Icons.dock-left;
             tint: Shell.left-open ? Theme.label : Theme.label-3;
@@ -106,10 +115,11 @@ export component StatusBar inherits Rectangle {
             text: Shell.server;
             tip: Shell.server-tip;
             tint: Shell.server-state == 3 ? Theme.crimson : Shell.server-state == 2 ? Theme.amber : Theme.label-3;
+            elide: true;
         }
-    }
-    HorizontalLayout {
-        alignment: end;
+        Rectangle {
+            horizontal-stretch: 1;
+        }
         if Shell.caret != "": Item {
             text: Shell.caret;
         }
@@ -125,6 +135,10 @@ export component StatusBar inherits Rectangle {
         if Shell.chip != "": Item {
             icon: Icons.chip;
             text: Shell.chip;
+            tip: Shell.chip-tip;
+            clicked => {
+                Shell.act("environment.open");
+            }
         }
         Item {
             icon: Icons.bell;

@@ -1,7 +1,15 @@
+//! Two rules about the window's source, held by reading it.
+//!
 //! The window's words are keys of `rusty-i18n`'s catalogue — `t!("…")` in
 //! the Rust, `@tr("…")` in the `.slint` files — and a key missing from the
 //! catalogue would show as the key itself. This holds every key the window
 //! names to the catalogue, as `rusty-ui`'s test did for the WebView.
+//!
+//! And the window names no part: everything that differs between two
+//! chips is a key of the chip catalogue (CLAUDE.md, rule 6), and a chip
+//! id in the window's code is a `match` that does the wrong thing for the
+//! next part added — silently, which is how seventy-five of them once sent
+//! every STM32 to esp-generate.
 
 #[cfg(test)]
 mod tests {
@@ -84,5 +92,54 @@ mod tests {
             .map(|(path, key)| format!("{key} ({})", path.display()))
             .collect();
         assert!(missing.is_empty(), "not in the catalogue: {missing:#?}");
+    }
+
+    /// A chip's family, as its id starts: `esp32` of `esp32c3`, `stm32` of
+    /// `stm32f411ce`, `ch32` of `ch32v003j4m6`.
+    fn family(id: &str) -> String {
+        let letters = id.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+        let digits = id[letters..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        id[..letters + digits].to_string()
+    }
+
+    /// The names of every part and vendor the catalogue knows — ids,
+    /// families — appear nowhere in the window's code. Comments may tell
+    /// the history; the code may not decide by it.
+    #[test]
+    fn the_window_names_no_part() {
+        let catalog = rusty_embed::catalog::Catalog::builtin();
+        let mut names: Vec<String> = Vec::new();
+        for chip in catalog.chips() {
+            names.push(chip.id.to_lowercase());
+            names.push(family(&chip.id.to_lowercase()));
+        }
+        names.extend(catalog.vendors().iter().map(|v| v.id.to_lowercase()));
+        names.retain(|name| name.len() >= 3);
+        names.sort();
+        names.dedup();
+        assert!(
+            names.len() > 10,
+            "the catalogue named almost nothing: {names:?}"
+        );
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut sources = Vec::new();
+        files(&root.join("src"), "rs", &mut sources);
+        files(&root.join("ui"), "slint", &mut sources);
+        sources.retain(|path| !path.ends_with("catalogue.rs"));
+        let mut found = Vec::new();
+        for path in sources {
+            let text = without_comments(&std::fs::read_to_string(&path).unwrap());
+            for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                let word = word.to_lowercase();
+                if names.binary_search(&word).is_ok() {
+                    found.push(format!("{word} ({})", path.display()));
+                }
+            }
+        }
+        assert!(found.is_empty(), "the window names parts: {found:#?}");
     }
 }

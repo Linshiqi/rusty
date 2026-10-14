@@ -20,7 +20,9 @@ use rusty_i18n::{Locale, t};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 
 mod drafts;
+mod environment;
 mod navigate;
+mod part;
 mod saving;
 mod servers;
 
@@ -37,6 +39,7 @@ use crate::{
     lsp::{Problems, Servers},
     picker::{self, Mode, Pick},
     project::Project,
+    run::{Ended, Runner},
     work,
 };
 
@@ -60,6 +63,7 @@ impl Tab {
             Tab::File(path) => path.rsplit('/').next().unwrap_or(path).to_string(),
             Tab::Page("welcome") => t!("desk.welcome"),
             Tab::Page("settings") => t!("desk.settings"),
+            Tab::Page("environment") => rusty_i18n::lookup("panel.toolchain"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -76,6 +80,16 @@ struct NoteItem {
     id: i32,
     level: i32,
     text: String,
+    action: Option<NoteAction>,
+}
+
+/// What a note's button does.
+#[derive(Clone, Debug)]
+pub enum NoteAction {
+    /// Run a command line into the Output dock: a problem's fix.
+    Run(String),
+    /// An action of the window's, by its id.
+    Act(&'static str),
 }
 
 #[derive(Default)]
@@ -96,6 +110,7 @@ struct State {
     renaming: Option<(String, u32, u32, String)>,
     /// What the picker lists when a list was handed to it.
     listed: Vec<(String, String, Pick)>,
+    environment: environment::Environment,
 }
 
 pub struct App {
@@ -113,12 +128,19 @@ pub struct App {
     problems_timer: Timer,
     /// What has been said once this session, and is not said again.
     noted: RefCell<HashSet<String>>,
+    /// What the window runs, one at a time, into the Output dock.
+    runner: Runner,
 }
 
 impl App {
     pub fn new(window: &AppWindow) -> Rc<App> {
         let saved = rusty_embed::config::workbench();
         let files = Arc::new(rusty_edit::Files::new());
+        let output = Rc::new(VecModel::<crate::OutputLine>::default());
+        window
+            .global::<Shell>()
+            .set_output(ModelRc::from(output.clone()));
+        let runner = Runner::new(output);
         let servers = Servers::new();
         let problems = Problems::default();
         let editor = Surface::new(window, files, servers.clone(), problems.clone());
@@ -135,6 +157,7 @@ impl App {
             problems,
             problems_timer: Timer::default(),
             noted: RefCell::default(),
+            runner,
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 recents: saved.recent_projects.clone(),
@@ -150,6 +173,58 @@ impl App {
 
     pub fn editor(&self) -> &Rc<Surface> {
         &self.editor
+    }
+
+    pub fn runner(&self) -> &Runner {
+        &self.runner
+    }
+
+    /// Run `plan` in `dir` into the Output dock, which comes forward, and
+    /// hand how it ended to `then`. Refused, and said, while another run
+    /// is going.
+    pub fn run(
+        self: &Rc<Self>,
+        plan: &rusty_embed::CommandPlan,
+        dir: Option<PathBuf>,
+        then: impl FnOnce(&Rc<App>, Ended) + Send + 'static,
+    ) -> bool {
+        self.show_panel("bottom", "output");
+        let began = std::time::Instant::now();
+        let started = self.runner.run(plan, dir, move |app, ended| {
+            let seconds = format!("{:.1}", began.elapsed().as_secs_f32());
+            match ended {
+                Ended::Done => app.runner.say(
+                    &t!("desk.run-done", seconds = seconds),
+                    crate::run::kind::DONE,
+                ),
+                Ended::Failed(code) => app.runner.say(
+                    &t!(
+                        "desk.run-failed",
+                        code = code.map_or_else(|| "?".to_string(), |c| c.to_string())
+                    ),
+                    crate::run::kind::ERROR,
+                ),
+                Ended::Stopped => app
+                    .runner
+                    .say(&t!("desk.run-stopped"), crate::run::kind::PLAIN),
+                Ended::Refused => {}
+            }
+            app.sync_running();
+            then(app, ended);
+        });
+        if !started {
+            self.note_transient(1, t!("desk.already-running"));
+        }
+        self.sync_running();
+        started
+    }
+
+    fn sync_running(&self) {
+        if let Some(window) = self.window() {
+            window
+                .global::<Shell>()
+                .set_running(self.runner.is_running());
+        }
     }
 
     fn window(&self) -> Option<AppWindow> {
@@ -185,7 +260,9 @@ impl App {
         on!(on_dismiss_note, |app, id| app.dismiss_note(id));
         on!(on_problem_click, |app, index| app
             .problem_click(index as usize));
-        on!(on_note_action, |app, id| app.dismiss_note(id));
+        on!(on_note_action, |app, id| app.note_action(id));
+        on!(on_env_install, |app, name, command| app
+            .env_install(&command, &name));
         on!(on_set_theme, |app, theme| app.set_theme(&theme));
         on!(on_set_language, |app, tag| app.set_language(&tag));
         on!(on_set_zoom, |app, zoom| app.set_zoom(zoom));
@@ -237,6 +314,9 @@ impl App {
             "finder.open" => self.open_picker(Mode::Files),
             "project.open" => self.choose_project(),
             "settings.open" => self.open_tab(Tab::Page("settings")),
+            "environment.open" => self.open_tab(Tab::Page("environment")),
+            "environment.refresh" => self.probe_environment(),
+            "environment.install-missing" => self.install_missing(),
             "welcome.open" => self.open_tab(Tab::Page("welcome")),
             "file.save" => self.save(),
             "find.open" => self.editor.find_open(false),
@@ -272,6 +352,8 @@ impl App {
             "theme.light" => self.set_theme("light"),
             "project.menu" => self.open_picker(Mode::Projects),
             "app.menu" => self.open_picker(Mode::Commands),
+            "run.stop" => self.runner.stop(),
+            "output.clear" => self.runner.clear(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();
@@ -346,7 +428,9 @@ impl App {
             }
         }
         self.sync_all();
+        self.sync_problems();
         self.start_servers();
+        self.probe_environment();
         self.bring_back_drafts(opened);
     }
 
@@ -796,17 +880,41 @@ impl App {
     /// A note said once this session: a missing tool is the same sentence
     /// at every save.
     pub fn note_once(self: &Rc<Self>, level: i32, text: String) {
+        self.note_once_with(level, text, None);
+    }
+
+    pub fn note_once_with(self: &Rc<Self>, level: i32, text: String, action: Option<NoteAction>) {
         if self.noted.borrow_mut().insert(text.clone()) {
-            self.note(level, text);
+            self.note_with(level, text, action);
         }
     }
 
+    /// A note with a button that does something.
+    pub fn note_with(self: &Rc<Self>, level: i32, text: String, action: Option<NoteAction>) {
+        self.note_full(level, text, level == 0, action);
+    }
+
     fn note_for(self: &Rc<Self>, level: i32, text: String, transient: bool) {
+        self.note_full(level, text, transient, None);
+    }
+
+    fn note_full(
+        self: &Rc<Self>,
+        level: i32,
+        text: String,
+        transient: bool,
+        action: Option<NoteAction>,
+    ) {
         let id = {
             let mut state = self.state.borrow_mut();
             state.next_note += 1;
             let id = state.next_note;
-            state.notes.push(NoteItem { id, level, text });
+            state.notes.push(NoteItem {
+                id,
+                level,
+                text,
+                action,
+            });
             if state.notes.len() > 4 {
                 state.notes.remove(0);
             }
@@ -828,10 +936,39 @@ impl App {
         self.sync_notes();
     }
 
+    /// A note's button: what it says it does, and the note goes.
+    fn note_action(self: &Rc<Self>, id: i32) {
+        let action = {
+            let state = self.state.borrow();
+            state
+                .notes
+                .iter()
+                .find(|n| n.id == id)
+                .and_then(|n| n.action.clone())
+        };
+        self.dismiss_note(id);
+        match action {
+            Some(NoteAction::Run(line)) => {
+                let mut words = line.split_whitespace();
+                let Some(program) = words.next() else { return };
+                let plan = rusty_embed::CommandPlan::new(
+                    program,
+                    words.map(str::to_string).collect(),
+                    String::new(),
+                );
+                let dir = self.root();
+                self.run(&plan, dir, |app, _| app.reread_project());
+            }
+            Some(NoteAction::Act(id)) => self.act(id),
+            None => {}
+        }
+    }
+
     // ---- pushing the state into the window -------------------------------
 
     fn sync_all(&self) {
         self.sync_project();
+        self.sync_part();
         self.sync_docks();
         self.sync_tabs();
         self.sync_tree();
@@ -1007,7 +1144,14 @@ impl App {
                 id: note.id,
                 level: note.level,
                 text: note.text.clone().into(),
-                action: SharedString::new(),
+                action: match &note.action {
+                    Some(NoteAction::Run(_)) => t!("desk.note-run-fix"),
+                    Some(NoteAction::Act(id)) => actions::by_id(id)
+                        .map(|a| rusty_i18n::lookup(a.title))
+                        .unwrap_or_default(),
+                    None => String::new(),
+                }
+                .into(),
             })
             .collect();
         window

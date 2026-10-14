@@ -16,6 +16,9 @@ pub struct Project {
     /// What detection made of it — the build system, the part, what is
     /// missing — or why it could not say.
     pub embedded: Result<rusty_embed::EmbeddedProject, String>,
+    /// The part, as the catalogue the project sees describes it: the
+    /// built-in one, the user's, and the project's own `.rusty/chips/`.
+    pub chip: Option<rusty_embed::Chip>,
 }
 
 /// A row of the tree as shown: how deep, the entry, and whether it is open.
@@ -39,7 +42,16 @@ impl Project {
             .unwrap_or_else(|| root.display().to_string());
         let mut files = Vec::new();
         collect_files(&entries, &mut files);
-        let embedded = rusty_embed::project::detect(&root).map_err(|error| error.to_string());
+        let embedded = detect(&root);
+        let chip = embedded
+            .as_ref()
+            .ok()
+            .and_then(|p| p.chip.as_deref())
+            .and_then(|id| {
+                rusty_embed::catalog::Catalog::load(Some(&root))
+                    .chip(id)
+                    .cloned()
+            });
         Ok(Project {
             root,
             name,
@@ -47,6 +59,7 @@ impl Project {
             expanded: BTreeSet::new(),
             files,
             embedded,
+            chip,
         })
     }
 
@@ -56,6 +69,37 @@ impl Project {
         walk(&self.entries, 0, &self.expanded, &mut rows);
         rows
     }
+}
+
+/// What the project at `root` is, as the window reads it: detected where
+/// it builds — the firmware crate one folder down in the standard layout,
+/// whose chip is the project's — and named for the folder that was opened.
+/// A playground is marked as one, and the drawing playground, a host crate
+/// on purpose, is not told it lacks a chip.
+fn detect(root: &std::path::Path) -> Result<rusty_embed::EmbeddedProject, String> {
+    let firmware = rusty_embed::project::firmware_root(root);
+    let mut project = rusty_embed::project::detect(&firmware).map_err(|error| error.to_string())?;
+    if firmware != root {
+        if let Ok(sub) = firmware.strip_prefix(root) {
+            let sub = sub.to_string_lossy().replace('\\', "/");
+            let where_from = format!("in {sub}/");
+            project.chip_source = Some(match project.chip_source {
+                Some(source) => format!("{source}, {where_from}"),
+                None => where_from,
+            });
+            project.firmware_dir = Some(sub);
+        }
+        project.root = root.display().to_string();
+    }
+    project.playground = rusty_embed::config::data_dir()
+        .and_then(|data| rusty_embed::playground::chip_of(&data, root))
+        .map(str::to_string);
+    if project.playground.as_deref() == Some(rusty_embed::PLAYGROUND_DRAW) {
+        project
+            .problems
+            .retain(|problem| problem.kind != "chip-none");
+    }
+    Ok(project)
 }
 
 fn walk(entries: &[Entry], depth: usize, expanded: &BTreeSet<String>, out: &mut Vec<ShownRow>) {
@@ -109,6 +153,7 @@ mod tests {
             expanded: BTreeSet::new(),
             files: vec![],
             embedded: Err("not read".into()),
+            chip: None,
         };
         let names = |p: &Project| p.rows().into_iter().map(|r| r.name).collect::<Vec<_>>();
         assert_eq!(names(&project), ["src", "Cargo.toml"]);

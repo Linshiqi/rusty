@@ -77,6 +77,10 @@ pub fn start(window: &AppWindow) {
         if (30..=40).contains(&n) && shell.get_active_kind() != "file" {
             return;
         }
+        // And for the machine's answer before photographing the page.
+        if n == 193 && shell.get_env_probing() {
+            return;
+        }
         step.set(n + 1);
         // A key with modifiers held: each modifier pressed first and let go
         // after, as a hand does, which is how Slint knows they are down.
@@ -172,9 +176,25 @@ pub fn start(window: &AppWindow) {
                 app.act("welcome.open");
             }
             189 => snapshot(&window, &dir.join("welcome.png")),
+            // The machine against the project, once it has been asked.
+            190 => app.act("environment.open"),
+            194 => {
+                snapshot(&window, &dir.join("environment.png"));
+                eprintln!(
+                    "environment: {} ({} rows); target: {}; chip: {}",
+                    shell.get_env_verdict(),
+                    shell
+                        .get_env_rows()
+                        .iter()
+                        .filter(|row| !row.header)
+                        .count(),
+                    shell.get_target(),
+                    shell.get_chip(),
+                );
+            }
             // Back to the file. (With RUSTY_PROBE_SAVES, the save through
             // rustfmt comes last: it replaces the whole text.)
-            190 => {
+            195 => {
                 let file = shell.get_tabs().iter().find(|tab| tab.kind == "file");
                 if let Some(tab) = file {
                     shell.invoke_pick_tab(tab.id);

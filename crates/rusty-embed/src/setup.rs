@@ -256,6 +256,126 @@ pub(crate) fn destination_of(tool: &str) -> Destination {
     }
 }
 
+// --- the Environment page's answer ---
+
+/// Which group of work a tool serves. By name, because the report is a flat
+/// list and the grouping is this page's opinion; an unknown tool goes with
+/// the editing tools rather than nowhere.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Section {
+    Build,
+    Device,
+    Editor,
+}
+
+pub fn section_of(tool: &str) -> Section {
+    // A cross C compiler builds, whichever part it is for.
+    if tool.ends_with("-gcc") {
+        return Section::Build;
+    }
+    match tool {
+        "msvc" | "ldproxy" | "pio" | "cmake" | "ninja" | "idf.py" => Section::Build,
+        "espflash" | "probe-rs" | "wlink" | "codelldb" => Section::Device,
+        _ => Section::Editor,
+    }
+}
+
+/// The tools this project cannot do without that are not there, in the
+/// order they install: the required tools, the Xtensa toolchain and the
+/// chip's target — read off the report's own fields, the way the setup plan
+/// reads them, so this page and the rows under it cannot disagree — and
+/// then what the backend's blocking problems name: a project with a chip
+/// and no flasher cannot reach its board. Targets are `target:<triple>`,
+/// as the setup plan spells them.
+pub fn needed(report: &ToolchainReport) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |name: String| {
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    };
+    for tool in &report.status.tools {
+        if tool.required && !tool.is_installed() {
+            add(tool.name.clone());
+        }
+    }
+    if report.needs_esp_toolchain && !report.status.has_esp_toolchain {
+        add("espup".to_string());
+    }
+    // An Xtensa target comes with the Xtensa toolchain, which is the row
+    // that is missing then.
+    if let Some(target) = &report.required_target
+        && !report.required_target_installed
+        && !target.starts_with("xtensa-")
+        && !report.builds_std
+    {
+        add(format!("target:{target}"));
+    }
+    for problem in &report.problems {
+        if problem.severity != crate::model::Severity::Blocking {
+            continue;
+        }
+        match problem.kind.as_str() {
+            // The tool the part is usually flashed with, which the
+            // problem names; espflash for a report from before it did.
+            "no-flasher" => add(problem
+                .args
+                .get("tool")
+                .cloned()
+                .unwrap_or_else(|| "espflash".to_string())),
+            "nightly-missing" => add("nightly".to_string()),
+            "ldproxy-missing" => add("ldproxy".to_string()),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether rusty's own install can fetch a missing item: a target, nightly
+/// or espup always; a tool when its row says so.
+pub fn can_install(report: &ToolchainReport, name: &str) -> bool {
+    if name.starts_with("target:") || matches!(name, "nightly" | "espup") {
+        return true;
+    }
+    report
+        .status
+        .tools
+        .iter()
+        .find(|tool| tool.name == name)
+        .is_some_and(|tool| tool.installable)
+}
+
+/// The page's answer, before any list.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Verdict {
+    /// Rust itself is absent: nothing else can be installed until it is.
+    NeedsRust,
+    /// An `-msvc` host without the Visual Studio linker.
+    NeedsLinker,
+    /// Things this project needs, by name.
+    Missing(Vec<String>),
+    /// Ready; the count is optional tools not installed.
+    Ready(usize),
+}
+
+pub fn verdict(report: &ToolchainReport) -> Verdict {
+    let steps = plan(report);
+    if steps
+        .iter()
+        .any(|s| s.tool == "rustup" && s.manual.is_some())
+    {
+        return Verdict::NeedsRust;
+    }
+    if steps.iter().any(|s| s.tool == "msvc" && s.manual.is_some()) {
+        return Verdict::NeedsLinker;
+    }
+    let needed = needed(report);
+    if !needed.is_empty() {
+        return Verdict::Missing(needed);
+    }
+    Verdict::Ready(steps.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +625,123 @@ mod tests {
             steps[0].command
         );
         assert!(blocked(&r));
+    }
+
+    /// The Environment page's answer, read off the same report.
+    mod page {
+        use super::super::*;
+        use crate::model::{
+            Problem, Severity, ToolStatus, Toolchain, ToolchainReport, ToolchainStatus,
+        };
+
+        fn tool(name: &str, installed: bool, required: bool) -> ToolStatus {
+            ToolStatus {
+                name: name.to_string(),
+                purpose: String::new(),
+                version: installed.then(|| "1.0".to_string()),
+                path: installed.then(|| format!("/bin/{name}")),
+                install_command: format!("cargo install {name}"),
+                installable: true,
+                required,
+            }
+        }
+
+        fn report(tools: Vec<ToolStatus>, problems: Vec<Problem>) -> ToolchainReport {
+            ToolchainReport {
+                status: ToolchainStatus {
+                    toolchains: vec![Toolchain {
+                        name: "stable".to_string(),
+                        is_default: true,
+                        is_esp: false,
+                    }],
+                    installed_targets: vec![],
+                    tools,
+                    has_esp_toolchain: false,
+                },
+                required_target: Some("riscv32imc-unknown-none-elf".to_string()),
+                required_target_installed: false,
+                needs_esp_toolchain: false,
+                builds_std: false,
+                problems,
+            }
+        }
+
+        /// Needed is what stops *this project*: the target it cannot build for,
+        /// read off the report itself — the first version counted it only when
+        /// a problem named it, and a page said "one thing missing" above two
+        /// rows marked missing — and the flasher the backend's blocking problem
+        /// names, since a project with a chip cannot reach its board without
+        /// one. An optional tool that is absent is not needed.
+        #[test]
+        fn needed_is_what_the_project_cannot_do_without() {
+            let report = report(
+                vec![
+                    tool("rustup", true, true),
+                    tool("espflash", false, false),
+                    tool("probe-rs", false, false),
+                ],
+                vec![Problem::new(Severity::Blocking, "no-flasher", "t", "d")],
+            );
+            assert_eq!(
+                needed(&report),
+                ["target:riscv32imc-unknown-none-elf", "espflash"]
+            );
+            assert_eq!(
+                verdict(&report),
+                Verdict::Missing(vec![
+                    "target:riscv32imc-unknown-none-elf".to_string(),
+                    "espflash".to_string(),
+                ])
+            );
+        }
+
+        /// An Xtensa chip's target comes with the Xtensa toolchain, so the
+        /// toolchain is what is missing, once.
+        #[test]
+        fn an_xtensa_target_is_counted_as_its_toolchain() {
+            let mut xtensa = report(vec![tool("rustup", true, true)], vec![]);
+            xtensa.required_target = Some("xtensa-esp32-none-elf".to_string());
+            xtensa.needs_esp_toolchain = true;
+            assert_eq!(needed(&xtensa), ["espup"]);
+        }
+
+        /// Rust absent is its own answer: everything else rides on it, so the
+        /// page does not offer six buttons that cannot work.
+        #[test]
+        fn without_rust_the_answer_is_rust() {
+            let report = report(vec![tool("rustup", false, true)], vec![]);
+            assert_eq!(verdict(&report), Verdict::NeedsRust);
+        }
+
+        /// Ready, with the optional tools counted rather than listed as
+        /// problems — a red badge for probe-rs on a USB-serial board is crying
+        /// wolf.
+        #[test]
+        fn ready_counts_the_optional_tools_it_did_not_need() {
+            let mut ready = report(
+                vec![
+                    tool("rustup", true, true),
+                    tool("espflash", true, false),
+                    tool("probe-rs", false, false),
+                ],
+                vec![],
+            );
+            ready.required_target_installed = true;
+            assert_eq!(verdict(&ready), Verdict::Ready(1));
+        }
+
+        #[test]
+        fn tools_sit_in_the_group_of_work_they_serve() {
+            assert_eq!(section_of("espflash"), Section::Device);
+            assert_eq!(section_of("probe-rs"), Section::Device);
+            assert_eq!(section_of("msvc"), Section::Build);
+            assert_eq!(section_of("riscv32-esp-elf-gcc"), Section::Build);
+            assert_eq!(section_of("arm-none-eabi-gcc"), Section::Build);
+            assert_eq!(section_of("pio"), Section::Build);
+            assert_eq!(section_of("cmake"), Section::Build);
+            assert_eq!(section_of("clangd"), Section::Editor);
+            assert_eq!(section_of("rust-analyzer"), Section::Editor);
+            assert_eq!(section_of("something-new"), Section::Editor);
+        }
     }
 }
