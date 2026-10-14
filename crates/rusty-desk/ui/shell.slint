@@ -97,6 +97,15 @@ export struct WizNote {
     consequence: string,
 }
 
+// A playground the welcome page offers: the part's name and what it takes.
+export struct PlaygroundCard {
+    id: string,
+    name: string,
+    detail: string,
+    // The drawing playground, which is no part's.
+    drawing: bool,
+}
+
 export struct Recent {
     name: string,
     path: string,
@@ -187,6 +196,12 @@ export global Shell {
     callback wiz-hover(string);
     callback wiz-name-edited(string);
     callback wiz-set-layout(string);
+
+    // The playgrounds, and the one that is open — empty for any other
+    // project.
+    in property <[PlaygroundCard]> playgrounds;
+    in property <string> playground;
+    callback open-playground(string);
 
     // What the window ran, line by line.
     in property <[OutputLine]> output;

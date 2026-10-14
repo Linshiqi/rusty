@@ -4494,6 +4494,11 @@ usty`) holds `location.toml`
   the sheet over CDP; the stage is on the dialog as `data-stage` now, so
   a driven test asserts on the state and not on which buttons it guesses
   the state produced.
+- **In Slint, `row` and `col` are every element's properties** — a
+  grid's placement — so a component cannot declare `in property <T> row`:
+  the build stops at `Cannot override property 'row'`, which reads like a
+  name declared twice. It happened twice in one day (the Environment page's
+  tool row, the wizard's choice); name the property after what it holds.
 
 ## The sheet
 

@@ -76,6 +76,61 @@ impl App {
         );
     }
 
+    /// Write every unsaved draft as it stands — no formatter, nothing asked
+    /// — and then `then`: what is copied, built or run has to be what is on
+    /// screen. A write that fails says so, and `then` does not run.
+    pub(super) fn write_all_then(self: &Rc<Self>, then: impl FnOnce(&Rc<App>) + Send + 'static) {
+        let Some(root) = self.root() else {
+            then(self);
+            return;
+        };
+        let drafts: Vec<_> = self
+            .editor
+            .backups()
+            .into_iter()
+            .filter(|(_, draft)| draft.is_some())
+            .filter_map(|(path, _)| {
+                let (text, charset, ending) = self.editor.draft_of(&path)?;
+                Some((path, text, charset, ending))
+            })
+            .collect();
+        if drafts.is_empty() {
+            then(self);
+            return;
+        }
+        work::spawn(
+            move || {
+                drafts
+                    .into_iter()
+                    .map(|(path, text, charset, ending)| {
+                        let written = text_file::save_text(&root, &path, &text, charset, ending)
+                            .map_err(|error| error.to_string());
+                        (path, text, written)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            move |app, written| {
+                let mut failed = false;
+                for (path, text, result) in written {
+                    match result {
+                        Ok(()) => {
+                            app.editor.saved(&path, &text);
+                            app.back_up(&path);
+                        }
+                        Err(reason) => {
+                            failed = true;
+                            app.note(2, t!("desk.save-failed", path = path, reason = reason));
+                        }
+                    }
+                }
+                app.sync_tabs();
+                if !failed {
+                    then(app);
+                }
+            },
+        );
+    }
+
     /// Write a file's draft as it stands now, in what it was read as.
     pub(super) fn write_file(self: &Rc<Self>, path: String, after: After) {
         let (Some(root), Some((text, charset, ending))) =

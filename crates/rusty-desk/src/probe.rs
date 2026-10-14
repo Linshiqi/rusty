@@ -16,7 +16,9 @@
 //! rustfmt formatted what reached the disk — point it at a copy. With
 //! `RUSTY_PROBE_NEW=<folder>` it ends by creating a project there through
 //! the wizard — the first part rusty writes from its own template, so
-//! nothing is generated or downloaded — and says what opened.
+//! nothing is generated or downloaded — and says what opened. With
+//! `RUSTY_PROBE_PLAYGROUND` it ends by opening the first playground the
+//! welcome page offers, and says whether it stayed out of the recents.
 
 use std::{
     cell::{Cell, RefCell},
@@ -47,6 +49,8 @@ pub fn start(window: &AppWindow) {
     };
     let saves = std::env::var_os("RUSTY_PROBE_SAVES").is_some();
     let made = std::env::var_os("RUSTY_PROBE_NEW").map(PathBuf::from);
+    let playground = std::env::var_os("RUSTY_PROBE_PLAYGROUND").is_some();
+    let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
     let before: Rc<RefCell<Option<String>>> = Rc::default();
     std::fs::create_dir_all(&dir).expect("the probe's directory");
@@ -252,6 +256,24 @@ pub fn start(window: &AppWindow) {
                 if let Some(parent) = made.clone() {
                     app.create_project_in(parent);
                 }
+            }
+            211 if playground => {
+                recents_before.set(shell.get_recents().row_count());
+                if let Some(card) = shell.get_playgrounds().iter().next() {
+                    shell.invoke_open_playground(card.id);
+                }
+            }
+            240 if playground => {
+                snapshot(&window, &dir.join("playground.png"));
+                eprintln!(
+                    "playground: {:?} open as {:?}, on {:?}; recents {} before, {} after",
+                    shell.get_playground(),
+                    shell.get_project(),
+                    shell.get_active_title(),
+                    recents_before.get(),
+                    shell.get_recents().row_count()
+                );
+                app.act("app.exit");
             }
             240 if made.is_some() => {
                 snapshot(&window, &dir.join("created.png"));
