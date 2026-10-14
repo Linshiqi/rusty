@@ -16,6 +16,8 @@ pub enum Mode {
     Fixes,
     /// A new name for the symbol at the caret, typed in the field.
     Rename,
+    /// Where Run goes: the simulator, and what is plugged in.
+    Targets,
 }
 
 /// What a row stands for.
@@ -34,6 +36,8 @@ pub enum Pick {
     Fix(usize),
     /// The symbol at the caret renamed to this.
     Rename(String),
+    /// The place to run at this index of the list.
+    Target(usize),
 }
 
 /// How many rows are shown. Past this the query is what narrows it.

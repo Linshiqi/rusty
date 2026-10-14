@@ -3,7 +3,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
-import { IconButton, RowButton, Caption } from "widgets.slint";
+import { IconButton, RowButton, Caption, Field } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
 import { Shell, PanelTab, TreeRow, ProblemRow } from "shell.slint";
 
@@ -138,7 +138,20 @@ component OutputPanel inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
     }
+    // A line to send, for a run that reads one.
+    if Shell.output-input: send := Field {
+        x: 8px;
+        y: parent.height - self.height - 6px;
+        width: parent.width - 16px;
+        placeholder: @tr("desk.output-send");
+        mono: true;
+        accepted(text) => {
+            Shell.output-send(text);
+            self.text = "";
+        }
+    }
     list := ListView {
+        height: Shell.output-input ? parent.height - 40px : parent.height;
         scrolled => {
             root.follow = self.content-y <= self.visible-height - self.content-height + 4px;
         }

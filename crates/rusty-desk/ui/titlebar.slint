@@ -65,7 +65,7 @@ component RunControl inherits Rectangle {
             height: 26px;
             icon: Shell.running ? Icons.stop : Icons.play;
             tint: Shell.running ? Theme.crimson : Theme.patina;
-            tip: Shell.running ? @tr("toolbar.stop") : @tr("toolbar.run");
+            tip: Shell.running ? @tr("toolbar.stop") : @tr("desk.run");
             clicked => {
                 Shell.act(Shell.running ? "run.stop" : "run.run");
             }
