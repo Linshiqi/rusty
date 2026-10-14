@@ -33,6 +33,7 @@ mod saving;
 mod servers;
 mod sheet;
 mod sim;
+mod waves;
 mod wizard;
 
 use saving::After;
@@ -336,6 +337,17 @@ impl App {
             .output_click(index as usize));
         on!(on_output_send, |app, text| app.output_send(&text));
         on!(on_plot_solo, |app, name| app.plot_solo(&name));
+        on!(on_waves_resized, |app, width| app.waves_resized(width));
+        on!(on_waves_grab, |app| app.waves_grab());
+        on!(on_waves_drag, |app, by| app.waves_drag(by));
+        on!(on_waves_zoom, |app, at, factor| app.waves_zoom(at, factor));
+        let weak = Rc::downgrade(self);
+        shell.on_waves_time_at(move |at| {
+            weak.upgrade()
+                .map(|app| app.waves_time_at(at))
+                .unwrap_or_default()
+                .into()
+        });
         on!(on_plot_set, |app, name, value| app.plot_set(&name, value));
         on!(on_board_press, |app, index, key, down| app.board_press(
             index as usize,
@@ -477,6 +489,9 @@ impl App {
             }
             "output.show" => self.show_panel("bottom", "output"),
             id if id.starts_with("board.") => self.board_act(id),
+            "waves.follow" => self.waves_follow(),
+            "waves.fit" => self.waves_fit(),
+            "waves.export" => self.waves_export(),
             "output.clear" => self.runner.clear(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
@@ -1169,11 +1184,13 @@ impl App {
                 Glyph::Board => icons.get_board(),
                 Glyph::Assistant => icons.get_assistant(),
                 Glyph::Plot => icons.get_plot(),
+                Glyph::Waves => icons.get_waves(),
             }
         };
         let state = self.state.borrow();
         let has_content = |id: &str| match id {
             "plot" => !state.sim.plot.channels.is_empty() || !state.sim.params.is_empty(),
+            "waves" => !state.sim.trace.events.is_empty(),
             _ => true,
         };
         let panels = |dock: Dock| -> ModelRc<PanelTab> {

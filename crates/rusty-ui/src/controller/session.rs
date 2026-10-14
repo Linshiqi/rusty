@@ -15,7 +15,7 @@ use rusty_i18n::t;
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, TraceClock},
+    state::AppState,
 };
 
 /// What proxy is stored, and what detection currently sees.
@@ -385,38 +385,14 @@ fn forget<T: Send + Sync + 'static>(
     }
 }
 
-/// One gpio report into the waveform capture.
-///
-/// The first report decides the clock: stamped reports run on the firmware's
-/// systimer, unstamped ones on the host's arrival time — never both, because
-/// a trace that mixes time bases is a trace that lies. Capped so an hour of
-/// simulation cannot eat the tab.
+/// One gpio report into the waveform capture (`rusty_embed::waves`): the
+/// first report decides the clock, and the cap keeps an hour of simulation
+/// from eating the tab.
 fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
-    const CAP: usize = 200_000;
-
-    state.sim.trace.update(|trace| {
-        let clock = *trace.clock.get_or_insert(if report.at_us.is_some() {
-            TraceClock::Firmware
-        } else {
-            TraceClock::Host
-        });
-        let at = match (clock, report.at_us) {
-            (TraceClock::Firmware, Some(us)) => us,
-            // A late unstamped line in a firmware-clocked trace (or the
-            // reverse) would corrupt the axis; reuse the last moment
-            // instead, which keeps the event without inventing a time.
-            (TraceClock::Firmware, None) => trace.events.last().map(|(t, ..)| *t).unwrap_or(0),
-            (TraceClock::Host, _) => host_now_us(),
-        };
-        for (pin, level) in report.pins {
-            trace.events.push((at, pin, level));
-        }
-        if trace.events.len() > CAP {
-            let drop = trace.events.len() - CAP;
-            trace.events.drain(..drop);
-            trace.truncated = true;
-        }
-    });
+    state
+        .sim
+        .trace
+        .update(|trace| trace.record(report, host_now_us()));
 }
 
 /// Fold one telemetry line into the rolling plot.

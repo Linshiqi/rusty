@@ -359,7 +359,16 @@ pub fn start(window: &AppWindow) {
                     .collect();
                 eprintln!("sim: the dock ends {tail:#?}");
             }
-            // Half a second on: the LED the other way round.
+            // Half a second on: the LED the other way round, and the edges.
+            588 if sim => {
+                shell.invoke_show_panel("bottom".into(), "waves".into());
+                eprintln!(
+                    "sim: waves {:?} lanes {:?} ticks {}",
+                    shell.get_waves_clock(),
+                    shell.get_waves_lanes().iter().map(|l| format!("{} ({} steps)", l.name, l.commands.matches('V').count())).collect::<Vec<_>>(),
+                    shell.get_waves_ticks().row_count()
+                );
+            }
             591 if sim => {
                 snapshot(&window, &dir.join("simulating-2.png"));
                 eprintln!("sim: then {}", app.sim_report());

@@ -1,0 +1,195 @@
+// The Waves panel: one lane per pin, stepped from the run's trace on the
+// time base the trace declares — the firmware's systimer when its reports
+// were stamped, arrival time when they were not, and the header says which.
+// The wheel zooms about the pointer, a drag pans, and while the run goes on
+// the view follows the newest edge until the first pan. Filled by
+// `src/app/waves.rs`.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Shell } from "shell.slint";
+import { ScrollView } from "std-widgets.slint";
+import { IconButton } from "widgets.slint";
+
+export component WavesPanel inherits Rectangle {
+    property <length> label-w: 72px;
+    property <length> lane-h: 30px;
+    property <length> lane-gap: 8px;
+    property <length> axis-h: 22px;
+
+    VerticalLayout {
+        HorizontalLayout {
+            height: 30px;
+            padding-left: 10px;
+            padding-right: 6px;
+            spacing: 10px;
+            Text {
+                text: Shell.waves-clock;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+            }
+            if Shell.waves-capped: Text {
+                text: @tr("misc.waves-capped");
+                color: Theme.amber;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+            }
+            Text {
+                text: Shell.waves-edges;
+                color: Theme.label-4;
+                font-size: Theme.caption;
+                font-family: Theme.mono;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: Icons.chevron-right;
+                tip: @tr("waves.follow");
+                active: Shell.waves-follow;
+                clicked => {
+                    Shell.act("waves.follow");
+                }
+            }
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: Icons.fit;
+                tip: @tr("waves.fit-hint");
+                enabled: Shell.waves-lanes.length > 0;
+                clicked => {
+                    Shell.act("waves.fit");
+                }
+            }
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: Icons.save;
+                tip: @tr("waves.export-hint");
+                enabled: Shell.waves-lanes.length > 0;
+                clicked => {
+                    Shell.act("waves.export");
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        plot := Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            property <length> lanes-w: self.width - root.label-w;
+            changed lanes-w => {
+                Shell.waves-resized(self.lanes-w / 1px);
+            }
+            init => {
+                Shell.waves-resized(self.lanes-w / 1px);
+            }
+
+            if Shell.waves-lanes.length == 0: Text {
+                x: 14px;
+                y: 10px;
+                width: parent.width - 28px;
+                text: @tr("waves.empty");
+                color: Theme.label-3;
+                font-size: Theme.small;
+                wrap: word-wrap;
+            }
+
+            lanes := ScrollView {
+                visible: Shell.waves-lanes.length > 0;
+                content-width: self.width;
+                content-height: root.axis-h + Shell.waves-lanes.length * (root.lane-h + root.lane-gap);
+                // The axis: a line and a time at every tick.
+                for tick in Shell.waves-ticks: Rectangle {
+                    x: root.label-w + tick.at * plot.lanes-w;
+                    y: root.axis-h - 6px;
+                    width: 1px;
+                    height: lanes.content-height - self.y;
+                    background: Theme.line;
+                }
+                for tick in Shell.waves-ticks: Text {
+                    x: root.label-w + tick.at * plot.lanes-w + 3px;
+                    y: 4px;
+                    text: tick.text;
+                    color: Theme.label-4;
+                    font-size: Theme.caption;
+                    font-family: Theme.mono;
+                }
+
+                for lane[index] in Shell.waves-lanes: Rectangle {
+                    y: root.axis-h + index * (root.lane-h + root.lane-gap);
+                    height: root.lane-h;
+                    Text {
+                        x: 8px;
+                        width: root.label-w - 12px;
+                        text: lane.name;
+                        color: Theme.label-2;
+                        font-size: Theme.caption;
+                        font-family: Theme.mono;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Rectangle {
+                        x: root.label-w;
+                        y: parent.height - 4px;
+                        width: plot.lanes-w;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+                    Path {
+                        x: root.label-w - self.stroke-width / 2;
+                        y: -self.stroke-width / 2;
+                        width: plot.lanes-w + self.stroke-width;
+                        height: root.lane-h + self.stroke-width;
+                        viewbox-width: 1000;
+                        viewbox-height: 30;
+                        fit: fill;
+                        commands: lane.commands;
+                        fill: transparent;
+                        stroke: #3ddc84;
+                        stroke-width: 1.8px;
+                    }
+                }
+
+                // Wheel and drag over the lanes; the time under the pointer.
+                touch := TouchArea {
+                    x: root.label-w;
+                    width: plot.lanes-w;
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                            Shell.waves-grab();
+                        }
+                    }
+                    moved => {
+                        Shell.waves-drag((self.mouse-x - self.pressed-x) / plot.lanes-w);
+                    }
+                    scroll-event(event) => {
+                        if (event.delta-y == 0) {
+                            return reject;
+                        }
+                        Shell.waves-zoom(self.mouse-x / plot.lanes-w, event.delta-y > 0 ? 1 / 1.3 : 1.3);
+                        accept
+                    }
+                }
+                if touch.has-hover && Shell.waves-lanes.length > 0: Rectangle {
+                    x: root.label-w + touch.mouse-x;
+                    width: 1px;
+                    background: Theme.amber;
+                    opacity: 0.8;
+                }
+            }
+            // The time under the pointer, at the foot of what is in view.
+            if touch.has-hover && Shell.waves-lanes.length > 0: Text {
+                x: root.label-w + touch.mouse-x + 5px;
+                y: parent.height - 18px;
+                text: Shell.waves-time-at(touch.mouse-x / plot.lanes-w);
+                color: Theme.amber;
+                font-size: Theme.caption;
+                font-family: Theme.mono;
+            }
+        }
+    }
+}

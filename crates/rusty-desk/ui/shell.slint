@@ -231,6 +231,20 @@ export struct BoardControl {
     live: bool,
 }
 
+// A lane of the Waves panel: the pin's name and its steps, a thousand
+// units across the window in time.
+export struct WaveLane {
+    name: string,
+    commands: string,
+}
+
+// A time on the Waves panel's axis: where, as a fraction of the lanes'
+// width, and what it reads.
+export struct WaveTick {
+    at: float,
+    text: string,
+}
+
 // A channel of the Plot panel: its curve in the chart's units, and the
 // legend's row.
 export struct PlotCurve {
@@ -411,6 +425,19 @@ export global Shell {
     // A part pressed or let go, and which key of it; a slider moved.
     callback board-press(int, int, bool);
     callback board-control(int, string, float);
+
+    // The Waves panel.
+    in property <[WaveLane]> waves-lanes;
+    in property <[WaveTick]> waves-ticks;
+    in property <string> waves-clock;
+    in property <string> waves-edges;
+    in property <bool> waves-capped;
+    in property <bool> waves-follow;
+    callback waves-resized(float);
+    callback waves-grab();
+    callback waves-drag(float);
+    callback waves-zoom(float, float);
+    pure callback waves-time-at(float) -> string;
 
     // The Plot panel.
     in property <[PlotCurve]> plot-curves;

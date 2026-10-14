@@ -4,15 +4,7 @@
 use super::*;
 
 pub use rusty_embed::plot::{Plot, TraceClock};
-
-/// A captured pin trace: time-ordered `(µs, pin, level)`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SimTrace {
-    pub events: Vec<(u64, u8, bool)>,
-    pub clock: Option<TraceClock>,
-    /// True when the cap was hit and the oldest events were dropped.
-    pub truncated: bool,
-}
+pub use rusty_embed::waves::Trace as SimTrace;
 
 /// A running simulation: the board, the plot, the trace, the tunables.
 #[derive(Clone, Copy)]
