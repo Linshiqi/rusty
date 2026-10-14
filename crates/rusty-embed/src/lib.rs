@@ -66,6 +66,9 @@ pub mod waves;
 // Space as a view draws it: a camera, a projection, shapes sorted back to
 // front, and what a `rusty-draw` scene puts in it. Pure.
 pub mod scene;
+// The signal lab's arithmetic: what a source plays, the records the
+// instruments read, a sweep. Pure.
+pub mod lab;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,

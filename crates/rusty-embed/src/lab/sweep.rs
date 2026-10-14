@@ -10,8 +10,8 @@
 
 use std::f64::consts::PI;
 
-use rusty_embed::dsp;
-use rusty_embed::signal::{Component, Signal};
+use crate::dsp;
+use crate::signal::{Component, Signal};
 
 use super::record::Record;
 

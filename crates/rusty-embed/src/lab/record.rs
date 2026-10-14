@@ -130,9 +130,9 @@ pub fn from_played(played: &Played, start_us: u64, from: u64, rate: f64, seconds
 
 #[cfg(test)]
 mod tests {
+    use super::super::Source;
     use super::*;
-    use crate::state::Source;
-    use rusty_embed::signal::Signal;
+    use crate::signal::Signal;
 
     /// A channel printed a thousand times a second reads as a kilohertz
     /// record, whatever it holds.

@@ -12,10 +12,7 @@ use rusty_embed::wave::WaveTarget;
 use crate::lab::record::Of;
 use crate::lab::sweep;
 
-/// Conversions kept per pin: a minute of a kilohertz loop. Past it the
-/// oldest go, as a stream's should — what the converter just did is what
-/// somebody is looking at.
-pub const CONVERSIONS_KEPT: usize = 60_000;
+pub use rusty_embed::lab::{Source, Switched, record_conversion};
 
 /// Which of the lab's four instruments is in front.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -32,35 +29,6 @@ pub enum LabView {
     /// A filter chosen and tuned against the signal without running
     /// anything, and its code.
     Design,
-}
-
-/// Where a signal is kept on the sheet: a generator's `signal`, or a sensor
-/// reading's `signal.<reading>`.
-#[derive(Clone, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
-pub struct Source {
-    pub part: String,
-    pub key: String,
-}
-
-impl Source {
-    /// How the lab names it: `V1`, or `U2 · gz` for a sensor's reading.
-    pub fn label(&self) -> String {
-        match self.key.strip_prefix(rusty_embed::generator::SIGNAL_OF) {
-            Some(reading) => format!("{} · {reading}", self.part),
-            None => self.part.clone(),
-        }
-    }
-}
-
-/// The emulator's account of one table being switched, from
-/// `[rusty:wave@<us>]`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Switched {
-    /// When, on the emulator's virtual clock.
-    pub at_us: u64,
-    /// Where sample 0 of what is playing sits on that clock; `None` once
-    /// it stopped.
-    pub start_us: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -151,43 +119,5 @@ impl Lab {
         // The console's channels belong to the firmware that declared them.
         self.console.set(BTreeMap::new());
         self.console_gen.update(|generation| *generation += 1);
-    }
-}
-
-/// One conversion onto a pin's record, the oldest dropped past the cap.
-pub fn record_conversion(record: &mut Vec<(u64, u16)>, at_us: u64, counts: u16) {
-    record.push((at_us, counts));
-    if record.len() > CONVERSIONS_KEPT {
-        let over = record.len() - CONVERSIONS_KEPT;
-        record.drain(..over);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_record_keeps_the_newest_conversions() {
-        let mut record = Vec::new();
-        for n in 0..(CONVERSIONS_KEPT as u64 + 10) {
-            record_conversion(&mut record, n, 1);
-        }
-        assert_eq!(record.len(), CONVERSIONS_KEPT);
-        assert_eq!(record.first().map(|(at, _)| *at), Some(10));
-    }
-
-    #[test]
-    fn a_source_is_named_by_its_part_and_reading() {
-        let generator = Source {
-            part: "V1".into(),
-            key: "signal".into(),
-        };
-        let reading = Source {
-            part: "U2".into(),
-            key: "signal.gz".into(),
-        };
-        assert_eq!(generator.label(), "V1");
-        assert_eq!(reading.label(), "U2 · gz");
     }
 }
