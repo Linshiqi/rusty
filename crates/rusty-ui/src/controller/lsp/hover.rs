@@ -274,7 +274,7 @@ fn worst_at<'d>(
 ) -> Option<(&'d rusty_lsp::FileDiagnostic, (u32, u32))> {
     let mut found: Option<(&rusty_lsp::FileDiagnostic, (u32, u32))> = None;
     for diagnostic in diagnostics {
-        let Some((from, to)) = crate::squiggle::drawn_on(diagnostic, line, text) else {
+        let Some((from, to)) = rusty_lsp::squiggle::drawn_on(diagnostic, line, text) else {
             continue;
         };
         if !(from..to).contains(&col) {

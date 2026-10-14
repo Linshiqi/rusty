@@ -52,7 +52,7 @@ pub use entries::{absolute, copy_entry, delete_entry, move_entry, rename_entry};
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
 #[cfg(feature = "backend")]
-pub use format::format_rust;
+pub use format::{clang_style, format_c, format_rust};
 #[cfg(feature = "backend")]
 pub use modules::scan as scan_unlinked;
 #[cfg(feature = "backend")]

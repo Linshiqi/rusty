@@ -42,7 +42,6 @@ pub struct Document {
     pub history: History,
     pub charset: Charset,
     pub ending: LineEnding,
-    pub language: Option<String>,
     /// Counts every change to the text, so an answer about one text is not
     /// taken for an answer about another.
     pub version: u64,
@@ -78,7 +77,6 @@ impl Document {
             history: History::default(),
             charset,
             ending,
-            language: None,
             version: 0,
             want_x: None,
             paint: None,

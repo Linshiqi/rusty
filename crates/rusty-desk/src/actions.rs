@@ -41,6 +41,13 @@ pub const ALL: &[Action] = &[
         Some("Shift+F3"),
     ),
     action("editor.go-to-line", "menu.view.go-to-line", Some("Ctrl+G")),
+    action("editor.show-hover", "desk.show-hover", None),
+    action("problem.next", "desk.problem-next", Some("F8")),
+    action(
+        "problem.previous",
+        "desk.problem-previous",
+        Some("Shift+F8"),
+    ),
     action("tab.close", "desk.close-tab", Some("Ctrl+W")),
     action("dock.left", "desk.dock-left", Some("Ctrl+B")),
     action("dock.bottom", "desk.dock-bottom", Some("Ctrl+J")),

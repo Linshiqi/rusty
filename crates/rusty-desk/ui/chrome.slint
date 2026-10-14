@@ -10,6 +10,7 @@ import { Shell, PickRow, Note } from "shell.slint";
 component Item inherits Rectangle {
     in property <string> text;
     in property <string> icon;
+    in property <string> tip;
     in property <brush> tint: Theme.label-2;
     callback clicked;
     width: row.preferred-width;
@@ -33,7 +34,23 @@ component Item inherits Rectangle {
     }
     touch := TouchArea {
         clicked => {
+            Tip.shown = false;
             root.clicked();
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && root.tip != "" && !Tip.shown;
+        triggered => {
+            Tip.text = root.tip;
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y - 28px;
+            Tip.shown = true;
         }
     }
 }
@@ -87,7 +104,8 @@ export component StatusBar inherits Rectangle {
         }
         if Shell.server != "": Item {
             text: Shell.server;
-            tint: Theme.label-3;
+            tip: Shell.server-tip;
+            tint: Shell.server-state == 3 ? Theme.crimson : Shell.server-state == 2 ? Theme.amber : Theme.label-3;
         }
     }
     HorizontalLayout {
@@ -248,13 +266,15 @@ export component Picker inherits Rectangle {
 // Notifications, in the corner above the status bar: their text, their
 // action, a close. The newest is nearest the corner.
 export component Notes inherits Rectangle {
+    // A layout places its children itself, an `x` of theirs included: the
+    // column is put in the corner, and the notes fill it.
     VerticalLayout {
+        x: parent.width - self.width;
+        width: 384px;
         alignment: end;
         spacing: 8px;
         padding: 12px;
         for note in Shell.notes: Rectangle {
-            width: 360px;
-            x: parent.width - self.width - 12px;
             height: content.preferred-height;
             border-radius: 9px;
             background: Theme.overlay;

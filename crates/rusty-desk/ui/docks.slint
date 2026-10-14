@@ -5,7 +5,7 @@ import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
 import { IconButton, RowButton, Caption } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
-import { Shell, PanelTab, TreeRow } from "shell.slint";
+import { Shell, PanelTab, TreeRow, ProblemRow } from "shell.slint";
 
 // The row of a dock's panels. A tab is its icon and, in front, its name.
 component DockHeader inherits Rectangle {
@@ -120,6 +120,73 @@ component ProjectTree inherits Rectangle {
     }
 }
 
+// What the language servers found: each file, then its problems, worst
+// first. A click goes to the problem.
+component ProblemsPanel inherits Rectangle {
+    if Shell.problems.length == 0: Text {
+        text: @tr("desk.problems-none");
+        color: Theme.label-3;
+        font-size: Theme.small;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ListView {
+        for row[index] in Shell.problems: RowButton {
+            height: 24px;
+            clicked => {
+                Shell.problem-click(index);
+            }
+            HorizontalLayout {
+                padding-left: row.kind == 0 ? 10px : 30px;
+                padding-right: 10px;
+                spacing: 7px;
+                if row.kind == 0: Icon {
+                    y: (parent.height - self.height) / 2;
+                    path: Icons.files;
+                    size: 13px;
+                    color: Theme.label-3;
+                }
+                if row.kind != 0: Icon {
+                    y: (parent.height - self.height) / 2;
+                    path: row.kind == 1 ? Icons.close : row.kind == 2 ? Icons.warn : Icons.check;
+                    size: 13px;
+                    color: row.kind == 1 ? Theme.crimson : row.kind == 2 ? Theme.amber : Theme.slate;
+                }
+                Text {
+                    text: row.text;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    font-weight: row.kind == 0 ? 600 : 400;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: row.detail;
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if row.kind == 0: Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: count.preferred-width + 12px;
+                    height: 16px;
+                    border-radius: 8px;
+                    background: Theme.hover;
+                    count := Text {
+                        text: row.count;
+                        color: Theme.label-2;
+                        font-size: Theme.caption;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component LeftDock inherits Rectangle {
     background: Theme.sidebar;
     VerticalLayout {
@@ -173,9 +240,7 @@ export component BottomDock inherits Rectangle {
             if Shell.bottom-front == "output": NotYet {
                 name: @tr("dock.tab.output");
             }
-            if Shell.bottom-front == "problems": NotYet {
-                name: @tr("dock.tab.problems");
-            }
+            if Shell.bottom-front == "problems": ProblemsPanel { }
             if Shell.bottom-front == "terminal": NotYet {
                 name: @tr("dock.tab.terminal");
             }

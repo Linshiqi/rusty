@@ -19,17 +19,28 @@ export struct Piece {
 
 // Something drawn on a row behind or under its text: a selection (0), a
 // caret that is not the primary one (1), a match of the find bar's query
-// (2), the match the selection is (3), the scope find searches (4).
+// (2), the match the selection is (3), the scope find searches (4), and a
+// squiggle under what a server found: an error (5), a warning (6),
+// something to know (7), whose line is `path`.
 export struct Mark {
     x: length,
     width: length,
     kind: int,
+    path: string,
 }
 
 export struct Row {
     number: int,
     pieces: [Piece],
     marks: [Mark],
+}
+
+// A problem on the hover card: an error (1), a warning (2), the rest (3),
+// what it says, and who said it.
+export struct HoverProblem {
+    kind: int,
+    text: string,
+    detail: string,
 }
 
 // The document on screen, filled by `src/editor/`.
@@ -51,6 +62,96 @@ export global Code {
     // A press (0), a move while pressed (1), a release (2), on a row, at a
     // point in it, with the modifiers held.
     callback pointer(int /* kind */, int /* row */, length /* x */, length /* y */, KeyboardModifiers);
+
+    // The hover card: over which line, from where along it, how wide, and
+    // what it says — the problems there, the code the server showed, its
+    // documentation.
+    in property <bool> hover-open;
+    in property <int> hover-line;
+    in property <length> hover-x;
+    in property <length> hover-width: 420px;
+    in property <[HoverProblem]> hover-problems;
+    in property <[Row]> hover-code;
+    in property <bool> hover-has-docs;
+    in property <styled-text> hover-docs;
+    // The pointer is on the card, which keeps it.
+    in-out property <bool> on-card;
+    // The pointer moved over a row (or off the rows, at -1), not pressed.
+    callback hovered(int /* row */, length /* x */, length /* y */);
+}
+
+// The card itself: problems first, then the code and its documentation.
+component HoverCard inherits Rectangle {
+    width: Code.hover-width;
+    height: min(column.preferred-height, 360px);
+    background: Theme.overlay;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 14px;
+    drop-shadow-color: #00000040;
+    drop-shadow-offset-y: 3px;
+    clip: true;
+    touch := TouchArea {
+        changed has-hover => {
+            Code.on-card = self.has-hover;
+            if (!self.has-hover) {
+                Code.hovered(-1, 0, 0);
+            }
+        }
+    }
+    column := VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+        for problem in Code.hover-problems: HorizontalLayout {
+            spacing: 8px;
+            Icon {
+                y: 2px;
+                path: problem.kind == 1 ? Icons.close : problem.kind == 2 ? Icons.warn : Icons.check;
+                size: 14px;
+                color: problem.kind == 1 ? Theme.crimson : problem.kind == 2 ? Theme.amber : Theme.slate;
+            }
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: problem.text;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                }
+                if problem.detail != "": Text {
+                    text: problem.detail;
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                }
+            }
+        }
+        if Code.hover-problems.length > 0 && (Code.hover-code.length > 0 || Code.hover-has-docs): Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        if Code.hover-code.length > 0: VerticalLayout {
+            for row in Code.hover-code: Rectangle {
+                height: Code.row-height;
+                for piece in row.pieces: Text {
+                    x: piece.x;
+                    height: parent.height;
+                    text: piece.text;
+                    color: Theme.token(piece.kind);
+                    font-italic: piece.kind == 4;
+                    font-family: Theme.mono;
+                    font-size: Code.font-size;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        if Code.hover-has-docs: StyledText {
+            text: Code.hover-docs;
+            default-color: Theme.label-2;
+            default-font-size: Theme.small;
+            link-color: Theme.slate;
+        }
+    }
 }
 
 // The find bar, filled by `src/editor/` (`find.rs` is its arithmetic).
@@ -422,11 +523,22 @@ export component CodeView inherits Rectangle {
             width: max(list.visible-width, Code.content-width);
             for mark in row.marks: Rectangle {
                 x: root.gutter + mark.x;
-                y: mark.kind == 1 ? 2px : 0;
+                y: mark.kind == 1 ? 2px : mark.kind >= 5 ? parent.height - 4px : 0;
                 // A caret, and a match of nothing (`^`), are a bar.
                 width: mark.kind == 1 ? 2px : max(mark.width, 2px);
-                height: mark.kind == 1 ? parent.height - 4px : parent.height;
-                background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : Theme.text-selection;
+                height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 ? 3px : parent.height;
+                background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind >= 5 ? transparent : Theme.text-selection;
+                // Drawn where the commands say: the default fit scales a
+                // path into its box less the stroke, and a wave 3 px tall
+                // shrank to two thirds of its width, centred.
+                if mark.kind >= 5: Path {
+                    width: parent.width;
+                    height: parent.height;
+                    fit: preserve;
+                    commands: mark.path;
+                    stroke: mark.kind == 5 ? Theme.crimson : mark.kind == 6 ? Theme.amber : Theme.slate;
+                    stroke-width: 1px;
+                }
             }
             Text {
                 x: 0;
@@ -464,6 +576,13 @@ export component CodeView inherits Rectangle {
                 moved => {
                     if (self.pressed) {
                         Code.pointer(1, index, self.mouse-x - root.gutter, self.mouse-y, {});
+                    } else {
+                        Code.hovered(index, self.mouse-x - root.gutter, self.mouse-y);
+                    }
+                }
+                changed has-hover => {
+                    if (!self.has-hover) {
+                        Code.hovered(-1, 0, 0);
                     }
                 }
             }
@@ -510,6 +629,14 @@ export component CodeView inherits Rectangle {
                 self.text = "";
             }
         }
+    }
+
+    // Above the line it is about, or below it when there is no room above;
+    // never past the view's right edge.
+    if Code.hover-open: HoverCard {
+        property <length> line-top: Code.hover-line * Code.row-height + list.content-y;
+        x: max(4px, min(root.gutter + Code.hover-x + list.content-x, root.width - self.width - 12px));
+        y: self.line-top - self.height - 2px >= 0 ? self.line-top - self.height - 2px : self.line-top + Code.row-height + 2px;
     }
 
     bar := FindBar {

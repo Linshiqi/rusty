@@ -271,17 +271,6 @@ pub fn commented(text: &str, cursors: &[Cursor], marker: &str) -> Option<(String
     changed.then_some((out, after))
 }
 
-/// The line comment of a language, by the name the painting gives it.
-pub fn comment_marker(language: &str) -> Option<&'static str> {
-    match language.to_ascii_lowercase().as_str() {
-        "rust" | "c" | "c++" | "cpp" | "javascript" | "json" | "go" | "java" => Some("//"),
-        "toml" | "python" | "yaml" | "makefile" | "shell" | "bourne again shell (bash)" => {
-            Some("#")
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

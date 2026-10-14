@@ -194,6 +194,13 @@ tests green, and CLAUDE.md saying how it works.
    per feature: rustfmt for Rust, clang-format for C and C++ only where the
    project carries a `.clang-format` (a style imposed on vendor code is a
    diff nobody asked for).
+   *Done so far:* the language table; the servers started with the
+   project, told every open, edit, save and close in the order they
+   happened; what they found squiggled, counted in the status bar, listed
+   in Problems and stepped through with F8; the hover card with the
+   problems under the pointer and the server's signature and docs;
+   clang-format on save — proven on a Cargo project with rust-analyzer and
+   a CMake one with clangd.
 4. **The project is a part.** Opening a folder runs detection —
    Cargo, PlatformIO or CMake; the chip, from wherever that build system
    says it; what the machine lacks to build it — and the window says it:

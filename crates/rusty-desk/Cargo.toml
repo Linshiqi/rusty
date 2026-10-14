@@ -17,6 +17,7 @@ slint = "1.18.1"
 rusty-edit = { path = "../rusty-edit" }
 rusty-embed = { path = "../rusty-embed" }
 rusty-i18n = { path = "../rusty-i18n" }
+rusty-lsp = { path = "../rusty-lsp" }
 rfd = "0.16.0"
 arboard = "3.6.1"
 regex = "1.13.1"

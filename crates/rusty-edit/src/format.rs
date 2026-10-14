@@ -1,4 +1,5 @@
-//! rustfmt over stdin, for format-on-save.
+//! rustfmt over stdin, for format-on-save — and clang-format for C and
+//! C++, where the project carries a style for it.
 //!
 //! The binary is resolved the same wary way rust-analyzer's is: `rustup`'s
 //! `rustfmt` proxy dispatches by the project's pinned toolchain, and an ESP
@@ -81,6 +82,87 @@ pub fn format_rust(root: &Path, rel_path: &str, text: &str) -> Result<Formatted>
         return Err(Error::Format { message: reason });
     }
 
+    let formatted = String::from_utf8_lossy(&output.stdout).into_owned();
+    Ok(Formatted {
+        changed: formatted != text,
+        text: formatted,
+    })
+}
+
+/// The style file clang-format would read for `rel_path`: a `.clang-format`
+/// or `_clang-format` in the file's folder or one above it, up to `root`
+/// and no further — a style somewhere above the project is somebody
+/// else's.
+pub fn clang_style(root: &Path, rel_path: &str) -> Option<std::path::PathBuf> {
+    let mut dir = Path::new(rel_path).parent();
+    while let Some(current) = dir {
+        for name in [".clang-format", "_clang-format"] {
+            let candidate = root.join(current).join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+/// Run C or C++ through clang-format, in the style the project carries.
+///
+/// Only where it carries one ([`clang_style`]): C has no house style, and a
+/// vendor's file rewritten in a style rusty chose is a diff nobody asked
+/// for, so without one the text comes back as it went in and nothing runs.
+/// `--assume-filename` gives clang-format the file's own name, so a style's
+/// per-language sections apply as they would to the file on disk.
+pub fn format_c(root: &Path, rel_path: &str, text: &str) -> Result<Formatted> {
+    if clang_style(root, rel_path).is_none() {
+        return Ok(Formatted {
+            changed: false,
+            text: text.to_string(),
+        });
+    }
+    let mut command = Command::new("clang-format");
+    command
+        .arg("-style=file")
+        .arg(format!(
+            "--assume-filename={}",
+            root.join(rel_path).display()
+        ))
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    no_window(&mut command);
+    let mut child = command.spawn().map_err(|source| Error::Format {
+        message: if source.kind() == std::io::ErrorKind::NotFound {
+            "the project has a .clang-format and clang-format is not installed — \
+             install LLVM's clang-format and put it on PATH"
+                .to_string()
+        } else {
+            format!("clang-format could not start: {source}")
+        },
+    })?;
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|source| Error::Format {
+                message: format!("clang-format stopped reading: {source}"),
+            })?;
+    }
+    let output = child.wait_with_output().map_err(|source| Error::Format {
+        message: format!("clang-format did not finish: {source}"),
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("clang-format failed")
+            .to_string();
+        return Err(Error::Format { message: reason });
+    }
     let formatted = String::from_utf8_lossy(&output.stdout).into_owned();
     Ok(Formatted {
         changed: formatted != text,
@@ -215,6 +297,28 @@ mod tests {
             eprintln!("skipping: rustfmt is not installed on this machine");
         }
         present
+    }
+
+    /// A style is the project's, found up the folders from the file and
+    /// not above the root; without one, C is saved exactly as typed and
+    /// clang-format is never asked.
+    #[test]
+    fn c_is_formatted_only_in_the_style_the_project_carries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = dir.path().join("firmware");
+        std::fs::create_dir_all(project.join("src/drivers")).expect("folders");
+        // Above the project: not its style.
+        std::fs::write(dir.path().join(".clang-format"), "BasedOnStyle: LLVM\n").expect("style");
+        assert_eq!(clang_style(&project, "src/drivers/gpio.c"), None);
+        let messy = "int  main( ){return 0;}\n";
+        let kept = format_c(&project, "src/drivers/gpio.c", messy).expect("no style, no run");
+        assert!(!kept.changed);
+        assert_eq!(kept.text, messy);
+        std::fs::write(project.join("src/_clang-format"), "BasedOnStyle: LLVM\n").expect("style");
+        assert_eq!(
+            clang_style(&project, "src/drivers/gpio.c"),
+            Some(project.join("src/_clang-format"))
+        );
     }
 
     #[test]

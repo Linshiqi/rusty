@@ -17,12 +17,16 @@ mod document;
 mod find;
 mod finding;
 mod history;
+mod hover;
 mod indent;
 mod keymap;
 mod lineops;
 mod lines;
 mod metrics;
 mod pairs;
+mod problems;
+
+pub use problems::is_problem;
 mod rows;
 
 use std::{
@@ -40,7 +44,11 @@ use rusty_edit::{
 };
 use slint::{ComponentHandle, ModelRc};
 
-use crate::{AppWindow, Code, Find, work};
+use crate::{
+    AppWindow, Code, Find, language,
+    lsp::{Problems, Servers},
+    work,
+};
 use cursors::Cursor;
 use document::Change;
 pub use document::Document;
@@ -108,14 +116,30 @@ pub struct Surface {
     /// The find bar, and what it found, which the rows draw.
     finding: RefCell<finding::Finding>,
     found: Rc<RefCell<find::Marks>>,
+    /// The servers told about every document, and what they found.
+    servers: Rc<Servers>,
+    problems: Problems,
+    /// The lines squiggles are drawn on in the document on screen.
+    squiggled: RefCell<Vec<usize>>,
+    hovering: hover::Hovering,
 }
 
 impl Surface {
-    pub fn new(window: &AppWindow, files: Arc<Files>) -> Rc<Surface> {
+    pub fn new(
+        window: &AppWindow,
+        files: Arc<Files>,
+        servers: Rc<Servers>,
+        problems: Problems,
+    ) -> Rc<Surface> {
         let current: Shared = Rc::default();
         let metrics = Rc::new(RefCell::new(Metrics::measure(window)));
         let found: Rc<RefCell<find::Marks>> = Rc::default();
-        let rows = Rc::new(Rows::new(current.clone(), metrics.clone(), found.clone()));
+        let rows = Rc::new(Rows::new(
+            current.clone(),
+            metrics.clone(),
+            found.clone(),
+            problems.clone(),
+        ));
         window
             .global::<Code>()
             .set_rows(ModelRc::from(rows.clone()));
@@ -136,6 +160,10 @@ impl Surface {
             widest: Cell::new(0.0),
             finding: RefCell::default(),
             found,
+            servers,
+            problems,
+            squiggled: RefCell::default(),
+            hovering: hover::Hovering::default(),
         });
         surface.wire(window);
         surface
@@ -244,6 +272,7 @@ impl Surface {
         } else {
             self.paint(doc);
             let path = doc.borrow().path.clone();
+            self.servers.changed(&path, &doc.borrow().text);
             self.tell_edit(&path);
         }
     }
@@ -253,6 +282,7 @@ impl Surface {
         if let Some(doc) = self.open.borrow().get(path) {
             doc.borrow_mut().mark_saved(text);
         }
+        self.servers.saved(path);
         self.tell_edit(path);
     }
 
@@ -270,6 +300,7 @@ impl Surface {
             self.metrics.borrow_mut().learn(&window, &document.text);
         }
         let path = document.path.clone();
+        self.servers.opened(&path, &document.text);
         let doc = Rc::new(RefCell::new(document));
         self.open.borrow_mut().insert(path, doc.clone());
         self.paint(&doc);
@@ -282,6 +313,7 @@ impl Surface {
         self.widest.set(self.metrics.borrow().widest(&doc.borrow()));
         *self.current.borrow_mut() = Some(doc);
         *self.marked.borrow_mut() = 0..0;
+        self.squiggled.borrow_mut().clear();
         self.finding.borrow_mut().scope = None;
         self.research(None);
         self.rows.reset();
@@ -305,7 +337,9 @@ impl Surface {
     }
 
     pub fn close(&self, path: &str) {
-        self.open.borrow_mut().remove(path);
+        if self.open.borrow_mut().remove(path).is_some() {
+            self.servers.closed(path);
+        }
         let showing = self
             .current
             .borrow()
@@ -378,9 +412,11 @@ impl Surface {
     fn wire(self: &Rc<Self>, window: &AppWindow) {
         self.wire_find(&window.global::<Find>());
         let code = window.global::<Code>();
+        self.wire_hover(&code);
         let this = Rc::downgrade(self);
         code.on_typed(move |text| {
             if let Some(this) = this.upgrade() {
+                this.hide_hover();
                 this.type_text(&text);
             }
         });
@@ -390,6 +426,8 @@ impl Surface {
                 return false;
             };
             let m = event.modifiers;
+            // Any key puts the card away: it is about the text as it was.
+            this.hide_hover();
             let page = this.page();
             match keymap::command(&event.text, m.control || m.meta, m.alt, m.shift, page) {
                 Some(command) if this.doc().is_some() => {
@@ -602,8 +640,9 @@ impl Surface {
                 None
             }
             Command::ToggleComment => {
-                let language = doc.borrow().language.clone().unwrap_or_default();
-                lineops::comment_marker(&language)
+                let path = doc.borrow().path.clone();
+                language::of(&path)
+                    .and_then(|language| language.comment)
                     .and_then(|marker| lineops::commented(&text, &cursors, marker))
                     .map(|(t, c)| (t, c, Kind::Other))
             }
@@ -729,6 +768,9 @@ impl Surface {
             let col = self.metrics.borrow().column_at(text, x.max(0.0));
             (line, d.lines.byte(&d.text, line, col))
         };
+        if kind == 0 {
+            self.hide_hover();
+        }
         match kind {
             0 => self.press(&doc, line, x, at, shift, alt),
             1 => self.drag_to(&doc, at),
@@ -856,6 +898,7 @@ impl Surface {
         }
         self.paint(doc);
         let path = doc.borrow().path.clone();
+        self.servers.changed(&path, &doc.borrow().text);
         self.tell_edit(&path);
         self.research(Some(change));
         self.cursors_moved();
@@ -1045,22 +1088,4 @@ fn clipboard_set(text: &str) {
 
 fn clipboard_get() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
-}
-
-/// A document's language as the status bar and the comment toggle name
-/// it, by the file's extension.
-pub fn language_of(path: &str) -> Option<&'static str> {
-    Some(match path.rsplit('.').next()? {
-        "rs" => "Rust",
-        "toml" => "TOML",
-        "md" => "Markdown",
-        "c" | "h" => "C",
-        "cpp" | "cc" | "hpp" | "cxx" => "C++",
-        "json" => "JSON",
-        "py" => "Python",
-        "sh" => "Shell",
-        "yml" | "yaml" => "YAML",
-        "x" | "ld" => "Linker script",
-        _ => return None,
-    })
 }

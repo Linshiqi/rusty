@@ -7635,6 +7635,7 @@ dependencies = [
  "rusty-edit",
  "rusty-embed",
  "rusty-i18n",
+ "rusty-lsp",
  "slint",
  "slint-build",
  "sys-locale",

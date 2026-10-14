@@ -10,15 +10,18 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rusty_edit::{Line, Token};
+use rusty_lsp::DiagSeverity;
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
 use super::{Document, Metrics, Shared, find};
+use crate::lsp::Problems;
 use crate::{Mark, Piece, Row};
 
 pub struct Rows {
     doc: Shared,
     metrics: Rc<RefCell<Metrics>>,
     found: Rc<RefCell<find::Marks>>,
+    problems: Problems,
     notify: ModelNotify,
 }
 
@@ -27,11 +30,13 @@ impl Rows {
         doc: Shared,
         metrics: Rc<RefCell<Metrics>>,
         found: Rc<RefCell<find::Marks>>,
+        problems: Problems,
     ) -> Rows {
         Rows {
             doc,
             metrics,
             found,
+            problems,
             notify: ModelNotify::default(),
         }
     }
@@ -91,6 +96,10 @@ impl Model for Rows {
                 &doc,
                 &metrics,
                 &self.found.borrow(),
+                self.problems
+                    .borrow()
+                    .get(&doc.path)
+                    .map_or(&[][..], Vec::as_slice),
                 row,
             ))),
         })
@@ -101,11 +110,18 @@ impl Model for Rows {
     }
 }
 
-/// What is drawn behind `row`'s text, back to front: find's scope and its
-/// matches, the selections crossing it, and the carets on it but the
-/// primary one. A span that carries on past the line's end takes a space's
-/// width there, as every editor shows the line break it holds.
-fn marks(doc: &Document, metrics: &Metrics, found: &find::Marks, row: usize) -> Vec<Mark> {
+/// What is drawn on `row` besides its text, back to front: find's scope
+/// and its matches, the selections crossing it, the squiggles of what the
+/// servers found, and the carets on it but the primary one. A span that
+/// carries on past the line's end takes a space's width there, as every
+/// editor shows the line break it holds.
+fn marks(
+    doc: &Document,
+    metrics: &Metrics,
+    found: &find::Marks,
+    problems: &[rusty_lsp::FileDiagnostic],
+    row: usize,
+) -> Vec<Mark> {
     let (start, end) = (doc.lines.start(row), doc.lines.end(row));
     let text = doc.lines.text(&doc.text, row);
     let x_at = |at: usize| metrics.x_of(text, text[..at - start].chars().count());
@@ -118,7 +134,9 @@ fn marks(doc: &Document, metrics: &Metrics, found: &find::Marks, row: usize) -> 
         let x = x_at(a);
         let past = to > end;
         let width = x_at(b) - x + if past { metrics.ascii() } else { 0.0 };
-        marks.push(Mark { x, width, kind });
+        if kind > 1 || width > 0.0 {
+            marks.push(mark(x, width, kind));
+        }
     };
     if let Some((from, to)) = found.scope {
         span(from, to, 4);
@@ -127,26 +145,81 @@ fn marks(doc: &Document, metrics: &Metrics, found: &find::Marks, row: usize) -> 
         let (from, to) = found.matches[at];
         span(from, to, if found.current == Some(at) { 3 } else { 2 });
     }
-    for (index, cursor) in doc.cursors.iter().enumerate() {
+    for cursor in &doc.cursors {
         if !cursor.is_caret() && cursor.start() <= end && cursor.end() > start {
-            let from = cursor.start().max(start);
-            let to = cursor.end().min(end);
-            let past = cursor.end() > end;
-            let x = x_at(from);
-            let width = x_at(to) - x + if past { metrics.ascii() } else { 0.0 };
-            if width > 0.0 {
-                marks.push(Mark { x, width, kind: 0 });
-            }
+            span(cursor.start(), cursor.end(), 0);
         }
+    }
+    // Worst last, so an error is drawn over the warning it shares a word
+    // with; hints are not problems, and are not drawn.
+    let mut squiggles: Vec<(rusty_lsp::DiagSeverity, f32, f32)> = problems
+        .iter()
+        .filter(|d| d.severity != DiagSeverity::Hint)
+        .filter_map(|d| {
+            let (from, to) = rusty_lsp::squiggle::drawn_on(d, row as u32, text)?;
+            let count = text.chars().count();
+            let x = metrics.x_of(text, from as usize);
+            // One past the line's end is a cell after everything on it.
+            let past = (to as usize).saturating_sub(count) as f32 * metrics.ascii();
+            let width = metrics.x_of(text, to as usize) + past - x;
+            Some((d.severity, x, width))
+        })
+        .collect();
+    squiggles.sort_by_key(|(severity, ..)| std::cmp::Reverse(*severity));
+    for (severity, x, width) in squiggles {
+        let kind = match severity {
+            DiagSeverity::Error => 5,
+            DiagSeverity::Warning => 6,
+            _ => 7,
+        };
+        marks.push(Mark {
+            path: SharedString::from(wave(width)),
+            ..mark(x, width, kind)
+        });
+    }
+    for (index, cursor) in doc.cursors.iter().enumerate() {
         if index > 0 && cursor.head >= start && cursor.head <= end {
-            marks.push(Mark {
-                x: x_at(cursor.head),
-                width: 0.0,
-                kind: 1,
-            });
+            marks.push(mark(x_at(cursor.head), 0.0, 1));
         }
     }
     marks
+}
+
+fn mark(x: f32, width: f32, kind: i32) -> Mark {
+    Mark {
+        x,
+        width,
+        kind,
+        path: SharedString::new(),
+    }
+}
+
+/// A squiggle's line: up and down every two pixels across `width`, in a
+/// box three pixels tall.
+fn wave(width: f32) -> String {
+    use std::fmt::Write;
+    let mut path = String::from("M 0 2.5");
+    let (mut x, mut up) = (0.0, true);
+    while x < width {
+        x = (x + 2.0f32).min(width);
+        let _ = write!(path, " L {x:.1} {}", if up { 0.5 } else { 2.5 });
+        up = !up;
+    }
+    path
+}
+
+/// A painted line drawn on its own, as the hover card draws a signature:
+/// its pieces placed as the editor places code, and nothing behind them.
+pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
+    let pieces = place(
+        metrics,
+        line.spans.iter().map(|s| (s.text.as_str(), s.token)),
+    );
+    Row {
+        number: 0,
+        pieces: ModelRc::new(VecModel::from(pieces)),
+        marks: ModelRc::default(),
+    }
 }
 
 /// Whether a painted line is the text on screen — a line typed on since its
