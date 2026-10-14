@@ -188,8 +188,7 @@ tests green, and CLAUDE.md saying how it works.
    C++, and both in one Cargo project whose build script compiles C —
    `rusty-lsp` already routes by `ServerKind` and runs the companion; the
    window gets diagnostics, completion, hover, signature, definition and
-   references, code actions and rename, inlay hints and semantic colours
-   through one door for all three. What a language is — its extensions, its
+   references, code actions and rename through one door for all three. What a language is — its extensions, its
    server, its comment marker, its formatter — is one table, not a `match`
    per feature: rustfmt for Rust, clang-format for C and C++ only where the
    project carries a `.clang-format` (a style imposed on vendor code is a
@@ -206,7 +205,10 @@ tests green, and CLAUDE.md saying how it works.
    implementations in the picker, Alt+Left and Alt+Right through the jumps,
    Ctrl+. for the server's fixes, F2 to rename across the project;
    clang-format on save — proven on a Cargo project with rust-analyzer and
-   a CMake one with clangd.
+   a CMake one with clangd. Inlay hints and semantic colours moved to the
+   editor's depth (8): the painter already colours all three languages, and
+   a hint inside a line moves every caret and click after it — the hardest
+   geometry an editor has, for polish rather than for writing code.
 4. **The project is a part.** Opening a folder runs detection —
    Cargo, PlatformIO or CMake; the chip, from wherever that build system
    says it; what the machine lacks to build it — and the window says it:
@@ -230,7 +232,8 @@ tests green, and CLAUDE.md saying how it works.
    disk and memory, the terminal, the assistant and its tools, Markdown
    pages.
 8. **The editor's depth**, now that everything it is for exists: folding,
-   sticky scroll, the minimap, indent guides, test lenses, Vim, two groups.
+   sticky scroll, the minimap, indent guides, test lenses, inlay hints,
+   semantic colours, Vim, two groups.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
