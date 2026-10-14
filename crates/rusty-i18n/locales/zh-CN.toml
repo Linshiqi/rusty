@@ -1887,6 +1887,11 @@ yaw = "偏航"
 instrument = "机头高于地平线 {nose} · 右翼下沉 {bank} · 航向 {heading}"
 
 [desk]
+git-no-diff = "没有可显示的差异。"
+git-drop-confirm = "丢弃 {name}？\n丢弃后其中的改动就没有了。"
+git-commit-staged = "提交已暂存的内容"
+git-message = "提交信息"
+git-amend-on = "正在修改上一次提交"
 terminal-restart = "再开一个 shell"
 search-found = "{files} 个文件中有 {hits} 处匹配"
 search-first = "只列出前面的：{said}"

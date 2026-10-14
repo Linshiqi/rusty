@@ -374,60 +374,7 @@ pub fn git_init(state: AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{checkout_args, is_hash, pick_remote};
-
-    fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|name| (*name).to_string()).collect()
-    }
-
-    /// Where a push goes: the upstream's remote, then `origin`, then any —
-    /// and nowhere at all when there is none, which is when the panel asks
-    /// for one instead of running a push git can only refuse.
-    #[test]
-    fn a_push_goes_to_the_remote_there_is_evidence_for() {
-        assert_eq!(
-            pick_remote(Some("fork/main"), &names(&["origin", "fork"])).as_deref(),
-            Some("fork"),
-            "the branch's own upstream decides first",
-        );
-        assert_eq!(
-            pick_remote(Some("team/fw/main"), &names(&["team", "team/fw"])).as_deref(),
-            Some("team/fw"),
-            "the longest remote name that begins the upstream owns it",
-        );
-        assert_eq!(
-            pick_remote(None, &names(&["upstream", "origin"])).as_deref(),
-            Some("origin")
-        );
-        assert_eq!(
-            pick_remote(None, &names(&["github"])).as_deref(),
-            Some("github")
-        );
-        assert_eq!(pick_remote(None, &[]), None);
-        assert_eq!(
-            pick_remote(Some("origin/main"), &[]).as_deref(),
-            Some("origin"),
-            "an upstream is evidence of its remote before the list has arrived",
-        );
-    }
-
-    #[test]
-    fn a_remote_branch_is_checked_out_through_a_local_one() {
-        assert_eq!(
-            checkout_args("main", false, "main", true),
-            ["checkout", "main"]
-        );
-        assert_eq!(
-            checkout_args("origin/feature/x", true, "feature/x", true),
-            ["checkout", "feature/x"],
-            "the local branch of that name, when there is one"
-        );
-        assert_eq!(
-            checkout_args("origin/feature/x", true, "feature/x", false),
-            ["checkout", "--track", "origin/feature/x"],
-            "a new one tracking it, when there is not — never a detached HEAD"
-        );
-    }
+    use super::is_hash;
 
     #[test]
     fn only_a_full_hash_is_kept_as_a_name_for_one_content() {

@@ -408,3 +408,72 @@ export component Tooltip inherits Rectangle {
         vertical-alignment: center;
     }
 }
+
+// A right-click menu, over everything: a click outside it or Escape puts it
+// away, a row picks. Filled by whichever surface was clicked (`src/app/menu.rs`).
+export component ContextMenu inherits Rectangle {
+    TouchArea {
+        clicked => {
+            Shell.menu-dismissed();
+        }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                Shell.menu-dismissed();
+            }
+        }
+    }
+    keys := FocusScope {
+        init => {
+            self.focus();
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                Shell.menu-dismissed();
+                return accept;
+            }
+            reject
+        }
+    }
+    card := Rectangle {
+        x: max(4px, min(Shell.menu-x, root.width - self.width - 4px));
+        y: max(4px, min(Shell.menu-y, root.height - self.height - 4px));
+        width: max(200px, column.preferred-width);
+        height: column.preferred-height;
+        border-radius: 8px;
+        background: Theme.overlay;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+        drop-shadow-blur: 14px;
+        drop-shadow-color: #00000050;
+        // Presses on the card are the card's, not the dismissal's.
+        TouchArea { }
+        column := VerticalLayout {
+            padding: 4px;
+            for item in Shell.menu-items: Rectangle {
+                height: item.id == "" ? 9px : 26px;
+                border-radius: 5px;
+                background: item.id != "" && touch.has-hover ? (item.danger ? Theme.crimson-fill : Theme.hover) : transparent;
+                if item.id == "": Rectangle {
+                    y: 4px;
+                    height: 1px;
+                    background: Theme.line;
+                }
+                if item.id != "": Text {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    text: item.label;
+                    color: item.danger ? Theme.crimson : Theme.label;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                touch := TouchArea {
+                    enabled: item.id != "";
+                    clicked => {
+                        Shell.menu-picked(item.id);
+                    }
+                }
+            }
+        }
+    }
+}
