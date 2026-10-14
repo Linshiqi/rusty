@@ -288,6 +288,72 @@ export struct LabParam {
     text: string,
 }
 
+// A figure about the workspace.
+export struct CrateVital {
+    label: string,
+    value: string,
+    hint: string,
+}
+
+// A direct dependency against crates.io.
+export struct CrateDep {
+    name: string,
+    current: string,
+    latest: string,
+    note: string,
+    behind: bool,
+}
+
+// A crate resolved at more than one version, a line per version saying who
+// pulled it in.
+export struct CrateDup {
+    name: string,
+    versions: string,
+    unifiable: bool,
+}
+
+export struct FeatPackage {
+    name: string,
+    count: int,
+    chosen: bool,
+}
+
+// A feature's switch, and what flipping it alone changes (tone 0 nothing,
+// 1 fewer crates, 2 more).
+export struct FeatRow {
+    name: string,
+    enabled: bool,
+    in-default: bool,
+    enables: string,
+    delta: string,
+    tone: int,
+}
+
+// A build tree: its size, what of it is stale and why, and its verbs.
+export struct DiskTree {
+    index: int,
+    label: string,
+    size: string,
+    stale: string,
+    has-stale: bool,
+    reasons: string,
+    locked: bool,
+    incremental: string,
+}
+
+export struct DiskItemRow {
+    index: int,
+    name: string,
+    size: string,
+    removable: bool,
+    cache: bool,
+}
+
+export struct DiskIdle {
+    days: int,
+    label: string,
+}
+
 // A build the Memory page can measure.
 export struct MemBuild {
     path: string,
@@ -740,6 +806,54 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // The Crates page.
+    in property <int> crates-state;
+    in property <string> crates-problem;
+    in property <string> crates-title;
+    in property <[CrateVital]> crates-vitals;
+    in property <bool> crates-asking;
+    in property <bool> crates-asked;
+    in property <[CrateDep]> crates-deps;
+    in property <[CrateDup]> crates-dups;
+    in property <[FeatPackage]> feat-packages;
+    in property <bool> feat-defaults;
+    in property <string> feat-none;
+    in property <[FeatRow]> feat-rows;
+    in property <bool> feat-ready;
+    in property <string> feat-resolved;
+    in property <string> feat-baseline;
+    in property <string> feat-delta;
+    in property <string> feat-units;
+    in property <string> feat-added;
+    in property <string> feat-removed;
+    in property <bool> disk-ready;
+    in property <bool> disk-busy;
+    in property <bool> disk-low;
+    in property <string> disk-volume;
+    in property <string> disk-dir;
+    in property <string> disk-total;
+    in property <string> disk-stale;
+    in property <bool> disk-locked;
+    in property <[DiskTree]> disk-trees;
+    in property <[DiskItemRow]> disk-extras;
+    in property <[DiskItemRow]> disk-caches;
+    in property <int> disk-idle;
+    in property <[DiskIdle]> disk-idle-options;
+    in property <bool> disk-auto;
+    in property <string> disk-share;
+    in property <string> disk-share-where;
+    in property <string> disk-debuginfo;
+    in property <[string]> disk-warnings;
+    callback crates-upgrade(string, string);
+    callback feat-pick(string);
+    callback feat-toggle(string);
+    callback disk-tree(string, int);
+    callback disk-item(int, bool);
+    callback disk-idle-set(int);
+    callback disk-auto-set(bool);
+    // Text onto the clipboard, from anywhere.
+    callback copy-text(string);
 
     // The Memory page.
     in property <int> mem-state;

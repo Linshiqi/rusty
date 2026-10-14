@@ -425,6 +425,17 @@ tests green, and CLAUDE.md saying how it works.
    bytes; every crate's share with a bar against the largest; the sections.
    A build re-measures a page that has been looked at. Proven on
    `examples/blink-rust`: 15.6 KB of flash, `esp_hal` the largest crate.
+   Crates, a page: the workspace's figures, its direct dependencies against
+   crates.io (asked on the button, one request per crate) with Upgrade as
+   a `cargo add` in the dock, the duplicate versions with who pulled each
+   in, a switch per feature with what flipping it alone changes, and the
+   build directory — its trees, what in them is stale and why, a sweep, the
+   incremental caches dropped, a tree or a cache removed after asking, the
+   idle threshold, the auto-sweep switch (now run after a build that
+   succeeds), and the shared `target-dir` snippet to copy. The analysis is
+   loaded the first time the page shows. Proven on `examples/blink-rust`
+   (139 dependencies, 13 duplicated, 1.9 GB of build trees) and on a crate
+   with features, one flipped.
 8. **The editor's depth**, now that everything it is for exists: folding,
    sticky scroll, the minimap, indent guides, test lenses, inlay hints,
    semantic colours, Vim, two groups.

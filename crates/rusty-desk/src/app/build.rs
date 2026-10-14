@@ -220,6 +220,7 @@ impl App {
                     app.weighed(size);
                 }
                 app.memory_after_build();
+                app.disk_auto_sweep();
                 then(app, true);
             },
         );

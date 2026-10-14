@@ -1,0 +1,696 @@
+// The Crates page: the workspace's vitals, its direct dependencies against
+// crates.io, the duplicate versions and who pulled them in, a switch per
+// feature with what flipping it costs, and the build directory with what in
+// it is stale. Filled by `src/app/crates.rs`.
+
+import { ScrollView, Switch, CheckBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Shell } from "shell.slint";
+import { Button, Caption, IconButton } from "widgets.slint";
+
+// A section's heading, with its verb on the right.
+component Heading inherits HorizontalLayout {
+    in property <string> title;
+    height: 30px;
+    spacing: 6px;
+    Text {
+        text: root.title;
+        color: Theme.label;
+        font-size: Theme.body;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+    }
+    @children
+}
+
+// A box of words a person copies into a file of their own.
+component Snippet inherits Rectangle {
+    in property <string> advice;
+    in property <string> code;
+    in property <string> place;
+    border-radius: 8px;
+    background: Theme.sunken;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        Text {
+            text: root.advice;
+            color: Theme.label-2;
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+        Text {
+            text: root.code;
+            color: Theme.label;
+            font-family: Theme.mono;
+            font-size: Theme.small;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Button {
+                text: @tr("disk.copy");
+                clicked => {
+                    Shell.copy-text(root.code);
+                }
+            }
+            Text {
+                text: root.place;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+export component CratesPage inherits Rectangle {
+    background: Theme.content;
+    init => {
+        Shell.act("crates.shown");
+    }
+
+    if Shell.crates-state == 0: Text {
+        x: 24px;
+        y: 24px;
+        text: @tr("crates.no-project-detail");
+        color: Theme.label-2;
+        font-size: Theme.small;
+    }
+
+    if Shell.crates-state != 0: ScrollView {
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+            alignment: start;
+
+            // ---- the workspace ----
+            if Shell.crates-state == 1: Text {
+                text: @tr("desk.crates-loading");
+                color: Theme.label-3;
+                font-size: Theme.small;
+            }
+            if Shell.crates-state == 3: VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: @tr("features.no-analysis-title");
+                    color: Theme.label;
+                    font-weight: 600;
+                }
+                Text {
+                    text: Shell.crates-problem;
+                    color: Theme.crimson;
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                }
+            }
+            if Shell.crates-state == 2: Heading {
+                title: Shell.crates-title;
+                IconButton {
+                    icon: Icons.refresh;
+                    tip: @tr("desk.crates-reload");
+                    clicked => {
+                        Shell.act("crates.reload");
+                    }
+                }
+            }
+            if Shell.crates-state == 2: HorizontalLayout {
+                spacing: 10px;
+                for vital in Shell.crates-vitals: Rectangle {
+                    border-radius: 8px;
+                    background: Theme.raised;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 2px;
+                        Caption {
+                            text: vital.label;
+                        }
+                        Text {
+                            text: vital.value;
+                            color: Theme.label;
+                            font-size: 22px;
+                            font-weight: 600;
+                            font-family: Theme.mono;
+                        }
+                        Text {
+                            text: vital.hint;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // ---- direct dependencies against crates.io ----
+            if Shell.crates-state == 2: Heading {
+                title: @tr("crates.direct");
+                IconButton {
+                    icon: Icons.refresh;
+                    tip: @tr("crates.refresh");
+                    enabled: !Shell.crates-asking;
+                    clicked => {
+                        Shell.act("crates.ask");
+                    }
+                }
+            }
+            if Shell.crates-state == 2 && !Shell.crates-asked: Text {
+                text: Shell.crates-asking ? @tr("crates.asking") : @tr("desk.crates-ask-hint");
+                color: Theme.label-3;
+                font-size: Theme.small;
+                wrap: word-wrap;
+            }
+            if Shell.crates-asked && Shell.crates-deps.length == 0: Text {
+                text: @tr("crates.none");
+                color: Theme.label-3;
+                font-size: Theme.small;
+            }
+            for dep in Shell.crates-deps: HorizontalLayout {
+                height: 26px;
+                spacing: 12px;
+                Text {
+                    width: 220px;
+                    text: dep.name;
+                    color: Theme.label;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    width: 90px;
+                    text: dep.current;
+                    color: Theme.label-2;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                if dep.behind: Text {
+                    width: 90px;
+                    text: dep.latest;
+                    color: Theme.amber;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                if dep.behind: Button {
+                    y: 1px;
+                    height: 24px;
+                    text: @tr("crates.upgrade");
+                    primary: true;
+                    clicked => {
+                        Shell.crates-upgrade(dep.name, dep.latest);
+                    }
+                }
+                if !dep.behind && dep.latest != "": Text {
+                    text: @tr("misc.up-to-date");
+                    color: Theme.patina;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                if dep.latest == "": Text {
+                    text: dep.note;
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            // ---- duplicate versions ----
+            if Shell.crates-dups.length > 0: Heading {
+                title: @tr("desk.crates-duplicates");
+            }
+            for dup in Shell.crates-dups: HorizontalLayout {
+                spacing: 12px;
+                Text {
+                    width: 220px;
+                    text: dup.name;
+                    color: Theme.label;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: dup.versions;
+                    color: Theme.label-2;
+                    font-family: Theme.mono;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+                Text {
+                    width: 160px;
+                    text: dup.unifiable ? @tr("desk.crates-unifiable") : @tr("desk.crates-incompatible");
+                    color: dup.unifiable ? Theme.amber : Theme.label-3;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+            }
+
+            // ---- features ----
+            if Shell.crates-state == 2: Heading {
+                title: @tr("features.features");
+            }
+            if Shell.crates-state == 2: HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                for package in Shell.feat-packages: Rectangle {
+                    height: 26px;
+                    width: package-row.preferred-width;
+                    border-radius: 6px;
+                    background: package.chosen ? Theme.selection : package-touch.has-hover ? Theme.hover : transparent;
+                    border-width: 1px;
+                    border-color: package.chosen ? Theme.rust : Theme.line;
+                    package-touch := TouchArea {
+                        clicked => {
+                            Shell.feat-pick(package.name);
+                        }
+                    }
+                    package-row := HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 6px;
+                        Text {
+                            text: package.name;
+                            color: package.chosen ? Theme.rust : Theme.label;
+                            font-size: Theme.small;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: package.count;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+            if Shell.feat-ready: HorizontalLayout {
+                spacing: 10px;
+                for figure[i] in [
+                    { label: @tr("features.resolved"), value: Shell.feat-resolved, hint: Shell.feat-baseline },
+                    { label: @tr("features.against-defaults"), value: Shell.feat-delta, hint: @tr("features.unified-hint") },
+                    { label: @tr("features.build-units"), value: Shell.feat-units, hint: @tr("features.units-hint") },
+                ]: Rectangle {
+                    border-radius: 8px;
+                    background: Theme.raised;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 2px;
+                        Caption {
+                            text: figure.label;
+                        }
+                        Text {
+                            text: figure.value;
+                            color: Theme.label;
+                            font-size: 22px;
+                            font-weight: 600;
+                            font-family: Theme.mono;
+                        }
+                        Text {
+                            text: figure.hint;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+            if Shell.feat-ready && Shell.feat-added != "": Text {
+                text: @tr("features.pulled-in") + ": " + Shell.feat-added;
+                color: Theme.amber;
+                font-family: Theme.mono;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+            if Shell.feat-ready && Shell.feat-removed != "": Text {
+                text: @tr("features.dropped") + ": " + Shell.feat-removed;
+                color: Theme.patina;
+                font-family: Theme.mono;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+            if Shell.crates-state == 2 && Shell.feat-packages.length > 0: HorizontalLayout {
+                height: 28px;
+                spacing: 10px;
+                Switch {
+                    checked: Shell.feat-defaults;
+                    toggled => {
+                        Shell.act("crates.defaults");
+                    }
+                }
+                Text {
+                    text: @tr("misc.default-features");
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+            if Shell.feat-none != "": Text {
+                text: Shell.feat-none;
+                color: Theme.label-3;
+                font-size: Theme.small;
+            }
+            for feature in Shell.feat-rows: HorizontalLayout {
+                min-height: 28px;
+                spacing: 10px;
+                Switch {
+                    checked: feature.enabled;
+                    toggled => {
+                        Shell.feat-toggle(feature.name);
+                    }
+                }
+                Text {
+                    width: 180px;
+                    text: feature.name;
+                    color: Theme.label;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if feature.in-default: Text {
+                    text: @tr("features.default");
+                    color: Theme.slate;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                }
+                Text {
+                    width: 110px;
+                    text: feature.delta;
+                    color: feature.tone == 2 ? Theme.amber : feature.tone == 1 ? Theme.patina : Theme.label-3;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: feature.enables;
+                    color: Theme.label-3;
+                    font-family: Theme.mono;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            // ---- the build directory ----
+            Heading {
+                title: @tr("disk.title");
+                IconButton {
+                    icon: Icons.refresh;
+                    tip: @tr("disk.rescan");
+                    enabled: !Shell.disk-busy;
+                    clicked => {
+                        Shell.act("crates.disk-scan");
+                    }
+                }
+            }
+            if !Shell.disk-ready: Text {
+                text: Shell.disk-busy ? @tr("disk.scanning") : @tr("disk.not-yet");
+                color: Theme.label-3;
+                font-size: Theme.small;
+            }
+            if Shell.disk-ready && Shell.disk-volume != "": Text {
+                text: Shell.disk-volume;
+                color: Shell.disk-low ? Theme.crimson : Theme.label;
+                font-size: Theme.small;
+            }
+            if Shell.disk-ready: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: Shell.disk-dir;
+                    color: Theme.label-3;
+                    font-family: Theme.mono;
+                    font-size: Theme.caption;
+                    overflow: elide;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: Shell.disk-total;
+                    color: Theme.label-2;
+                    font-size: Theme.caption;
+                }
+            }
+            if Shell.disk-ready: VerticalLayout {
+                HorizontalLayout {
+                    height: 22px;
+                    spacing: 12px;
+                    Caption {
+                        width: 260px;
+                        text: @tr("disk.tree");
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 80px;
+                        text: @tr("disk.size");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 80px;
+                        text: @tr("disk.stale");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                }
+                for tree in Shell.disk-trees: HorizontalLayout {
+                    min-height: 30px;
+                    spacing: 12px;
+                    Text {
+                        width: 260px;
+                        text: tree.label;
+                        color: Theme.label;
+                        font-family: Theme.mono;
+                        font-size: Theme.small;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Text {
+                        width: 80px;
+                        text: tree.size;
+                        color: Theme.label-2;
+                        font-family: Theme.mono;
+                        font-size: Theme.small;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        width: 80px;
+                        text: tree.stale;
+                        color: tree.has-stale ? Theme.amber : Theme.label-3;
+                        font-family: Theme.mono;
+                        font-size: Theme.small;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: tree.reasons;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if tree.locked: Text {
+                        text: @tr("disk.locked");
+                        color: Theme.amber;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                    if !tree.locked && tree.has-stale: Button {
+                        y: 2px;
+                        height: 26px;
+                        text: @tr("disk.sweep-tree");
+                        enabled: !Shell.disk-busy;
+                        clicked => {
+                            Shell.disk-tree("sweep", tree.index);
+                        }
+                    }
+                    if !tree.locked && tree.incremental != "": Button {
+                        y: 2px;
+                        height: 26px;
+                        text: tree.incremental;
+                        enabled: !Shell.disk-busy;
+                        clicked => {
+                            Shell.disk-tree("incremental", tree.index);
+                        }
+                    }
+                    if !tree.locked: IconButton {
+                        icon: Icons.trash;
+                        tip: @tr("disk.remove-tree-hint");
+                        tint: Theme.crimson;
+                        enabled: !Shell.disk-busy;
+                        clicked => {
+                            Shell.disk-tree("remove", tree.index);
+                        }
+                    }
+                }
+            }
+            if Shell.disk-ready && Shell.disk-stale != "": Text {
+                text: Shell.disk-stale;
+                color: Theme.label-2;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+            if Shell.disk-ready: HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: @tr("disk.idle-after");
+                    color: Theme.label-2;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                for option in Shell.disk-idle-options: Rectangle {
+                    height: 26px;
+                    width: days-text.preferred-width + 18px;
+                    border-radius: 6px;
+                    background: option.days == Shell.disk-idle ? Theme.selection : days-touch.has-hover ? Theme.hover : transparent;
+                    border-width: 1px;
+                    border-color: option.days == Shell.disk-idle ? Theme.rust : Theme.line;
+                    days-touch := TouchArea {
+                        clicked => {
+                            Shell.disk-idle-set(option.days);
+                        }
+                    }
+                    days-text := Text {
+                        text: option.label;
+                        color: option.days == Shell.disk-idle ? Theme.rust : Theme.label-2;
+                        font-size: Theme.caption;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Button {
+                    text: @tr("disk.sweep-all");
+                    primary: true;
+                    enabled: !Shell.disk-busy && Shell.disk-stale != "";
+                    clicked => {
+                        Shell.act("crates.disk-sweep");
+                    }
+                }
+            }
+            if Shell.disk-ready && Shell.disk-locked: Text {
+                text: @tr("disk.locked-note");
+                color: Theme.amber;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+            if Shell.disk-ready && Shell.disk-extras.length > 0: Caption {
+                text: @tr("disk.extras");
+            }
+            for item in Shell.disk-extras: HorizontalLayout {
+                height: 26px;
+                spacing: 12px;
+                Text {
+                    width: 260px;
+                    text: item.name;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    width: 80px;
+                    text: item.size;
+                    color: Theme.label-2;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                if item.removable: Button {
+                    y: 1px;
+                    height: 24px;
+                    text: @tr("disk.remove");
+                    enabled: !Shell.disk-busy;
+                    clicked => {
+                        Shell.disk-item(item.index, false);
+                    }
+                }
+            }
+            if Shell.disk-ready && Shell.disk-caches.length > 0: Caption {
+                text: @tr("disk.caches");
+            }
+            for item in Shell.disk-caches: HorizontalLayout {
+                height: 26px;
+                spacing: 12px;
+                Text {
+                    width: 260px;
+                    text: item.name;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    width: 80px;
+                    text: item.size;
+                    color: Theme.label-2;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                if item.removable: Button {
+                    y: 1px;
+                    height: 24px;
+                    text: @tr("disk.remove");
+                    enabled: !Shell.disk-busy;
+                    clicked => {
+                        Shell.disk-item(item.index, true);
+                    }
+                }
+            }
+            if Shell.disk-ready: CheckBox {
+                text: @tr("disk.auto-sweep");
+                checked: Shell.disk-auto;
+                toggled => {
+                    Shell.disk-auto-set(self.checked);
+                }
+            }
+            if Shell.disk-ready && Shell.disk-share != "": Snippet {
+                advice: @tr("disk.share-advice");
+                code: Shell.disk-share;
+                place: Shell.disk-share-where;
+            }
+            if Shell.disk-ready && Shell.disk-debuginfo != "": Snippet {
+                advice: Shell.disk-debuginfo;
+                code: "[profile.dev]\ndebug = \"line-tables-only\"";
+            }
+            if Shell.disk-ready && Shell.disk-warnings.length > 0: Caption {
+                text: @tr("disk.warnings");
+            }
+            for warning in Shell.disk-warnings: Text {
+                text: warning;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
