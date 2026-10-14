@@ -13,6 +13,7 @@ mod format;
 mod keys;
 mod language;
 mod lsp;
+mod markdown;
 mod picker;
 mod probe;
 mod project;

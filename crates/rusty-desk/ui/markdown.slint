@@ -1,0 +1,101 @@
+// Markdown's blocks, drawn: paragraphs and list items as styled text,
+// headings, code in the editor's colours, quotes, rules and tables. Read in
+// `src/markdown.rs`, made rows in `src/app/markdown_view.rs`.
+
+import { Theme } from "theme.slint";
+import { Shell, MdBlock } from "shell.slint";
+
+export component MarkdownView inherits VerticalLayout {
+    in property <[MdBlock]> blocks;
+    in property <length> font-size: Theme.small;
+    spacing: 8px;
+    for block in root.blocks: VerticalLayout {
+        // Text, indented for the quotes and lists it is in.
+        if block.kind == 0: HorizontalLayout {
+            padding-left: block.quote * 12px + max(0, block.depth - 1) * 16px;
+            spacing: 6px;
+            if block.quote > 0: Rectangle {
+                width: 3px;
+                border-radius: 1.5px;
+                background: Theme.line-strong;
+            }
+            if block.depth > 0: Text {
+                width: 16px;
+                text: block.marker;
+                color: Theme.label-3;
+                font-size: root.font-size;
+                horizontal-alignment: right;
+            }
+            StyledText {
+                horizontal-stretch: 1;
+                text: block.text;
+                default-color: block.quote > 0 ? Theme.label-2 : Theme.label;
+                default-font-size: root.font-size;
+                link-color: Theme.slate;
+                link-clicked(link) => {
+                    Shell.open-link(link);
+                }
+            }
+        }
+        if block.kind == 1: VerticalLayout {
+            padding-top: block.level <= 2 ? 6px : 2px;
+            StyledText {
+                text: block.text;
+                default-color: Theme.label;
+                default-font-size: block.level == 1 ? root.font-size * 1.6 : block.level == 2 ? root.font-size * 1.35 : block.level == 3 ? root.font-size * 1.15 : root.font-size;
+                link-color: Theme.slate;
+            }
+        }
+        if block.kind == 2: Rectangle {
+            border-radius: 6px;
+            background: Theme.sunken;
+            clip: true;
+            VerticalLayout {
+                padding: 8px;
+                for line in block.lines: HorizontalLayout {
+                    height: root.font-size * 1.45;
+                    alignment: start;
+                    for span in line.spans: Text {
+                        text: span.text;
+                        color: Theme.token(span.kind);
+                        font-family: Theme.mono;
+                        font-size: root.font-size * 0.95;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        if block.kind == 3: Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        if block.kind == 4: Rectangle {
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.line;
+            clip: true;
+            VerticalLayout {
+                for row in block.rows: HorizontalLayout {
+                    // Every column the same share, whatever its words: a
+                    // cell's own width would set each row's columns apart.
+                    for cell in row.cells: Rectangle {
+                        horizontal-stretch: 1;
+                        preferred-width: 0px;
+                        min-width: 0px;
+                        background: cell.header ? Theme.sunken : transparent;
+                        border-width: 0.5px;
+                        border-color: Theme.line;
+                        VerticalLayout {
+                            padding: 6px;
+                            StyledText {
+                                text: cell.text;
+                                default-color: Theme.label;
+                                default-font-size: root.font-size;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

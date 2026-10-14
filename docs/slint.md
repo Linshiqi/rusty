@@ -436,6 +436,22 @@ tests green, and CLAUDE.md saying how it works.
    loaded the first time the page shows. Proven on `examples/blink-rust`
    (139 dependencies, 13 duplicated, 1.9 GB of build trees) and on a crate
    with features, one flipped.
+   The assistant, in the right dock: a question runs `rusty_ai`'s agent
+   loop on a thread with a runtime of its own, the workbench's read-only
+   tools and the open file's lines (a chip takes it off), every event drawn
+   as it streams — reasoning folded, each tool call with its verdict, the
+   answer as Markdown — and the loop's history is the transcript after.
+   Stop keeps what streamed, marked; the meter sums every round, the cached
+   share beside it; a cap a provider names is kept for the session. The
+   model is Settings' (a preset, the endpoint and dialect, the model or the
+   endpoint's list of them, the output budget, the key into the system's
+   credential store and never back, a check that says what one request
+   established). Markdown is read once (`src/markdown.rs`): the blocks
+   `StyledText` cannot take — headings, code, quotes, tables, rules — are
+   read there and only each block's inline text is handed to it, escaped;
+   code blocks take the editor's own colours. Proven against a loopback
+   model in the OpenAI dialect: `list_files` called, the answer's heading,
+   nested list, Rust block and table drawn, 4.2k in with 1.7k cached.
 8. **The editor's depth**, now that everything it is for exists: folding,
    sticky scroll, the minimap, indent guides, test lenses, inlay hints,
    semantic colours, Vim, two groups.

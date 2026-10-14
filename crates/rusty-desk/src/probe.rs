@@ -87,6 +87,7 @@ pub fn start(window: &AppWindow) {
     let repository = std::env::var_os("RUSTY_PROBE_GIT").is_some();
     let measuring = std::env::var_os("RUSTY_PROBE_MEMORY").is_some();
     let dependencies = std::env::var_os("RUSTY_PROBE_CRATES").is_some();
+    let asking = std::env::var_os("RUSTY_PROBE_AI").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -205,6 +206,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if dependencies {
                     step.set(1300);
+                }
+                if asking {
+                    step.set(1400);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -573,6 +577,55 @@ pub fn start(window: &AppWindow) {
                     shell.get_feat_added()
                 );
                 snapshot(&window, &dir.join("crates-flipped.png"));
+                app.act("app.exit");
+            }
+            // The assistant against a loopback model: a question, a tool
+            // call, a Markdown answer, the meter; then Settings.
+            1400 if asking => shell.invoke_show_panel("right".into(), "assistant".into()),
+            1402 if asking => {
+                eprintln!("ai: ready {} title {:?} attach {:?}", shell.get_ai_ready(), shell.get_ai_title(), shell.get_ai_attach());
+                shell.set_ai_draft("What files are in this project?".into());
+                app.act("ai.ask");
+                waited.set(0);
+            }
+            1403 if asking => {
+                if shell.get_ai_running() || shell.get_ai_entries().row_count() < 2 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1000 {
+                        step.set(1403);
+                    }
+                    return;
+                }
+                for entry in shell.get_ai_entries().iter() {
+                    eprintln!(
+                        "ai: entry {} {:?} {:?} state {} blocks {}",
+                        entry.kind,
+                        entry.text.chars().take(60).collect::<String>(),
+                        entry.attached.chars().take(60).collect::<String>(),
+                        entry.state,
+                        entry.blocks.row_count()
+                    );
+                    for block in entry.blocks.iter() {
+                        eprintln!("ai:   block {} level {} depth {} marker {:?} lines {} rows {}", block.kind, block.level, block.depth, block.marker, block.lines.row_count(), block.rows.row_count());
+                    }
+                }
+                eprintln!("ai: spend {:?} ({:?})", shell.get_ai_spend(), shell.get_ai_spend_tip());
+                snapshot(&window, &dir.join("assistant.png"));
+                app.act("settings.open");
+            }
+            1410 if asking => {
+                eprintln!(
+                    "ai: settings {:?}; presets {}; model {:?} at {:?}",
+                    shell.get_ai_current(),
+                    shell.get_ai_presets().row_count(),
+                    shell.get_ai_model(),
+                    shell.get_ai_base_url()
+                );
+                app.act("ai.check");
+            }
+            1440 if asking => {
+                eprintln!("ai: check {:?} ok {}", shell.get_ai_check(), shell.get_ai_check_ok());
+                snapshot(&window, &dir.join("assistant-settings.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1163,7 +1216,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

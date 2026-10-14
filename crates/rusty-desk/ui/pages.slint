@@ -5,6 +5,7 @@
 import { GitPage, GitDiffPage } from "git.slint";
 import { MemoryPage } from "memory.slint";
 import { CratesPage } from "crates.slint";
+import { AssistantSettings } from "assistant.slint";
 import { Transport } from "debug.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
@@ -352,6 +353,16 @@ component SettingsPage inherits Rectangle {
                             Shell.set-zoom(value.to-float());
                         }
                     }
+                }
+            }
+            Group {
+                title: @tr("panel.assistant");
+                VerticalLayout {
+                    padding: 14px;
+                    init => {
+                        Shell.act("ai.shown");
+                    }
+                    AssistantSettings { }
                 }
             }
         }

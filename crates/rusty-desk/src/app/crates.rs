@@ -221,6 +221,25 @@ impl App {
         });
     }
 
+    /// The Cargo analysis, when the page has loaded it — for the assistant,
+    /// whose Cargo tools would otherwise run `cargo metadata` again.
+    pub(super) fn crates_workspace(&self) -> Option<Arc<Workspace>> {
+        let state = self.state.borrow();
+        (state.crates.root == self.root())
+            .then(|| state.crates.workspace.clone())
+            .flatten()
+    }
+
+    /// An analysis the assistant's tools loaded, kept for the page and the
+    /// next question, when it is of the project still open.
+    pub(super) fn crates_keep_workspace(&self, workspace: Arc<Workspace>) {
+        let root = self.root();
+        let mut state = self.state.borrow_mut();
+        if state.crates.workspace.is_none() && state.crates.root == root {
+            state.crates.workspace = Some(workspace);
+        }
+    }
+
     // ---- features ----------------------------------------------------------
 
     pub(super) fn features_pick(self: &Rc<Self>, package: &str) {
