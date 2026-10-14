@@ -86,6 +86,7 @@ pub fn start(window: &AppWindow) {
     let terminal = std::env::var_os("RUSTY_PROBE_TERM").is_some();
     let repository = std::env::var_os("RUSTY_PROBE_GIT").is_some();
     let measuring = std::env::var_os("RUSTY_PROBE_MEMORY").is_some();
+    let dependencies = std::env::var_os("RUSTY_PROBE_CRATES").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -201,6 +202,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if measuring {
                     step.set(1200);
+                }
+                if dependencies {
+                    step.set(1300);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -514,6 +518,61 @@ pub fn start(window: &AppWindow) {
                 }
                 eprintln!("memory: {} sections, more {:?}", shell.get_mem_sections().row_count(), shell.get_mem_more());
                 snapshot(&window, &dir.join("memory.png"));
+                app.act("app.exit");
+            }
+            // The Crates page: the graph resolved, a feature flipped against
+            // it, and the build directory measured.
+            1300 if dependencies => app.act("crates.open"),
+            1301 if dependencies => {
+                if shell.get_crates_state() != 2 || !shell.get_disk_ready() || !shell.get_feat_ready() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 3000 {
+                        step.set(1301);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "crates: {:?}; vitals {:?}",
+                    shell.get_crates_title(),
+                    shell
+                        .get_crates_vitals()
+                        .iter()
+                        .map(|v| format!("{} {}", v.label, v.value))
+                        .collect::<Vec<_>>()
+                );
+                eprintln!(
+                    "crates: packages {:?}; {} features; resolved {} ({})",
+                    shell.get_feat_packages().iter().map(|p| p.name.to_string()).collect::<Vec<_>>(),
+                    shell.get_feat_rows().row_count(),
+                    shell.get_feat_resolved(),
+                    shell.get_feat_baseline()
+                );
+                eprintln!(
+                    "crates: disk {:?} {:?}; trees {:?}",
+                    shell.get_disk_total(),
+                    shell.get_disk_volume(),
+                    shell
+                        .get_disk_trees()
+                        .iter()
+                        .map(|t| format!("{} {} stale {}", t.label, t.size, t.stale))
+                        .collect::<Vec<_>>()
+                );
+                snapshot(&window, &dir.join("crates.png"));
+                let flip = shell.get_feat_rows().iter().find(|f| !f.enabled).map(|f| f.name.to_string());
+                if let Some(flip) = flip {
+                    eprintln!("crates: flipping {flip}");
+                    shell.invoke_feat_toggle(flip.into());
+                }
+                waited.set(0);
+            }
+            1340 if dependencies => {
+                eprintln!(
+                    "crates: after the flip resolved {}, against defaults {}, pulled in {:?}",
+                    shell.get_feat_resolved(),
+                    shell.get_feat_delta(),
+                    shell.get_feat_added()
+                );
+                snapshot(&window, &dir.join("crates-flipped.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1104,7 +1163,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

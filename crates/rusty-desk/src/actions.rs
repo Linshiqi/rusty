@@ -33,6 +33,7 @@ pub const ALL: &[Action] = &[
     action("welcome.open", "desk.welcome", None),
     action("environment.open", "panel.toolchain", None),
     action("memory.open", "panel.memory", None),
+    action("crates.open", "panel.crates", None),
     action("git.history", "git.history", None),
     action("git.fetch", "git.fetch", None),
     action("git.pull", "git.pull", None),

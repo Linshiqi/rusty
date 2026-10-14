@@ -22,6 +22,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 mod activity;
 mod board;
 mod build;
+mod crates;
 mod debug;
 mod device;
 mod drafts;
@@ -90,6 +91,7 @@ impl Tab {
             Tab::Page("git") => t!("git.history"),
             Tab::Page("gitdiff") => t!("git.changes"),
             Tab::Page("memory") => t!("panel.memory"),
+            Tab::Page("crates") => t!("panel.crates"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -153,6 +155,7 @@ struct State {
     git: git::Git,
     menu: Option<&'static str>,
     memory: memory::Memory,
+    crates: crates::Crates,
     term: terminal::Term,
 }
 
@@ -415,6 +418,16 @@ impl App {
         on!(on_git_prompt_done, |app, ok| app.git_prompt_done(ok));
         on!(on_menu_picked, |app, id| app.menu_picked(&id));
         on!(on_mem_pick, |app, path| app.memory_pick(&path));
+        on!(on_crates_upgrade, |app, name, version| app
+            .crates_upgrade(&name, &version));
+        on!(on_feat_pick, |app, package| app.features_pick(&package));
+        on!(on_feat_toggle, |app, feature| app.features_toggle(&feature));
+        on!(on_disk_tree, |app, verb, index| app.disk_tree(&verb, index));
+        on!(on_disk_item, |app, index, cache| app
+            .disk_item(index, cache));
+        on!(on_disk_idle_set, |app, days| app.disk_idle(days));
+        on!(on_disk_auto_set, |app, on| app.disk_auto(on));
+        on!(on_copy_text, |_app, text| git::copy_text(&text));
         on!(on_menu_dismissed, |app| app.menu_dismissed());
         let weak = Rc::downgrade(self);
         shell.on_term_key(move |event| {
@@ -632,6 +645,7 @@ impl App {
             }
             other if other.starts_with("git.") => self.git_act(&other["git.".len()..]),
             other if other.starts_with("memory.") => self.memory_act(&other["memory.".len()..]),
+            other if other.starts_with("crates.") => self.crates_act(&other["crates.".len()..]),
             "app.exit" => {
                 self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();
