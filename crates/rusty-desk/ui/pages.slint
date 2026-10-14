@@ -7,6 +7,7 @@ import { MemoryPage } from "memory.slint";
 import { CratesPage } from "crates.slint";
 import { AssistantSettings } from "assistant.slint";
 import { MarkdownView } from "markdown.slint";
+import { MathPage } from "math.slint";
 import { Transport } from "debug.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
@@ -473,7 +474,8 @@ export component EditorArea inherits Rectangle {
             if Shell.active-kind == "gitdiff": GitDiffPage { }
             if Shell.active-kind == "memory": MemoryPage { }
             if Shell.active-kind == "crates": CratesPage { }
-            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "environment" && Shell.active-kind != "wizard" && Shell.active-kind != "git" && Shell.active-kind != "gitdiff" && Shell.active-kind != "memory" && Shell.active-kind != "crates" && Shell.active-kind != "": NotYet {
+            if Shell.active-kind == "math": MathPage { }
+            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "environment" && Shell.active-kind != "wizard" && Shell.active-kind != "git" && Shell.active-kind != "gitdiff" && Shell.active-kind != "memory" && Shell.active-kind != "crates" && Shell.active-kind != "math" && Shell.active-kind != "": NotYet {
                 name: Shell.active-title;
             }
             if Shell.active-kind == "": Welcome { }

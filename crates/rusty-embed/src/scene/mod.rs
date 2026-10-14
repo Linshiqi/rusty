@@ -7,6 +7,7 @@
 //! any zoom, takes the theme's colours through classes, and a path per
 //! shape is few enough that painting back to front is the whole of depth.
 
+pub mod math;
 pub mod model;
 pub mod sketch;
 

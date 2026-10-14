@@ -323,6 +323,39 @@ export struct MdBlock {
     shown: bool,
 }
 
+// A row of the math sheet: its field, its colour in the view, what it came
+// to or why it came to nothing, and a slider for a row that is one number.
+export struct MathRow {
+    text: string,
+    colour: color,
+    hidden: bool,
+    selected: bool,
+    value: string,
+    problem: string,
+    notes: string,
+    live: bool,
+    slider: bool,
+    min: float,
+    max: float,
+    at: float,
+    shown: string,
+}
+
+// A step of the selected row's working.
+export struct MathStep {
+    index: int,
+    title: string,
+    lines: string,
+    remarks: string,
+    chosen: bool,
+}
+
+// A labelled line: of a value's readout, or of the reference.
+export struct MathLine {
+    label: string,
+    value: string,
+}
+
 // A line of the assistant's transcript: 0 a question (with what was
 // attached), 1 an answer's blocks, 2 reasoning (unfolded when `open`), 3 a
 // tool call (state 0 running, 1 done, 2 failed; `attached` its input), 4 a
@@ -855,6 +888,48 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // The math toolbox.
+    // A face with the mathematical operators a formula uses — ⊗, ∠, √ —
+    // which the monospace face and the fallback do not all carry.
+    in property <string> symbols-font;
+    in property <[MathRow]> math-rows;
+    in property <int> math-focus: -1;
+    in property <int> math-focus-tick;
+    in property <bool> math-frame-up: true;
+    in property <bool> math-help;
+    in property <string> math-saved;
+    in property <string> math-unreadable;
+    in property <[string]> math-examples;
+    in property <[MathLine]> math-help-rows;
+    in property <[MathStep]> math-steps;
+    in property <string> math-steps-note;
+    in property <int> math-turns;
+    in property <bool> math-playing;
+    in property <float> math-progress;
+    in property <int> math-value-kind;
+    in property <[MathLine]> math-value-lines;
+    in property <[string]> math-matrix;
+    in property <string> math-value-extra;
+    in property <float> math-nose;
+    in property <float> math-bank;
+    in property <bool> math-copyable;
+    in property <bool> math-flat;
+    in property <[DrawPiece]> math-pieces;
+    in property <float> math-view-w;
+    in property <float> math-view-h;
+    callback math-select(int);
+    callback math-toggle(int);
+    callback math-row(int, string);
+    callback math-row-key(int, string) -> bool;
+    callback math-remove(int);
+    callback math-example(int);
+    callback math-slider(int, float);
+    callback math-step(int);
+    callback math-scrub(float);
+    callback math-resized(float, float);
+    callback math-orbit(float, float);
+    callback math-zoom(float);
 
     // A Markdown file in front: read as a page, or its source.
     in property <bool> md-file;
