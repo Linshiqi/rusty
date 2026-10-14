@@ -77,10 +77,15 @@ impl Metrics {
         text.chars().count()
     }
 
-    pub fn content_width(&self, lines: &[String]) -> f32 {
-        lines
-            .iter()
-            .map(|line| self.x_of(line, usize::MAX))
+    /// One ASCII character's width.
+    pub fn ascii(&self) -> f32 {
+        self.ascii
+    }
+
+    /// The widest line of a document, for how far the view scrolls sideways.
+    pub fn widest(&self, doc: &super::Document) -> f32 {
+        (0..doc.lines.count())
+            .map(|line| self.x_of(doc.lines.text(&doc.text, line), usize::MAX))
             .fold(0.0, f32::max)
     }
 }

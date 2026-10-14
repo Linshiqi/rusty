@@ -248,8 +248,13 @@ python crates/rusty-mcu/scripts/x035_pins.py \
 # With RUSTY_PROBE it types, scrolls, opens the docks, the palette and the
 # settings, photographs each state into the directory (Window::take_snapshot)
 # and prints each key's and scroll step's time to the frame that shows it.
+# It exits through File > Exit, so what it typed is kept as a draft (hot
+# exit): it refuses to run without a data directory of its own, and a
+# second run on the same one shows the draft back. RUSTY_PROBE_SAVES also
+# saves badly formatted Rust over the file and says whether rustfmt ran --
+# point it at a copy.
 cargo run -p rusty-desk --release -- <project> <file-in-it>
-RUSTY_PROBE=<dir> cargo run -p rusty-desk --release -- <project> <file-in-it>
+RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data cargo run -p rusty-desk --release -- <project> <file-in-it>
 
 # Drawing from code, the worked end: an f32 vector type, an example that
 # draws two vectors and their cross product, and a test that draws and
@@ -277,7 +282,7 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
 | `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — WCH's CH32V003 and CH32X035, which nobody's QEMU models. Pure: `cpu` is a QingKe hart, the V2A's RV32EC or the V4C's RV32IMAC (`Core`), with Zicsr, the address vector table and the hardware stack; `elf` loads a flasher's view of an image; `ch32/` is one machine for both parts — the clock tree, GPIO with AFIO's remaps and EXTI, the timers, SysTick, the PFIC, the USARTs and the debug registers SDI print writes through — with what differs between them as data in `ch32/part.rs`; its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *WCH's parts* |
 | `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
-| `rusty-desk` | **The window in Slint, on the `slint` branch** — replacing `rusty-ui`, `rusty-app` and `rusty-ipc`; `docs/slint.md` is the design and the order of the work. One process, no IPC: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> rusty <project> <file>` drives the window and photographs it |
+| `rusty-desk` | **The window in Slint, on the `slint` branch** — replacing `rusty-ui`, `rusty-app` and `rusty-ipc`; `docs/slint.md` is the design and the order of the work. One process, no IPC: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale |
 
 ## The rules that are load-bearing
 

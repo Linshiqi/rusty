@@ -31,13 +31,16 @@ pub fn spawn<T: Send + 'static>(
     job: impl FnOnce() -> T + Send + 'static,
     then: impl FnOnce(&Rc<App>, T) + Send + 'static,
 ) {
-    std::thread::spawn(move || {
-        let answer = job();
-        let _ = slint::invoke_from_event_loop(move || {
-            let app = APP.with(|cell| cell.get().cloned());
-            if let Some(app) = app {
-                then(&app, answer);
-            }
-        });
+    std::thread::spawn(move || deliver(job(), then));
+}
+
+/// Hand `answer` to `then` on the UI thread, from any thread — for work
+/// that runs on a thread of somebody else's, like the backups'.
+pub fn deliver<T: Send + 'static>(answer: T, then: impl FnOnce(&Rc<App>, T) + Send + 'static) {
+    let _ = slint::invoke_from_event_loop(move || {
+        let app = APP.with(|cell| cell.get().cloned());
+        if let Some(app) = app {
+            then(&app, answer);
+        }
     });
 }

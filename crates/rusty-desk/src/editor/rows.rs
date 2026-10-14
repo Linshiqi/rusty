@@ -3,14 +3,17 @@
 //! A `Model` over the document rather than a list built up front: the
 //! ListView asks only for the rows on screen, so opening a 24,000-line file
 //! builds forty rows, and an edit tells the view which rows to ask for again.
+//! A row is its text as pieces of one token each at the x they start at, and
+//! the marks behind it — the selections crossing it and the carets on it
+//! other than the primary one, which the view draws on its own.
 
 use std::{cell::RefCell, rc::Rc};
 
 use rusty_edit::{Line, Token};
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
-use super::{Metrics, Shared};
-use crate::{Piece, Row};
+use super::{Document, Metrics, Shared};
+use crate::{Mark, Piece, Row};
 
 pub struct Rows {
     doc: Shared,
@@ -27,7 +30,8 @@ impl Rows {
         }
     }
 
-    /// Another document is on screen: every row is new.
+    /// Another document is on screen, or too much changed to name: every
+    /// row is new.
     pub fn reset(&self) {
         self.notify.reset();
     }
@@ -55,13 +59,16 @@ impl Model for Rows {
         self.doc
             .borrow()
             .as_ref()
-            .map_or(0, |doc| doc.borrow().lines.len())
+            .map_or(0, |doc| doc.borrow().lines.count())
     }
 
     fn row_data(&self, row: usize) -> Option<Row> {
         let doc = self.doc.borrow().clone()?;
         let doc = doc.borrow();
-        let text = doc.lines.get(row)?;
+        if row >= doc.lines.count() {
+            return None;
+        }
+        let text = doc.lines.text(&doc.text, row);
         let metrics = self.metrics.borrow();
         let painted = doc.painted.get(row).filter(|line| painted_is(line, text));
         let pieces = match painted {
@@ -69,17 +76,48 @@ impl Model for Rows {
                 &metrics,
                 line.spans.iter().map(|s| (s.text.as_str(), s.token)),
             ),
-            None => place(&metrics, std::iter::once((text.as_str(), Token::Plain))),
+            None => place(&metrics, std::iter::once((text, Token::Plain))),
         };
         Some(Row {
             number: row as i32 + 1,
             pieces: ModelRc::new(VecModel::from(pieces)),
+            marks: ModelRc::new(VecModel::from(marks(&doc, &metrics, row))),
         })
     }
 
     fn model_tracker(&self) -> &dyn ModelTracker {
         &self.notify
     }
+}
+
+/// The selections crossing `row` and the carets on it but the primary one.
+/// A selection that carries on past the line's end takes a space's width
+/// there, as every editor shows the line break it holds.
+fn marks(doc: &Document, metrics: &Metrics, row: usize) -> Vec<Mark> {
+    let (start, end) = (doc.lines.start(row), doc.lines.end(row));
+    let text = doc.lines.text(&doc.text, row);
+    let x_at = |at: usize| metrics.x_of(text, text[..at - start].chars().count());
+    let mut marks = Vec::new();
+    for (index, cursor) in doc.cursors.iter().enumerate() {
+        if !cursor.is_caret() && cursor.start() <= end && cursor.end() > start {
+            let from = cursor.start().max(start);
+            let to = cursor.end().min(end);
+            let past = cursor.end() > end;
+            let x = x_at(from);
+            let width = x_at(to) - x + if past { metrics.ascii() } else { 0.0 };
+            if width > 0.0 {
+                marks.push(Mark { x, width, kind: 0 });
+            }
+        }
+        if index > 0 && cursor.head >= start && cursor.head <= end {
+            marks.push(Mark {
+                x: x_at(cursor.head),
+                width: 0.0,
+                kind: 1,
+            });
+        }
+    }
+    marks
 }
 
 /// Whether a painted line is the text on screen — a line typed on since its
@@ -116,7 +154,7 @@ fn place<'t>(metrics: &Metrics, spans: impl Iterator<Item = (&'t str, Token)>) -
             run.push(ch);
             x += width;
         }
-        if !run.is_empty() && !run.trim().is_empty() {
+        if !run.trim().is_empty() {
             pieces.push(piece(run, start, token));
         }
     }
