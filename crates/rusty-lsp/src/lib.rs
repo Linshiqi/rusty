@@ -23,6 +23,7 @@
 //! diagnostic freshness, `convert` turns replies into the model, `uri` is the
 //! one place a path becomes a URI or comes back, `rpc` frames bytes.
 
+pub mod complete;
 pub mod follow;
 pub mod model;
 pub mod positions;
