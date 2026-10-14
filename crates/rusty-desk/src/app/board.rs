@@ -115,8 +115,13 @@ impl App {
                 let Some(window) = app.window() else { return };
                 let shell = window.global::<Shell>();
                 let Some(loaded) = loaded else {
+                    // No board: nothing of the last project's left drawn.
                     *app.board.borrow_mut() = Board::default();
                     shell.set_board_shown(false);
+                    shell.set_board_wires(ModelRc::default());
+                    shell.set_board_lamps(ModelRc::default());
+                    shell.set_board_switches(ModelRc::default());
+                    shell.set_board_words(ModelRc::default());
                     return;
                 };
                 let image = slint::Image::load_from_svg_data(loaded.picture.svg.as_bytes())

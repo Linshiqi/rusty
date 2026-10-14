@@ -49,6 +49,10 @@ pub(super) struct Sim {
     pub(super) display: Option<String>,
     pub(super) params: Vec<Param>,
     pub(super) sensors: Vec<SensorDef>,
+    /// The firmware's named channels over time.
+    pub(super) plot: rusty_embed::plot::Plot,
+    /// The channels the Plot panel draws; none named is all of them.
+    pub(super) shown: Vec<String>,
     /// Run again once this run has stopped.
     restart: bool,
 }
@@ -62,6 +66,7 @@ impl Sim {
         self.display = None;
         self.params.clear();
         self.sensors.clear();
+        self.plot = Default::default();
     }
 }
 
@@ -107,20 +112,35 @@ impl App {
     pub(super) fn absorb(self: &Rc<Self>, text: &str) -> bool {
         let mut state = self.state.borrow_mut();
         let sim = &mut state.sim;
-        if let Some((before, _telemetry)) = rusty_embed::protocol::split_telemetry(text) {
-            // Plotted once the Plot panel arrives; what came before the
-            // marker on the line is the firmware's own words.
+        if let Some((before, telemetry)) = rusty_embed::protocol::split_telemetry(text) {
+            let first = sim.plot.channels.is_empty() && sim.params.is_empty();
+            let host_us = self.started.elapsed().as_micros() as u64;
+            sim.plot.record(telemetry, host_us);
             drop(state);
+            // The Plot tab arrives with the first sample, and does not take
+            // the dock from whoever is reading Output.
+            if first {
+                self.sync_docks();
+            }
+            self.plot_moved();
+            // What came before the marker is the firmware's own words — a
+            // test harness's `test name ... `.
             if !before.trim().is_empty() {
                 self.runner.say(before, run::kind_of(before));
             }
             return true;
         }
         if let Some(param) = rusty_embed::parse_param(text) {
+            let first = sim.plot.channels.is_empty() && sim.params.is_empty();
             match sim.params.iter_mut().find(|p| p.name == param.name) {
                 Some(known) => *known = param,
                 None => sim.params.push(param),
             }
+            drop(state);
+            if first {
+                self.sync_docks();
+            }
+            self.plot_moved();
             return true;
         }
         if let Some(sensor) = rusty_embed::parse_sensor_def(text) {
@@ -204,6 +224,14 @@ impl App {
             }
             (None, None) => {}
         }
+    }
+
+    /// Whether the firmware or the emulator has reported a pin or a sample
+    /// since the run began.
+    pub fn sim_heard(&self) -> bool {
+        let state = self.state.borrow();
+        let sim = &state.sim;
+        !sim.levels.is_empty() || !sim.duties.is_empty() || !sim.plot.channels.is_empty()
     }
 
     /// What the simulator has heard, in a line: the probe's view of it.
@@ -290,6 +318,9 @@ impl App {
         if !simulate::is_emulator(&step.program) {
             let next = dir.clone();
             let started = self.run(&step, Some(dir), move |app, ended| {
+                // The build may have made `target/`: the tree is read again
+                // once its `CACHEDIR.TAG` says what it is.
+                app.reread_project();
                 if ended == Ended::Done {
                     app.sim_steps(steps, start, next);
                 } else {
