@@ -288,6 +288,27 @@ export struct LabParam {
     text: string,
 }
 
+// A run of a terminal's row in one style: its colours where the program
+// chose them (the theme's otherwise), and how it is drawn.
+export struct TermSpan {
+    text: string,
+    // Where it starts and how many cells it covers: a wide character is
+    // two, whatever the font's fallback draws it as.
+    col: int,
+    cells: int,
+    fg: color,
+    own-fg: bool,
+    bg: color,
+    own-bg: bool,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+export struct TermRow {
+    spans: [TermSpan],
+}
+
 // A row of the Search panel: a file and how many hits it holds, or a hit —
 // its line, and the line's text around the match.
 export struct SearchRow {
@@ -588,6 +609,16 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // The Terminal.
+    in property <[TermRow]> term-rows;
+    in property <bool> term-cursor-shown;
+    in property <int> term-cursor-row;
+    in property <int> term-cursor-col;
+    in property <string> term-exited;
+    callback term-key(KeyEvent) -> bool;
+    callback term-resized(int, int);
+    callback term-scroll(int);
 
     // The Search panel.
     in property <bool> search-case;

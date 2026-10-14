@@ -1,0 +1,128 @@
+// The Terminal: a shell's screen as runs of same-styled text, a cell grid
+// in the editor's font, and the keys typed into it while it has focus.
+// Filled by `src/app/terminal.rs`.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Shell } from "shell.slint";
+import { IconButton } from "widgets.slint";
+
+export component TerminalPanel inherits Rectangle {
+    // One cell of the grid, measured off the font.
+    property <length> font-size: 13px;
+    property <length> cell-w: measure.preferred-width / 10;
+    property <length> cell-h: round(root.font-size * 1.35 / 1px) * 1px;
+    measure := Text {
+        visible: false;
+        text: "MMMMMMMMMM";
+        font-family: Theme.mono;
+        font-size: root.font-size;
+    }
+
+    // Shown: a shell if there is none. The theme changed: its colours.
+    property <bool> dark: Theme.dark;
+    changed dark => {
+        Shell.act("terminal.redraw");
+    }
+    init => {
+        Shell.act("terminal.ensure");
+        keys.focus();
+    }
+
+    keys := FocusScope {
+        x: 6px;
+        y: 4px;
+        width: parent.width - 12px;
+        height: parent.height - 8px;
+        changed width => {
+            Shell.term-resized(floor(self.width / root.cell-w), floor(self.height / root.cell-h));
+        }
+        changed height => {
+            Shell.term-resized(floor(self.width / root.cell-w), floor(self.height / root.cell-h));
+        }
+        init => {
+            Shell.term-resized(floor(self.width / root.cell-w), floor(self.height / root.cell-h));
+        }
+        key-pressed(event) => {
+            if (Shell.term-key(event)) {
+                return accept;
+            }
+            reject
+        }
+        TouchArea {
+            clicked => {
+                keys.focus();
+            }
+            scroll-event(event) => {
+                Shell.term-scroll(event.delta-y > 0 ? 3 : -3);
+                accept
+            }
+        }
+        for row[index] in Shell.term-rows: Rectangle {
+            y: index * root.cell-h;
+            height: root.cell-h;
+            for span in row.spans: Rectangle {
+                x: span.col * root.cell-w;
+                width: span.cells * root.cell-w;
+                background: span.own-bg ? span.bg : transparent;
+                label := Text {
+                    x: 0;
+                    width: parent.width;
+                    text: span.text;
+                    color: span.own-fg ? span.fg : Theme.label;
+                    font-family: Theme.mono;
+                    font-size: root.font-size;
+                    font-weight: span.bold ? 700 : 400;
+                    font-italic: span.italic;
+                    vertical-alignment: center;
+                    horizontal-alignment: span.cells == 2 && span.text.character-count == 1 ? center : left;
+                }
+                if span.underline: Rectangle {
+                    y: parent.height - 2px;
+                    height: 1px;
+                    background: label.color;
+                }
+            }
+        }
+        // The cursor, a block while the terminal has the keyboard.
+        if Shell.term-cursor-shown: Rectangle {
+            x: Shell.term-cursor-col * root.cell-w;
+            y: Shell.term-cursor-row * root.cell-h;
+            width: root.cell-w;
+            height: root.cell-h;
+            background: keys.has-focus ? Theme.rust.with-alpha(0.55) : transparent;
+            border-width: keys.has-focus ? 0 : 1px;
+            border-color: Theme.rust;
+        }
+    }
+
+    // The shell exited: say so, and offer another.
+    if Shell.term-exited != "": Rectangle {
+        x: parent.width - self.width - 10px;
+        y: parent.height - self.height - 8px;
+        width: exit-row.preferred-width;
+        height: exit-row.preferred-height;
+        border-radius: 6px;
+        background: Theme.raised;
+        border-width: 1px;
+        border-color: Theme.line;
+        exit-row := HorizontalLayout {
+            padding: 4px;
+            padding-left: 10px;
+            spacing: 6px;
+            Text {
+                text: Shell.term-exited;
+                color: Theme.label-2;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+            }
+            IconButton {
+                icon: Icons.refresh;
+                tip: @tr("desk.terminal-restart");
+                clicked => {
+                    Shell.act("terminal.restart");
+                }
+            }
+        }
+    }
+}
