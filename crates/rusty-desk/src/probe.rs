@@ -23,7 +23,10 @@
 //! Ctrl+Shift+B does, waits for the verdict, and says what the title bar,
 //! the dock and Problems made of it. With `RUSTY_PROBE_TARGETS` it asks to
 //! flash with no board chosen, photographs the list that opens, and picks
-//! the simulator from it — opening no port and writing nothing.
+//! the simulator from it — opening no port and writing nothing. With
+//! `RUSTY_PROBE_SIM` it runs the project in the simulator, lets it run for
+//! three seconds once the firmware has spoken, and says what the pin
+//! channel reported before stopping it.
 
 use std::{
     cell::{Cell, RefCell},
@@ -57,6 +60,7 @@ pub fn start(window: &AppWindow) {
     let playground = std::env::var_os("RUSTY_PROBE_PLAYGROUND").is_some();
     let build = std::env::var_os("RUSTY_PROBE_BUILD").is_some();
     let targets = std::env::var_os("RUSTY_PROBE_TARGETS").is_some();
+    let sim = std::env::var_os("RUSTY_PROBE_SIM").is_some();
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
     let before: Rc<RefCell<Option<String>>> = Rc::default();
@@ -90,6 +94,17 @@ pub fn start(window: &AppWindow) {
         let n = step.get();
         // Wait for the file the command line named before typing into it.
         if (30..=40).contains(&n) && shell.get_active_kind() != "file" {
+            return;
+        }
+        // The firmware has spoken once a line of its own is in the dock.
+        if sim
+            && n == 502
+            && shell.get_notes().row_count() == 0
+            && !shell
+                .get_output()
+                .iter()
+                .any(|line| line.kind == 0 && !line.text.trim_start().starts_with("Compiling"))
+        {
             return;
         }
         // The list is up once the scan has answered.
@@ -140,6 +155,30 @@ pub fn start(window: &AppWindow) {
                 if targets {
                     step.set(400);
                 }
+                if sim {
+                    step.set(500);
+                }
+            }
+            500 if sim => app.act("run.run"),
+            578 if sim => {
+                snapshot(&window, &dir.join("simulating.png"));
+                eprintln!("sim: {:?}; {}", shell.get_activity(), app.sim_report());
+                eprintln!(
+                    "sim: notes {:?}",
+                    shell.get_notes().iter().map(|n| n.text).collect::<Vec<_>>()
+                );
+                let output = shell.get_output();
+                let tail: Vec<String> = output
+                    .iter()
+                    .skip(output.row_count().saturating_sub(8))
+                    .map(|line| line.text.to_string())
+                    .collect();
+                eprintln!("sim: the dock ends {tail:#?}");
+                app.act("run.stop");
+            }
+            590 if sim => {
+                eprintln!("sim: after Stop {:?} (state {})", shell.get_activity(), shell.get_activity_state());
+                app.act("app.exit");
             }
             400 if targets => app.act("run.flash"),
             404 if targets => {

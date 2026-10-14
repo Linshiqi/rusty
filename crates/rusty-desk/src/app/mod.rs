@@ -29,6 +29,7 @@ mod part;
 mod playground;
 mod saving;
 mod servers;
+mod sim;
 mod wizard;
 
 use saving::After;
@@ -96,6 +97,8 @@ pub enum NoteAction {
     Run(String),
     /// An action of the window's, by its id.
     Act(&'static str),
+    /// Install these tools, in turn, as the Environment page would.
+    Install(Vec<String>),
 }
 
 #[derive(Default)]
@@ -121,6 +124,7 @@ struct State {
     activities: activity::Activities,
     build_log: build::BuildLog,
     devices: device::Devices,
+    sim: sim::Sim,
 }
 
 pub struct App {
@@ -1050,6 +1054,7 @@ impl App {
                 self.run(&plan, dir, |app, _| app.reread_project());
             }
             Some(NoteAction::Act(id)) => self.act(id),
+            Some(NoteAction::Install(names)) => self.install_tools(names),
             None => {}
         }
     }
@@ -1236,6 +1241,7 @@ impl App {
                 text: note.text.clone().into(),
                 action: match &note.action {
                     Some(NoteAction::Run(_)) => t!("desk.note-run-fix"),
+                    Some(NoteAction::Install(_)) => t!("toolchain.install"),
                     Some(NoteAction::Act(id)) => actions::by_id(id)
                         .map(|a| rusty_i18n::lookup(a.title))
                         .unwrap_or_default(),
