@@ -18,6 +18,19 @@ impl Pane {
             ..
         } = self;
         let path = self.path.get_value();
+        // A key puts the hover card away, as VS Code's does, and the card the
+        // pointer was about to be shown with it: the card is about the text
+        // as it was when it was asked for. Nothing else closed it but the
+        // pointer, so a `;` typed and mended under a resting pointer left
+        // `expected COMMA` up, with its fixes, over a line with nothing
+        // wrong in it. A modifier alone keeps it — Ctrl over a name is how
+        // a link is asked for — and a composing input method is typing.
+        if !matches!(
+            event.key().as_str(),
+            "Control" | "Meta" | "Shift" | "Alt" | "AltGraph" | "CapsLock"
+        ) {
+            self.put_hover_away();
+        }
         // While an IME is composing, Enter confirms the
         // candidate and Tab moves through them. Stealing
         // either would break Chinese input entirely.

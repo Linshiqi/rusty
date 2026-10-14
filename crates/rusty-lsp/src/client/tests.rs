@@ -634,6 +634,83 @@ fn closing_a_document_tells_the_server_once_and_keeps_only_the_checks_findings()
     assert_eq!(closes, 1, "a second close of a closed file says nothing");
 }
 
+/// The check runs on a save and at no other time, so what it found has to
+/// follow the edits made since: the error over a `;` mended to a `,` goes
+/// with the `;`, unsaved, and the one below it moves down with a line
+/// opened above it. Left where the check put them, the `,` that mended it
+/// carried `struct fields are separated by ,` until the next save.
+#[test]
+fn what_the_check_found_follows_the_edits_made_since() {
+    let root = tempfile::tempdir().unwrap();
+    let uri = path_to_uri(&root.path().join("a.rs"));
+    let at = |line: u32, from: u32, to: u32, message: &str| {
+        json!({
+            "range": { "start": { "line": line, "character": from },
+                       "end": { "line": line, "character": to } },
+            "severity": 1,
+            "source": "rustc",
+            "message": message,
+        })
+    };
+    let pushed = json!([
+        at(1, 16, 17, "struct fields are separated by `,`"),
+        at(3, 9, 10, "cannot find value `x`"),
+    ]);
+    let (reader, writer, _seen) = fake_server(move |message, writer| {
+        match method(message) {
+            "textDocument/didOpen" => rpc::write_message(
+                writer,
+                &json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                         "params": { "uri": uri, "diagnostics": pushed.clone() } }),
+            )
+            .unwrap(),
+            "textDocument/diagnostic" => {
+                reply(writer, message, json!({ "kind": "full", "items": [] }))
+            }
+            _ => {}
+        }
+        true
+    });
+    let (client, events) =
+        LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+    let next = |wanted: &[(u32, &str)]| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last = None;
+        loop {
+            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Some(LspEvent::Diagnostics { path, items }) if path == "a.rs" => {
+                    let now: Vec<(u32, String)> = items
+                        .iter()
+                        .map(|item| (item.start_line, item.message.clone()))
+                        .collect();
+                    if now
+                        .iter()
+                        .map(|(l, m)| (*l, m.as_str()))
+                        .eq(wanted.iter().copied())
+                    {
+                        return;
+                    }
+                    last = Some(now);
+                }
+                Some(_) => continue,
+                None => panic!("never {wanted:?}; last {last:?}"),
+            }
+        }
+    };
+
+    let broken = "struct C {\n    pub acc: f32;\n}\nfn f() { x }\n";
+    client.did_open("a.rs", broken).unwrap();
+    next(&[
+        (1, "struct fields are separated by `,`"),
+        (3, "cannot find value `x`"),
+    ]);
+    let mended = "struct C {\n    pub acc: f32,\n}\nfn f() { x }\n";
+    client.did_change("a.rs", mended).unwrap();
+    next(&[(3, "cannot find value `x`")]);
+    client.did_change("a.rs", &format!("\n{mended}")).unwrap();
+    next(&[(4, "cannot find value `x`")]);
+}
+
 /// The server's indexing arrives as `$/progress` and leaves as an event
 /// the status bar can show — with the create request answered, since a
 /// server whose request goes unanswered stalls.

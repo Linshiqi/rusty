@@ -8,7 +8,10 @@
 //! [`positions`] is on the wasm side with the model, because the arithmetic it
 //! holds is not the server's: the editor converts scalars to UTF-16 at the DOM
 //! boundary exactly as this client converts at its own, and the editor used to
-//! carry its own untested copy of four of these functions.
+//! carry its own untested copy of four of these functions. [`follow`] is
+//! there too: what the server said about one text, carried across an edit
+//! to the next — the client's diagnostics and the editor's inlay hints by
+//! one rule.
 //!
 //! Its own crate for the same reason the terminal is: a language server is a
 //! long-lived process with a wire protocol, and neither belongs inside the
@@ -19,6 +22,7 @@
 //! diagnostic freshness, `convert` turns replies into the model, `uri` is the
 //! one place a path becomes a URI or comes back, `rpc` frames bytes.
 
+pub mod follow;
 pub mod model;
 pub mod positions;
 

@@ -130,8 +130,8 @@ impl LspClient {
                     (doc.text != new_text).then(|| {
                         let change = content_change(&doc.text, new_text, encoding);
                         doc.version += 1;
-                        doc.text = new_text.to_string();
-                        (doc.version, change)
+                        let old = std::mem::replace(&mut doc.text, new_text.to_string());
+                        (doc.version, change, old)
                     })
                 })
             };
@@ -143,19 +143,24 @@ impl LspClient {
                 }
                 // What the server has already.
                 Some(None) => return Ok(()),
-                Some(Some((version, (start, end, replacement)))) => self.shared.notify(
-                    "textDocument/didChange",
-                    json!({
-                        "textDocument": { "uri": self.shared.uri(path), "version": version },
-                        "contentChanges": [{
-                            "range": {
-                                "start": { "line": start.0, "character": start.1 },
-                                "end": { "line": end.0, "character": end.1 },
-                            },
-                            "text": replacement,
-                        }],
-                    }),
-                )?,
+                Some(Some((version, (start, end, replacement), old))) => {
+                    self.shared.notify(
+                        "textDocument/didChange",
+                        json!({
+                            "textDocument": { "uri": self.shared.uri(path), "version": version },
+                            "contentChanges": [{
+                                "range": {
+                                    "start": { "line": start.0, "character": start.1 },
+                                    "end": { "line": end.0, "character": end.1 },
+                                },
+                                "text": replacement,
+                            }],
+                        }),
+                    )?;
+                    // In the same turn, so two changes carry it in the order
+                    // they were made.
+                    self.shared.follow_edit(path, &old, new_text);
+                }
             }
         }
         // Same ordering as `did_open`: a pull that overtakes the change on
@@ -276,6 +281,29 @@ impl Shared {
             path: path.to_string(),
             items: pull::merged(&pulled, &pushed),
         });
+    }
+
+    /// What both sources said about `path` before an edit, carried across
+    /// it (`crate::follow`): moved with the text, and gone where the edit
+    /// took away the text it was about. The server's own analysis is pulled
+    /// again after every change anyway and is only kept right until then;
+    /// the check's is the one that needs it, since rust-analyzer checks on
+    /// a save and at no other time — a `;` for a `,`, saved and mended,
+    /// left the check's error under the `,` until the next save.
+    pub(crate) fn follow_edit(&self, path: &str, old: &str, new: &str) {
+        let mut moved = false;
+        for source in [&self.pulled, &self.pushed] {
+            let mut by_file = source.lock().expect("lsp diagnostics");
+            if let Some(items) = by_file.get_mut(path) {
+                moved |= crate::follow::diagnostics(items, old, new);
+                if items.is_empty() {
+                    by_file.remove(path);
+                }
+            }
+        }
+        if moved {
+            self.emit_diagnostics(path);
+        }
     }
 
     pub(crate) fn poke_pull(&self, path: &str) {

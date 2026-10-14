@@ -15,6 +15,15 @@ pub(super) fn Hover(pane: Pane) -> impl IntoView {
         ..
     } = pane;
     let path = pane.path.get_value();
+    // A card taken away under the pointer — by a key, by an edit in the
+    // other view, by another file coming on screen — never says the pointer
+    // left it, and the next card would wait for a leave that had already
+    // happened: moving off it would not close it.
+    Effect::new(move |_| {
+        if state.editor.hover.with(Option::is_none) && on_card.get_untracked() {
+            on_card.set(false);
+        }
+    });
     view! {
         {
             let path = path.clone();
