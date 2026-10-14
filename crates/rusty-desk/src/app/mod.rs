@@ -25,6 +25,7 @@ mod navigate;
 mod part;
 mod saving;
 mod servers;
+mod wizard;
 
 use saving::After;
 
@@ -64,6 +65,7 @@ impl Tab {
             Tab::Page("welcome") => t!("desk.welcome"),
             Tab::Page("settings") => t!("desk.settings"),
             Tab::Page("environment") => rusty_i18n::lookup("panel.toolchain"),
+            Tab::Page("wizard") => t!("wizard.title"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -111,6 +113,7 @@ struct State {
     /// What the picker lists when a list was handed to it.
     listed: Vec<(String, String, Pick)>,
     environment: environment::Environment,
+    wizard: wizard::Wizard,
 }
 
 pub struct App {
@@ -263,6 +266,12 @@ impl App {
         on!(on_note_action, |app, id| app.note_action(id));
         on!(on_env_install, |app, name, command| app
             .env_install(&command, &name));
+        on!(on_wiz_go, |app, step| app.wizard_go(step));
+        on!(on_wiz_filter, |app, query| app.wizard_filter(&query));
+        on!(on_wiz_pick, |app, id| app.wizard_pick(&id));
+        on!(on_wiz_hover, |app, id| app.wizard_hover(&id));
+        on!(on_wiz_name_edited, |app, name| app.wizard_name(&name));
+        on!(on_wiz_set_layout, |app, layout| app.wizard_layout(&layout));
         on!(on_set_theme, |app, theme| app.set_theme(&theme));
         on!(on_set_language, |app, tag| app.set_language(&tag));
         on!(on_set_zoom, |app, zoom| app.set_zoom(zoom));
@@ -317,6 +326,9 @@ impl App {
             "environment.open" => self.open_tab(Tab::Page("environment")),
             "environment.refresh" => self.probe_environment(),
             "environment.install-missing" => self.install_missing(),
+            "project.new" => self.open_wizard(),
+            "wizard.create" => self.wizard_create(),
+            "wizard.install" => self.wizard_install(),
             "welcome.open" => self.open_tab(Tab::Page("welcome")),
             "file.save" => self.save(),
             "find.open" => self.editor.find_open(false),

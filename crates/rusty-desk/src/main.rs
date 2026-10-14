@@ -9,6 +9,7 @@ mod app;
 mod catalogue;
 mod docks;
 mod editor;
+mod format;
 mod keys;
 mod language;
 mod lsp;

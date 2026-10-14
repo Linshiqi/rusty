@@ -38,6 +38,14 @@ fn purpose(name: &str, english: &str) -> String {
     rusty_i18n::translate(&format!("tool.{name}")).unwrap_or_else(|| english.to_string())
 }
 
+impl Environment {
+    /// The machine as last asked, for what else needs to know — the
+    /// wizard, whether the generator it would run is there.
+    pub(super) fn report(&self) -> Option<&ToolchainReport> {
+        self.report.as_ref()
+    }
+}
+
 impl App {
     /// Ask the machine again, off this thread: rustup, cargo and every tool
     /// the project's part needs are each a process to start.
@@ -58,6 +66,7 @@ impl App {
                     state.environment.report = Some(report);
                 }
                 app.sync_environment();
+                app.sync_wizard();
                 // The first run: a machine that cannot build says so once,
                 // with the page that fixes it one click away. A tool that
                 // is only optional is not worth interrupting anybody for.

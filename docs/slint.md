@@ -230,7 +230,14 @@ tests green, and CLAUDE.md saying how it works.
    old window's page now reads too (its rules moved there, tests and
    all), and installing one tool at a time through `rusty_embed::install`,
    the first failure ending the queue; and the first run, a note when the
-   machine cannot build that opens the page. `the_window_names_no_part`
+   machine cannot build that opens the page. The wizard: the parts a
+   project can be started for, what the selected one commits the project
+   to beside it, then the runtime (C where the part has a template), the
+   layout and the generator's options, then a name refused while it is
+   typed, the consequences and the command; the generator checked before
+   the button is offered, run in Output or rusty's template written, the
+   workspace wrapped round it, and the project opened on its entry point —
+   proven by the probe writing a template part's project and opening it. `the_window_names_no_part`
    scans every source and `.slint` file for a catalogue id, a family's
    name or a vendor's — proven by planting one.
 5. **Build, flash, watch.** The build system's own plan run in the dock,
