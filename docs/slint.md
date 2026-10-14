@@ -161,41 +161,64 @@ The rules:
 
 ## The order
 
+The order is the product's, not an editor's: rusty is a workbench for
+embedded work in **Rust, C and C++, on many parts, extensible as data, and
+simulated** — and a phase is worth doing first when it moves one of those.
+So the editor stops at what writing code needs, and the loop that makes
+this an embedded workbench — the part, the build, the board, the simulator
+— comes before anything that only makes the editor more like VS Code.
+
 Each phase ends with the window usable for what it has, the probe and the
 tests green, and CLAUDE.md saying how it works.
 
 0. **The editor spike** — done: rendering, typing, scrolling, CJK, tabs,
    measured above.
-1. **The shell**, as designed above: the frameless window and its title
-   bar, the three docks and the editor area with its tabs, the status bar,
-   notifications, the theme (dark, light, the system's), the interface
-   languages, `workbench.toml` (the layout and the appearance live there
-   now — there is no WebView storage), the actions, their keys, the
-   palette, the welcome page, settings, dialogs (`rfd`), the clipboard
-   (`arboard`).
-2. **The editor**, to and past what the WebView one did: tabs and two
-   groups, painting off the thread, selection, undo, find and replace,
-   folding, multiple cursors, Vim, bracket pairs, rust-analyzer and clangd
-   (diagnostics, completion, hover, signature, actions, rename,
-   navigation, inlay hints, semantic colours), the minimap, sticky scroll,
-   indent guides, test lenses. And the gaps the comparison with VS Code
-   found: drafts survive closing and a restart (hot exit — closing the
-   window asks nothing, closing a tab with changes does), line endings and
-   encodings are kept, the line commands, F12/F8, the selection reaching
-   code actions, completion's documentation.
-   *Done:* the editing core — selection, every caret and selection key
-   VS Code has, multiple cursors, undo in VS Code's units, the clipboard
-   with whole lines, bracket pairs, indentation, the line commands,
-   painting off the thread — hot exit, encodings and line endings, and
-   rustfmt on save within a one-second budget.
-3. **The project panels**: files, search, Git, crates, features, disk,
-   memory, the environment, the wizard, the first-run setup, the
-   playground.
-4. **Running things**: the dock's output, problems and terminal, build,
-   flash, monitor, the device picker, the simulator and its sheet, debug
-   and registers, plot, waves, signals, flight, draw, the math toolbox.
-5. **The assistant and Markdown pages.**
-6. **Shipping**: installers and the updater without Tauri, the bundled
+1. **The shell** — done, as designed above: the frameless window and its
+   title bar, the three docks and the editor area with its tabs, the status
+   bar, notifications, the theme, the interface languages, `workbench.toml`,
+   the actions and their keys, the palette, the welcome page, settings,
+   dialogs, the clipboard.
+2. **Writing code** — done: selection, every caret and selection key,
+   multiple cursors, undo in VS Code's units, the clipboard with whole
+   lines, bracket pairs, indentation, the line commands, painting off the
+   thread; drafts that survive closing and a restart, encodings and line
+   endings kept; find and replace (case, whole word, regular expressions,
+   in selection) and go to line; rustfmt on save.
+3. **The three languages, alike.** rust-analyzer for Rust, clangd for C and
+   C++, and both in one Cargo project whose build script compiles C —
+   `rusty-lsp` already routes by `ServerKind` and runs the companion; the
+   window gets diagnostics, completion, hover, signature, definition and
+   references, code actions and rename, inlay hints and semantic colours
+   through one door for all three. What a language is — its extensions, its
+   server, its comment marker, its formatter — is one table, not a `match`
+   per feature: rustfmt for Rust, clang-format for C and C++ only where the
+   project carries a `.clang-format` (a style imposed on vendor code is a
+   diff nobody asked for).
+4. **The project is a part.** Opening a folder runs detection —
+   Cargo, PlatformIO or CMake; the chip, from wherever that build system
+   says it; what the machine lacks to build it — and the window says it:
+   the chip in the status bar, the run target in the title bar chosen from
+   the catalogue (the simulator where the part has an `emulation`, the
+   board where it has a flasher, neither invented), the Environment page,
+   the first-run setup, the wizard and the playground. **The window names
+   no part**: every difference between two chips is a key of the
+   catalogue, and a test holds `rusty-desk`'s source to that.
+5. **Build, flash, watch.** The build system's own plan run in the dock,
+   its errors in Problems and on the lines they are about, the size of the
+   image against the part's memory; flashing through the part's flasher to
+   the device chosen once in the title bar; the serial monitor through the
+   one `absorb`, so a board's telemetry and parameters reach Plot as a
+   simulation's do.
+6. **The simulator.** The sheet beside the code, the run in rusty's QEMU or
+   rusty's own emulator as the catalogue says, the pin channel, the parts
+   and their behaviours, Plot, Waves, Signals, Flight and Draw, debugging
+   in the simulator and on the board.
+7. **The rest of the workbench**: Git, project search, crates and features,
+   disk and memory, the terminal, the assistant and its tools, Markdown
+   pages.
+8. **The editor's depth**, now that everything it is for exists: folding,
+   sticky scroll, the minimap, indent guides, test lenses, Vim, two groups.
+9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
 Then `rusty-ui`, `rusty-app` and `rusty-ipc` are deleted, and with them the
