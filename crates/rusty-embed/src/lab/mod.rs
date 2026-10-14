@@ -12,8 +12,13 @@ use crate::nets::{Behaviour, behaviour_of};
 use crate::signal::{Signal, SignalError};
 use crate::wave::WaveTarget;
 
+pub mod chart;
+pub mod design;
 pub mod record;
+pub mod response;
+pub mod spectrum;
 pub mod sweep;
+pub mod time;
 
 /// Conversions kept per pin: a minute of a kilohertz loop. Past it the
 /// oldest go, as a stream's should — what the converter just did is what
