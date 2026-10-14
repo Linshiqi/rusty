@@ -172,21 +172,21 @@ pub fn start(window: &AppWindow) {
                 app.act("welcome.open");
             }
             189 => snapshot(&window, &dir.join("welcome.png")),
-            // Back to the file, and with RUSTY_PROBE_SAVES a save through
-            // rustfmt.
+            // Back to the file. (With RUSTY_PROBE_SAVES, the save through
+            // rustfmt comes last: it replaces the whole text.)
             190 => {
                 let file = shell.get_tabs().iter().find(|tab| tab.kind == "file");
                 if let Some(tab) = file {
                     shell.invoke_pick_tab(tab.id);
                 }
             }
-            191 if saves => {
+            2161 if saves => {
                 chord(&[Key::Control], "a".into());
                 code.invoke_typed("fn  main( ){let x=1;}\n".into());
                 chord(&[Key::Control], "s".into());
             }
             // rustfmt has a second; the write follows it.
-            235 if saves => {
+            2205 if saves => {
                 snapshot(&window, &dir.join("saved.png"));
                 let mut args = std::env::args().skip(1);
                 if let (Some(root), Some(file)) = (args.next(), args.next()) {
@@ -314,7 +314,64 @@ pub fn start(window: &AppWindow) {
                 }
             }
             1990 => snapshot(&window, &dir.join("signature.png")),
-            2000 => {
+            // Navigation: F12 from a use of a name to where it is declared,
+            // Alt+Left back; Shift+F12 for the references to a function;
+            // Ctrl+. on the problem F8 finds first.
+            1991 => {
+                key(Key::Escape.into());
+                app.editor().go_to(8, Some(12));
+                app.act("editor.definition");
+            }
+            2030 => {
+                let at = |app: &crate::app::App| app.editor().status().map(|(l, c, ..)| (l, c));
+                eprintln!("definition: from 8:12 to {:?}", at(&app));
+                app.act("nav.back");
+                eprintln!("back: at {:?}", at(&app));
+                app.editor().go_to(7, Some(5));
+                app.act("editor.references");
+            }
+            2070 => snapshot(&window, &dir.join("references.png")),
+            2071 => {
+                shell.set_picker_open(false);
+                shell.invoke_picker_pick(-1);
+                chord(&[Key::Control], Key::Home.into());
+                app.act("problem.next");
+                app.act("editor.quick-fix");
+            }
+            2110 => snapshot(&window, &dir.join("fixes.png")),
+            2111 => {
+                shell.set_picker_open(false);
+                shell.invoke_picker_pick(-1);
+                if saves {
+                    app.editor().go_to(2, Some(9));
+                    app.act("editor.rename");
+                }
+            }
+            2115 if saves => {
+                for letter in ["P", "i", "d"] {
+                    key(letter.into());
+                }
+            }
+            2120 if saves => snapshot(&window, &dir.join("rename.png")),
+            2121 if saves => key(Key::Return.into()),
+            2159 if saves => snapshot(&window, &dir.join("renamed.png")),
+            2160 if saves => {
+                let text = draft().unwrap_or_default();
+                eprintln!(
+                    "rename: `struct Pid` {} and `Gain` {}",
+                    if text.contains("struct Pid") {
+                        "is there"
+                    } else {
+                        "is NOT there"
+                    },
+                    if text.contains("Gain") {
+                        "is still there"
+                    } else {
+                        "is gone"
+                    }
+                );
+            }
+            2210 => {
                 app.act("app.exit");
                 let kept = rusty_embed::config::data_dir()
                     .and_then(|data| std::fs::read_dir(data.join("backups")).ok())

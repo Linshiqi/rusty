@@ -116,6 +116,12 @@ export global Shell {
     // What the field holds: empty, or what it was opened with (`:` for a
     // line), with the caret after it.
     in-out property <string> picker-text;
+    // The text it opened with selected, to be typed over: a rename's name.
+    in property <bool> picker-select-all;
+    // Counts every opening: one opened while another is up is the same
+    // element, which `init` does not see, so the field is given the keys
+    // whenever this moves.
+    in property <int> picker-opened;
     in property <string> picker-hint;
     in property <[PickRow]> picker-rows;
     in-out property <int> picker-selected;

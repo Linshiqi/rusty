@@ -20,6 +20,7 @@ use rusty_i18n::{Locale, t};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 
 mod drafts;
+mod navigate;
 mod saving;
 mod servers;
 
@@ -88,6 +89,13 @@ struct State {
     notes: Vec<NoteItem>,
     next_note: i32,
     server: servers::ServerStatus,
+    jumps: navigate::Jumps,
+    /// The fixes the picker lists, with the version of the text they are for.
+    fixes: Option<(u64, rusty_lsp::CodeActions)>,
+    /// A rename being typed: where the symbol is, and its name now.
+    renaming: Option<(String, u32, u32, String)>,
+    /// What the picker lists when a list was handed to it.
+    listed: Vec<(String, String, Pick)>,
 }
 
 pub struct App {
@@ -237,6 +245,13 @@ impl App {
             "find.previous" => self.editor.find_next(false),
             "editor.go-to-line" => self.open_picker_with(Mode::Files, ":"),
             "editor.show-hover" => self.editor.hover_caret(),
+            "editor.definition" => self.go_to_definition(),
+            "editor.references" => self.find_places(false),
+            "editor.implementations" => self.find_places(true),
+            "editor.quick-fix" => self.quick_fix(),
+            "editor.rename" => self.rename_prompt(),
+            "nav.back" => self.walk(true),
+            "nav.forward" => self.walk(false),
             "problem.next" => self.next_problem(true),
             "problem.previous" => self.next_problem(false),
             "tab.close" => {
@@ -585,16 +600,38 @@ impl App {
 
     /// The picker open with `text` already typed: `:` for a line.
     fn open_picker_with(self: &Rc<Self>, mode: Mode, text: &str) {
+        self.open_picker_titled(mode, text, None);
+    }
+
+    /// The picker listing `rows` under `heading`, to choose one from.
+    pub(super) fn open_list(
+        self: &Rc<Self>,
+        mode: Mode,
+        heading: String,
+        rows: Vec<(String, String, Pick)>,
+    ) {
+        self.state.borrow_mut().listed = rows;
+        self.open_picker_titled(mode, "", Some(heading));
+    }
+
+    fn open_picker_titled(self: &Rc<Self>, mode: Mode, text: &str, heading: Option<String>) {
         self.state.borrow_mut().picker = Some((mode, Vec::new()));
         if let Some(window) = self.window() {
             let shell = window.global::<Shell>();
             shell.set_picker_text(text.into());
-            shell.set_picker_hint(SharedString::from(match mode {
+            // A name to replace is selected whole, as VS Code's rename box
+            // selects it; anything else is typed after.
+            shell.set_picker_select_all(mode == Mode::Rename);
+            let hint = heading.unwrap_or_else(|| match mode {
                 Mode::Commands => t!("desk.palette-hint"),
                 Mode::Files => t!("desk.finder-hint"),
                 Mode::Projects => t!("desk.projects-hint"),
-            }));
+                Mode::Rename => t!("desk.rename-hint"),
+                Mode::Places | Mode::Fixes => String::new(),
+            });
+            shell.set_picker_hint(SharedString::from(hint));
             shell.set_picker_open(true);
+            shell.set_picker_opened(shell.get_picker_opened() + 1);
         }
         self.picker_query(text);
     }
@@ -612,6 +649,19 @@ impl App {
                 picker::files(query, files)
             }
             Mode::Projects => picker::projects(query, &self.state.borrow().recents),
+            Mode::Places | Mode::Fixes => {
+                let state = self.state.borrow();
+                let titles: Vec<String> = state
+                    .listed
+                    .iter()
+                    .map(|(title, detail, _)| format!("{title} {detail}"))
+                    .collect();
+                picker::rank(query, &titles)
+                    .into_iter()
+                    .map(|at| state.listed[at].clone())
+                    .collect()
+            }
+            Mode::Rename => self.rename_rows(query),
         };
         let rows: Vec<PickRow> = found
             .iter()
@@ -652,6 +702,16 @@ impl App {
             Some(Pick::File(path)) => self.open_file(path),
             Some(Pick::Project(path)) => self.open_project(PathBuf::from(path), None),
             Some(Pick::Line(line, col)) => self.editor.go_to(line, col),
+            Some(Pick::Place(location)) => self.jump(&location),
+            // The keys back in the code the fix or the rename changes.
+            Some(Pick::Fix(index)) => {
+                self.front_focus();
+                self.apply_fix(index);
+            }
+            Some(Pick::Rename(name)) => {
+                self.front_focus();
+                self.rename_to(name);
+            }
             Some(Pick::Nothing) => self.front_focus(),
             None => {
                 // Escape or a click outside: back to whatever had the keys.

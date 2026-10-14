@@ -55,6 +55,10 @@ pub struct Document {
     /// Lines edited since the last repaint was taken in, which the next one
     /// must paint whether or not its own diff finds them.
     pub unpainted: Option<Range<usize>>,
+    /// Outside the project — a dependency's source, a toolchain's header —
+    /// and opened to be read: every edit is refused here, the one place
+    /// every edit passes through.
+    pub read_only: bool,
     saved: u64,
 }
 
@@ -81,6 +85,7 @@ impl Document {
             want_x: None,
             paint: None,
             unpainted: None,
+            read_only: false,
         }
     }
 
@@ -100,7 +105,7 @@ impl Document {
 
     /// An edit: the new text and cursors, remembered for undo as `kind`.
     pub fn edit(&mut self, text: String, cursors: Vec<Cursor>, kind: Kind) -> Option<Change> {
-        if text == self.text {
+        if text == self.text || self.read_only {
             self.set_cursors(cursors);
             return None;
         }

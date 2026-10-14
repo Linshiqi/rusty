@@ -383,6 +383,79 @@ impl Surface {
         }
     }
 
+    /// Where the caret is, for a question about the name there: the file,
+    /// its line and column, and the text as the question should find it.
+    pub fn caret_question(&self) -> Option<(String, u32, u32, rusty_lsp::Draft)> {
+        let doc = self.doc()?;
+        let d = doc.borrow();
+        let (line, col) = d.lines.position(&d.text, d.primary().head);
+        Some((
+            d.path.clone(),
+            line as u32,
+            col as u32,
+            self.servers.draft(&d.text),
+        ))
+    }
+
+    /// The word the caret is in, for a rename to start from.
+    pub fn caret_word(&self) -> Option<String> {
+        let doc = self.doc()?;
+        let d = doc.borrow();
+        let (from, to) = cursors::word_at(&d.text, d.primary().head)?;
+        Some(d.text[from..to].to_string())
+    }
+
+    /// Open a file outside the project, to be read and not written.
+    pub fn show_read_only(&self, mut document: Document) {
+        document.read_only = true;
+        self.show_new(document);
+    }
+
+    /// The text a file has on disk now, put in its document as an edit —
+    /// a rename or a fix wrote it there — and the document saved as that.
+    pub fn reload(&self, path: &str, text: String) {
+        let Some(doc) = self.open.borrow().get(path).cloned() else {
+            return;
+        };
+        let head = doc.borrow().primary().head.min(text.len());
+        let head = (0..=head)
+            .rev()
+            .find(|&at| text.is_char_boundary(at))
+            .unwrap_or(0);
+        let change = doc
+            .borrow_mut()
+            .edit(text.clone(), vec![Cursor::caret(head)], Kind::Other);
+        doc.borrow_mut().mark_saved(&text);
+        if let Some(change) = change {
+            self.edited(&doc, change);
+        }
+        self.tell_edit(path);
+    }
+
+    /// Edits the server sent for the document on screen — a fix — applied
+    /// while it is still the text they were made for (`version`).
+    pub fn apply_server_edits(&self, version: u64, edits: Vec<rusty_lsp::ActionEdit>) {
+        self.apply_resolved(version, edits);
+    }
+
+    pub fn version_now(&self) -> Option<u64> {
+        Some(self.doc()?.borrow().version)
+    }
+
+    /// Every open document whose text differs from the disk's, as it is to
+    /// be written.
+    pub fn unsaved(&self) -> Vec<(String, String, Charset, LineEnding)> {
+        self.open
+            .borrow()
+            .values()
+            .filter_map(|doc| {
+                let d = doc.borrow();
+                (d.dirty() && !d.read_only)
+                    .then(|| (d.path.clone(), d.text.clone(), d.charset, d.ending))
+            })
+            .collect()
+    }
+
     /// How many lines the document on screen has.
     pub fn line_count(&self) -> Option<usize> {
         Some(self.doc()?.borrow().lines.count())
@@ -457,7 +530,12 @@ impl Surface {
         let this = Rc::downgrade(self);
         code.on_pointer(move |kind, row, x, y, modifiers| {
             if let Some(this) = this.upgrade() {
-                this.pointer(kind, row as usize, x, y, modifiers.shift, modifiers.alt);
+                let held = (
+                    modifiers.shift,
+                    modifiers.alt,
+                    modifiers.control || modifiers.meta,
+                );
+                this.pointer(kind, row as usize, x, y, held);
             }
         });
     }
@@ -789,7 +867,9 @@ impl Surface {
 
     // ---- the pointer -----------------------------------------------------
 
-    fn pointer(&self, kind: i32, row: usize, x: f32, y: f32, shift: bool, alt: bool) {
+    /// `held` is Shift, Alt and Ctrl (or Cmd).
+    fn pointer(&self, kind: i32, row: usize, x: f32, y: f32, held: (bool, bool, bool)) {
+        let (shift, alt, ctrl) = held;
         let Some(doc) = self.doc() else { return };
         let row_height = self
             .window
@@ -807,6 +887,13 @@ impl Surface {
             self.hide_hover();
             self.close_completion();
             self.close_signature();
+        }
+        // Ctrl+click: the definition of the name clicked, the caret put
+        // there first so the jump is about what was clicked.
+        if kind == 0 && ctrl && !alt {
+            self.set_cursors(vec![Cursor::caret(at)]);
+            crate::work::app().act("editor.definition");
+            return;
         }
         match kind {
             0 => self.press(&doc, line, x, at, shift, alt),

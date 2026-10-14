@@ -275,6 +275,25 @@ impl Servers {
         );
     }
 
+    /// [`Self::ask`] for a question whose failure is news: a rename or a
+    /// fix that writes files, where silence would read as done. The
+    /// answer, or what went wrong in the client's words.
+    pub fn ask_result<T: Send + 'static>(
+        &self,
+        path: &str,
+        question: impl FnOnce(&LspClient, &str) -> rusty_lsp::Result<T> + Send + 'static,
+        then: impl FnOnce(&Rc<App>, Result<T, String>) + Send + 'static,
+    ) {
+        let Some(client) = self.for_path(path) else {
+            return;
+        };
+        let path = path.to_string();
+        work::spawn(
+            move || question(&client, &path).map_err(|error| error.to_string()),
+            then,
+        );
+    }
+
     /// What the status bar calls the servers running: `rust-analyzer`, or
     /// `rust-analyzer + clangd` with the one beside it.
     pub fn label(&self) -> String {

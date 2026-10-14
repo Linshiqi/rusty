@@ -250,7 +250,9 @@ python crates/rusty-mcu/scripts/x035_pins.py \
 # and prints each key's and scroll step's time to the frame that shows it.
 # Then it waits up to a minute for the language server to report a
 # problem, and photographs the Problems panel and the hover card — on a
-# Cargo project that is rust-analyzer, on a CMake one clangd.
+# Cargo project that is rust-analyzer, on a CMake one clangd — then
+# completes a field, opens a call's signature, goes to a definition and
+# back, lists references and fixes, and (with RUSTY_PROBE_SAVES) renames.
 # It exits through File > Exit, so what it typed is kept as a draft (hot
 # exit): it refuses to run without a data directory of its own, and a
 # second run on the same one shows the draft back. RUSTY_PROBE_SAVES also

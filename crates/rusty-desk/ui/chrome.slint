@@ -139,9 +139,18 @@ export component StatusBar inherits Rectangle {
 // The palette and the finder: a field and the rows that match it, keys on
 // the right. Up and Down move, Enter takes, Escape closes.
 export component Picker inherits Rectangle {
+    property <int> opened: Shell.picker-opened;
+    changed opened => {
+        self.focus-field();
+    }
+
     public function focus-field() {
         field.focus();
-        field.set-selection-offsets(Shell.picker-text.character-count, Shell.picker-text.character-count);
+        if Shell.picker-select-all {
+            field.select-all();
+        } else {
+            field.set-selection-offsets(Shell.picker-text.character-count, Shell.picker-text.character-count);
+        }
     }
 
     background: #00000033;
