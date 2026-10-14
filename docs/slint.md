@@ -199,6 +199,9 @@ tests green, and CLAUDE.md saying how it works.
    happened; what they found squiggled, counted in the status bar, listed
    in Problems and stepped through with F8; the hover card with the
    problems under the pointer and the server's signature and docs;
+   completion as you type (the rules moved to `rusty_lsp::complete`, one
+   copy for both windows), its imports brought along, and the signature of
+   the call being typed;
    clang-format on save — proven on a Cargo project with rust-analyzer and
    a CMake one with clangd.
 4. **The project is a part.** Opening a folder runs detection —

@@ -286,7 +286,35 @@ pub fn start(window: &AppWindow) {
                 app.act("editor.show-hover");
             }
             1870 => snapshot(&window, &dir.join("hover-docs.png")),
-            1880 => {
+            // Completion: a field asked for after `g.` on a line of its
+            // own, narrowed by a letter and taken with Enter; then a call
+            // opened, and what it takes shown above it.
+            1871 => {
+                app.editor().hide_hover();
+                app.editor().go_to(14, Some(999));
+                key(Key::Return.into());
+                key("g".into());
+                key(".".into());
+            }
+            1920 => snapshot(&window, &dir.join("completion.png")),
+            1921 => key("k".into()),
+            1940 => {
+                key(Key::Return.into());
+                let line = app.editor().status().map(|(line, ..)| line);
+                let text = draft().unwrap_or_default();
+                let typed = line
+                    .and_then(|line| text.lines().nth(line - 1))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                eprintln!("completion: the line reads {typed:?}");
+                key(Key::Return.into());
+                for letter in ["s", "c", "a", "l", "e", "("] {
+                    key(letter.into());
+                }
+            }
+            1990 => snapshot(&window, &dir.join("signature.png")),
+            2000 => {
                 app.act("app.exit");
                 let kept = rusty_embed::config::data_dir()
                     .and_then(|data| std::fs::read_dir(data.join("backups")).ok())

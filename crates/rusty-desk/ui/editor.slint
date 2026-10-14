@@ -35,6 +35,16 @@ export struct Row {
     marks: [Mark],
 }
 
+// A row of the completion popup: what it inserts, the note beside it, its
+// type at the right, and the glyph of its kind coloured as that kind is.
+export struct CompletionRow {
+    label: string,
+    extra: string,
+    detail: string,
+    glyph: string,
+    kind: int,
+}
+
 // A problem on the hover card: an error (1), a warning (2), the rest (3),
 // what it says, and who said it.
 export struct HoverProblem {
@@ -78,6 +88,131 @@ export global Code {
     in-out property <bool> on-card;
     // The pointer moved over a row (or off the rows, at -1), not pressed.
     callback hovered(int /* row */, length /* x */, length /* y */);
+
+    // The completion popup: under which line, from where along it, the
+    // rows drawn and which the keys are on, and how many there are in all.
+    in property <bool> completion-open;
+    in property <int> completion-line;
+    in property <length> completion-x;
+    in property <[CompletionRow]> completion-rows;
+    in property <int> completion-selected;
+    in property <int> completion-count;
+    callback completion-pick(int);
+
+    // The signature of the call the caret is in, the parameter it is on
+    // apart from the rest.
+    in property <bool> signature-open;
+    in property <int> signature-line;
+    in property <length> signature-x;
+    in property <string> signature-before;
+    in property <string> signature-param;
+    in property <string> signature-after;
+}
+
+component CompletionPopup inherits Rectangle {
+    width: 460px;
+    height: column.preferred-height;
+    background: Theme.overlay;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000040;
+    drop-shadow-offset-y: 3px;
+    clip: true;
+    column := VerticalLayout {
+        padding: 3px;
+        for row[i] in Code.completion-rows: Rectangle {
+            height: 22px;
+            border-radius: 4px;
+            background: i == Code.completion-selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 8px;
+                spacing: 7px;
+                Text {
+                    width: 12px;
+                    text: row.glyph;
+                    color: Theme.token(row.kind);
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: row.label;
+                    color: Theme.label;
+                    font-family: Theme.mono;
+                    font-size: Code.font-size;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: row.extra;
+                    color: Theme.label-3;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: row.detail;
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+            touch := TouchArea {
+                clicked => {
+                    Code.completion-pick(i);
+                }
+            }
+        }
+    }
+}
+
+component SignatureCard inherits Rectangle {
+    // The row's own width, padding included: any more, and the layout
+    // shared the extra out between the three pieces as gaps.
+    width: min(row.preferred-width, 640px);
+    height: 26px;
+    background: Theme.overlay;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 10px;
+    drop-shadow-color: #00000033;
+    clip: true;
+    row := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 0px;
+        alignment: start;
+        Text {
+            text: Code.signature-before;
+            color: Theme.label-2;
+            font-family: Theme.mono;
+            font-size: Code.font-size;
+            vertical-alignment: center;
+        }
+        Text {
+            text: Code.signature-param;
+            color: Theme.rust;
+            font-weight: 700;
+            font-family: Theme.mono;
+            font-size: Code.font-size;
+            vertical-alignment: center;
+        }
+        Text {
+            text: Code.signature-after;
+            color: Theme.label-2;
+            font-family: Theme.mono;
+            font-size: Code.font-size;
+            vertical-alignment: center;
+        }
+    }
 }
 
 // The card itself: problems first, then the code and its documentation.
@@ -629,6 +764,19 @@ export component CodeView inherits Rectangle {
                 self.text = "";
             }
         }
+    }
+
+    // The signature above the caret's line, the popup under it — above the
+    // line when there is no room below.
+    if Code.signature-open: SignatureCard {
+        property <length> line-top: Code.signature-line * Code.row-height + list.content-y;
+        x: max(4px, min(root.gutter + Code.signature-x + list.content-x - 10px, root.width - self.width - 12px));
+        y: self.line-top - self.height - 2px >= 0 ? self.line-top - self.height - 2px : self.line-top + Code.row-height + 2px;
+    }
+    if Code.completion-open: CompletionPopup {
+        property <length> line-top: Code.completion-line * Code.row-height + list.content-y;
+        x: max(4px, min(root.gutter + Code.completion-x + list.content-x - 28px, root.width - self.width - 12px));
+        y: self.line-top + Code.row-height + self.height + 2px <= root.height ? self.line-top + Code.row-height + 2px : self.line-top - self.height - 2px;
     }
 
     // Above the line it is about, or below it when there is no room above;

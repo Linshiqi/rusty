@@ -12,6 +12,7 @@
 
 pub mod backup;
 mod clip;
+mod completion;
 mod cursors;
 mod document;
 mod find;
@@ -33,7 +34,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     ops::Range,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -95,6 +96,8 @@ const CLICK_GAP: Duration = Duration::from_millis(450);
 const CLICK_SLOP: f32 = 4.0;
 
 pub struct Surface {
+    /// Itself, for the timers that call back into it.
+    this: Weak<Surface>,
     files: Arc<Files>,
     open: RefCell<HashMap<String, Rc<RefCell<Document>>>>,
     current: Shared,
@@ -122,6 +125,7 @@ pub struct Surface {
     /// The lines squiggles are drawn on in the document on screen.
     squiggled: RefCell<Vec<usize>>,
     hovering: hover::Hovering,
+    completing: completion::Completing,
 }
 
 impl Surface {
@@ -143,7 +147,8 @@ impl Surface {
         window
             .global::<Code>()
             .set_rows(ModelRc::from(rows.clone()));
-        let surface = Rc::new(Surface {
+        let surface = Rc::new_cyclic(|this| Surface {
+            this: this.clone(),
             files,
             open: RefCell::default(),
             current,
@@ -164,6 +169,7 @@ impl Surface {
             problems,
             squiggled: RefCell::default(),
             hovering: hover::Hovering::default(),
+            completing: completion::Completing::default(),
         });
         surface.wire(window);
         surface
@@ -314,6 +320,8 @@ impl Surface {
         *self.current.borrow_mut() = Some(doc);
         *self.marked.borrow_mut() = 0..0;
         self.squiggled.borrow_mut().clear();
+        self.close_completion();
+        self.close_signature();
         self.finding.borrow_mut().scope = None;
         self.research(None);
         self.rows.reset();
@@ -428,6 +436,9 @@ impl Surface {
             let m = event.modifiers;
             // Any key puts the card away: it is about the text as it was.
             this.hide_hover();
+            if this.completion_key(&event.text, m.control || m.alt || m.meta) {
+                return true;
+            }
             let page = this.page();
             match keymap::command(&event.text, m.control || m.meta, m.alt, m.shift, page) {
                 Some(command) if this.doc().is_some() => {
@@ -435,6 +446,12 @@ impl Surface {
                     true
                 }
                 _ => false,
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_completion_pick(move |row| {
+            if let Some(this) = this.upgrade() {
+                this.completion_pick(row as usize);
             }
         });
         let this = Rc::downgrade(self);
@@ -639,6 +656,10 @@ impl Surface {
                 self.set_cursors(lineops::line_selected(&text, &cursors));
                 None
             }
+            Command::Suggest => {
+                self.suggest();
+                None
+            }
             Command::ToggleComment => {
                 let path = doc.borrow().path.clone();
                 language::of(&path)
@@ -652,6 +673,19 @@ impl Surface {
             match change {
                 Some(change) => self.after_edit(&doc, change),
                 None => self.cursors_moved(),
+            }
+        }
+        // Deleting widens the popup; anything else that is not typing
+        // leaves the word, and the popup goes. The signature is asked
+        // again, and goes when the caret has left the call.
+        match command {
+            Command::Backspace { .. } | Command::Delete { .. } => self.after_typing(false),
+            Command::Suggest => {}
+            _ => {
+                self.close_completion();
+                if self.completing_signature() {
+                    self.after_typing(false);
+                }
             }
         }
     }
@@ -689,6 +723,7 @@ impl Surface {
         if let Some(change) = change {
             self.after_edit(&doc, change);
         }
+        self.after_typing(true);
     }
 
     fn copy(&self, text: &str, cursors: &[Cursor]) {
@@ -770,6 +805,8 @@ impl Surface {
         };
         if kind == 0 {
             self.hide_hover();
+            self.close_completion();
+            self.close_signature();
         }
         match kind {
             0 => self.press(&doc, line, x, at, shift, alt),

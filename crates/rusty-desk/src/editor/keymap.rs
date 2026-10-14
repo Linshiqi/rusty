@@ -49,6 +49,8 @@ pub enum Command {
     },
     SelectLine,
     ToggleComment,
+    /// Ctrl+Space: what the server offers at the caret.
+    Suggest,
 }
 
 /// The command a key names, or `None` for the window's bindings to have it.
@@ -104,6 +106,7 @@ pub fn command(text: &str, ctrl: bool, alt: bool, shift: bool, page: isize) -> O
                 '/' => ToggleComment,
                 ']' => Indent,
                 '[' => Outdent,
+                ' ' => Suggest,
                 _ => return None,
             },
         },
