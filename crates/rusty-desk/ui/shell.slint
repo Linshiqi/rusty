@@ -219,6 +219,10 @@ export global Shell {
     // What the window ran, line by line.
     in property <[OutputLine]> output;
     callback output-click(int);
+    // Whether what runs reads what is typed in the dock — rusty's serial
+    // link — and a line typed there.
+    in property <bool> output-input;
+    callback output-send(string);
 
     // What the language servers found, file by file.
     in property <[ProblemRow]> problems;

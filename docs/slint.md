@@ -272,7 +272,23 @@ tests green, and CLAUDE.md saying how it works.
    through `flash::launch`, so a UF2 copy and a DFU image run as any
    command does. The rules for which board a verb uses when none is chosen
    (`rusty_embed::only_candidate`, `serial_capable`, `usable_boot`) moved
-   into the model, ready for the target list.
+   into the model. The target list is one list from the title bar's
+   target icon — the simulator where the part has one, the serial ports,
+   the probes and the bootloaders the part can be written through — kept
+   once chosen. Run (Ctrl+F5) runs on it: the simulator (phase 6), or
+   Flash. Flash (Ctrl+U) builds, plans against the image that build made
+   (`flash::plan`, PlatformIO's own upload for a PlatformIO project), asks
+   before a write the plan warns about, and stays attached as a monitor;
+   Monitor (Ctrl+Shift+M) attaches without writing, over rusty's own serial
+   link for a part espflash cannot talk to, typed into from a line under
+   the dock. With nothing chosen the one board plugged in is the answer;
+   otherwise the list opens with the verb waiting on it, and offers no
+   simulator to a board verb. A monitor holding the port is stopped first,
+   and the flash starts from its end. Proven as far as this desk allows —
+   the list, the ask, the choice — and **not against a board**: the
+   machine it was written on had four COM ports, none a board, and no
+   probe. Telemetry reaching Plot waits for Plot (6); every line already
+   passes the one door it will be read at.
 6. **The simulator.** The sheet beside the code, the run in rusty's QEMU or
    rusty's own emulator as the catalogue says, the pin channel, the parts
    and their behaviours, Plot, Waves, Signals, Flight and Draw, debugging

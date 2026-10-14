@@ -206,6 +206,7 @@ export component Field inherits Rectangle {
     in property <bool> mono;
     in-out property <string> text;
     callback edited(string);
+    callback accepted(string);
 
     public function focus-all() {
         input.focus();
@@ -240,6 +241,9 @@ export component Field inherits Rectangle {
         single-line: true;
         edited => {
             root.edited(self.text);
+        }
+        accepted => {
+            root.accepted(self.text);
         }
     }
 }

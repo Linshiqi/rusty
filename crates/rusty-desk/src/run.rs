@@ -12,7 +12,10 @@ use std::{
     rc::Rc,
 };
 
-use rusty_embed::{CommandPlan, process::Stopper};
+use rusty_embed::{
+    CommandPlan,
+    process::{Input, Session, Stopper},
+};
 use slint::{Model, VecModel};
 
 use crate::{OutputLine, app::App, work};
@@ -48,6 +51,8 @@ struct Running {
     generation: u64,
     stopper: Stopper,
     stopped: Cell<bool>,
+    /// Where a line typed in the dock goes, for a session that reads it.
+    input: Option<Input>,
 }
 
 pub struct Runner {
@@ -157,26 +162,52 @@ impl Runner {
         if self.is_running() {
             return false;
         }
-        let generation = self.generation.get() + 1;
-        self.generation.set(generation);
         self.say(&format!("$ {}", plan.display), kind::COMMAND);
         self.dir.replace(dir.clone());
         // `launch`, not `spawn`: a UF2 copy and a DFU image are written in
         // this process, and everything else is spawned as `spawn` would.
-        let session = match rusty_embed::flash::launch(plan, dir.as_deref()) {
-            Ok(session) => session,
+        match rusty_embed::flash::launch(plan, dir.as_deref()) {
+            Ok(session) => self.watch(session, plan.program.clone(), false, then),
             Err(error) => {
                 self.say(&error.to_string(), kind::ERROR);
                 then(&work::app(), Ended::Refused);
-                return true;
             }
-        };
+        }
+        true
+    }
+
+    /// A session opened some other way — rusty's own serial link — run as
+    /// a plan's is, and typed into from the dock.
+    pub fn run_session(
+        &self,
+        display: &str,
+        session: Session,
+        then: impl FnOnce(&Rc<App>, Ended) + Send + 'static,
+    ) -> bool {
+        if self.is_running() {
+            return false;
+        }
+        self.say(&format!("$ {display}"), kind::COMMAND);
+        self.dir.replace(None);
+        self.watch(session, String::new(), true, then);
+        true
+    }
+
+    fn watch(
+        &self,
+        session: Session,
+        program: String,
+        typed: bool,
+        then: impl FnOnce(&Rc<App>, Ended) + Send + 'static,
+    ) {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
         *self.running.borrow_mut() = Some(Running {
             generation,
             stopper: session.stopper(),
             stopped: Cell::new(false),
+            input: typed.then(|| session.input()),
         });
-        let program = plan.program.clone();
         std::thread::Builder::new()
             .name("run".into())
             .spawn(move || {
@@ -200,7 +231,26 @@ impl Runner {
                 });
             })
             .expect("the run's thread starts");
-        true
+    }
+
+    /// Whether what runs can be typed into from the dock.
+    pub fn takes_input(&self) -> bool {
+        self.running
+            .borrow()
+            .as_ref()
+            .is_some_and(|running| running.input.is_some())
+    }
+
+    /// A line typed in the dock, to what runs.
+    pub fn send(&self, text: &str) {
+        if let Some(input) = self
+            .running
+            .borrow()
+            .as_ref()
+            .and_then(|r| r.input.as_ref())
+        {
+            input.send_line(text);
+        }
     }
 
     /// Stop what is running; its end is said as any end is.

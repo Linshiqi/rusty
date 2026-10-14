@@ -21,6 +21,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 
 mod activity;
 mod build;
+mod device;
 mod drafts;
 mod environment;
 mod navigate;
@@ -119,6 +120,7 @@ struct State {
     wizard: wizard::Wizard,
     activities: activity::Activities,
     build_log: build::BuildLog,
+    devices: device::Devices,
 }
 
 pub struct App {
@@ -205,25 +207,7 @@ impl App {
         self.show_panel("bottom", "output");
         let began = std::time::Instant::now();
         let started = self.runner.run(plan, dir, move |app, ended| {
-            let seconds = format!("{:.1}", began.elapsed().as_secs_f32());
-            match ended {
-                Ended::Done => app.runner.say(
-                    &t!("desk.run-done", seconds = seconds),
-                    crate::run::kind::DONE,
-                ),
-                Ended::Failed(code) => app.runner.say(
-                    &t!(
-                        "desk.run-failed",
-                        code = code.map_or_else(|| "?".to_string(), |c| c.to_string())
-                    ),
-                    crate::run::kind::ERROR,
-                ),
-                Ended::Stopped => app
-                    .runner
-                    .say(&t!("desk.run-stopped"), crate::run::kind::PLAIN),
-                Ended::Refused => {}
-            }
-            app.sync_running();
+            app.said_end(began, ended);
             then(app, ended);
         });
         if !started {
@@ -233,11 +217,64 @@ impl App {
         started
     }
 
+    /// A session opened some other way — rusty's serial link — run as
+    /// [`App::run`] runs a plan, typed into from the dock.
+    pub fn run_session(
+        self: &Rc<Self>,
+        display: &str,
+        session: rusty_embed::process::Session,
+        then: impl FnOnce(&Rc<App>, Ended) + Send + 'static,
+    ) -> bool {
+        self.show_panel("bottom", "output");
+        let began = std::time::Instant::now();
+        let started = self
+            .runner
+            .run_session(display, session, move |app, ended| {
+                app.said_end(began, ended);
+                then(app, ended);
+            });
+        if !started {
+            self.note_transient(1, t!("desk.already-running"));
+        }
+        self.sync_running();
+        started
+    }
+
+    /// How a run ended, said in the dock.
+    fn said_end(self: &Rc<Self>, began: std::time::Instant, ended: Ended) {
+        let seconds = format!("{:.1}", began.elapsed().as_secs_f32());
+        match ended {
+            Ended::Done => self.runner.say(
+                &t!("desk.run-done", seconds = seconds),
+                crate::run::kind::DONE,
+            ),
+            Ended::Failed(code) => self.runner.say(
+                &t!(
+                    "desk.run-failed",
+                    code = code.map_or_else(|| "?".to_string(), |c| c.to_string())
+                ),
+                crate::run::kind::ERROR,
+            ),
+            Ended::Stopped => self
+                .runner
+                .say(&t!("desk.run-stopped"), crate::run::kind::PLAIN),
+            Ended::Refused => {}
+        }
+        self.sync_running();
+    }
+
+    /// A line typed in the dock, to what runs: shown, then sent.
+    fn output_send(self: &Rc<Self>, text: &str) {
+        self.runner
+            .say(&format!("> {text}"), crate::run::kind::COMMAND);
+        self.runner.send(text);
+    }
+
     fn sync_running(&self) {
         if let Some(window) = self.window() {
-            window
-                .global::<Shell>()
-                .set_running(self.runner.is_running());
+            let shell = window.global::<Shell>();
+            shell.set_running(self.runner.is_running());
+            shell.set_output_input(self.runner.takes_input());
         }
     }
 
@@ -280,6 +317,7 @@ impl App {
         on!(on_open_playground, |app, id| app.open_playground(&id));
         on!(on_output_click, |app, index| app
             .output_click(index as usize));
+        on!(on_output_send, |app, text| app.output_send(&text));
         on!(on_wiz_go, |app, step| app.wizard_go(step));
         on!(on_wiz_filter, |app, query| app.wizard_filter(&query));
         on!(on_wiz_pick, |app, id| app.wizard_pick(&id));
@@ -382,6 +420,14 @@ impl App {
             "app.menu" => self.open_picker(Mode::Commands),
             "run.stop" => self.runner.stop(),
             "run.build" => self.build(Box::new(|_, _| {})),
+            "run.run" => self.run_verb(),
+            "run.flash" => self.device_action(device::Verb::Flash),
+            "run.monitor" => self.device_action(device::Verb::Monitor),
+            "run.choose-target" => self.choose_target(None),
+            "run.rescan" => {
+                let pending = self.state.borrow().devices.pending;
+                self.choose_target(pending);
+            }
             "output.show" => self.show_panel("bottom", "output"),
             "output.clear" => self.runner.clear(),
             "app.exit" => {
@@ -751,7 +797,7 @@ impl App {
                 Mode::Files => t!("desk.finder-hint"),
                 Mode::Projects => t!("desk.projects-hint"),
                 Mode::Rename => t!("desk.rename-hint"),
-                Mode::Places | Mode::Fixes => String::new(),
+                Mode::Places | Mode::Fixes | Mode::Targets => String::new(),
             });
             shell.set_picker_hint(SharedString::from(hint));
             shell.set_picker_open(true);
@@ -773,7 +819,7 @@ impl App {
                 picker::files(query, files)
             }
             Mode::Projects => picker::projects(query, &self.state.borrow().recents),
-            Mode::Places | Mode::Fixes => {
+            Mode::Places | Mode::Fixes | Mode::Targets => {
                 let state = self.state.borrow();
                 let titles: Vec<String> = state
                     .listed
@@ -835,6 +881,10 @@ impl App {
             Some(Pick::Rename(name)) => {
                 self.front_focus();
                 self.rename_to(name);
+            }
+            Some(Pick::Target(index)) => {
+                self.front_focus();
+                self.pick_target(index);
             }
             Some(Pick::Nothing) => self.front_focus(),
             None => {

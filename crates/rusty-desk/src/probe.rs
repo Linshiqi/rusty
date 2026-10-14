@@ -21,7 +21,9 @@
 //! welcome page offers, and says whether it stayed out of the recents.
 //! With `RUSTY_PROBE_BUILD` it types nothing: it builds the project as
 //! Ctrl+Shift+B does, waits for the verdict, and says what the title bar,
-//! the dock and Problems made of it.
+//! the dock and Problems made of it. With `RUSTY_PROBE_TARGETS` it asks to
+//! flash with no board chosen, photographs the list that opens, and picks
+//! the simulator from it — opening no port and writing nothing.
 
 use std::{
     cell::{Cell, RefCell},
@@ -54,6 +56,7 @@ pub fn start(window: &AppWindow) {
     let made = std::env::var_os("RUSTY_PROBE_NEW").map(PathBuf::from);
     let playground = std::env::var_os("RUSTY_PROBE_PLAYGROUND").is_some();
     let build = std::env::var_os("RUSTY_PROBE_BUILD").is_some();
+    let targets = std::env::var_os("RUSTY_PROBE_TARGETS").is_some();
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
     let before: Rc<RefCell<Option<String>>> = Rc::default();
@@ -87,6 +90,10 @@ pub fn start(window: &AppWindow) {
         let n = step.get();
         // Wait for the file the command line named before typing into it.
         if (30..=40).contains(&n) && shell.get_active_kind() != "file" {
+            return;
+        }
+        // The list is up once the scan has answered.
+        if targets && (n == 402 || n == 412) && !shell.get_picker_open() {
             return;
         }
         // A build has an answer when the title bar has a verdict.
@@ -130,6 +137,38 @@ pub fn start(window: &AppWindow) {
                 if build {
                     step.set(300);
                 }
+                if targets {
+                    step.set(400);
+                }
+            }
+            400 if targets => app.act("run.flash"),
+            404 if targets => {
+                snapshot(&window, &dir.join("flash-asks.png"));
+                eprintln!(
+                    "targets: flash with nothing chosen asks {:?}: {:?}",
+                    shell.get_picker_hint(),
+                    shell
+                        .get_picker_rows()
+                        .iter()
+                        .map(|row| format!("{} — {}", row.title, row.detail))
+                        .collect::<Vec<_>>()
+                );
+                shell.set_picker_open(false);
+                app.act("run.choose-target");
+            }
+            414 if targets => {
+                // The simulator is the first row when the part has one.
+                shell.invoke_picker_pick(0);
+            }
+            416 if targets => {
+                snapshot(&window, &dir.join("target-chosen.png"));
+                eprintln!(
+                    "targets: chosen {:?} ({:?}); notes {:?}",
+                    shell.get_target(),
+                    shell.get_target_kind(),
+                    shell.get_notes().iter().map(|n| n.text).collect::<Vec<_>>()
+                );
+                app.act("app.exit");
             }
             300 if build => app.act("run.build"),
             303 if build => {

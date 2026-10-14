@@ -109,6 +109,12 @@ impl App {
         };
         shell.set_chip(chip_name.into());
         shell.set_chip_tip(chip_tip.into());
+        // What somebody chose wins over what the part makes of it.
+        if let Some((text, kind)) = self.chosen_target() {
+            shell.set_target(SharedString::from(text));
+            shell.set_target_kind(SharedString::from(kind));
+            return;
+        }
         shell.set_target_kind(SharedString::from(match target {
             Target::Simulator => "simulator",
             Target::Board(_) => "board",
