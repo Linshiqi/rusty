@@ -171,6 +171,9 @@ a one-person project has to work that way.
 
 ## Licence
 
-[PolyForm Noncommercial 1.0.0](LICENSE.md). Read it, run it, change it, share
-your changes — but not commercially. Open an issue if you want a commercial
-arrangement.
+[GNU General Public License v3.0](LICENSE). Read it, run it, change it,
+share it — and what you share on from it, share on the same terms.
+
+The window is drawn with [Slint](https://slint.dev), under its GPLv3 option.
+
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev)

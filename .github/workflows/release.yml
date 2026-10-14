@@ -292,6 +292,14 @@ jobs:
           body = (found.group(1).strip() if found else
                   "Installers for Windows, macOS and Linux are attached below.")
           open("release-notes.md", "w", encoding="utf-8").write(body + "\n")
+          # The release page also carries Slint's badge. Not the feed's
+          # notes: the update sheet shows no remote picture, and a badge as
+          # alt text is noise in front of the changes.
+          badge = ("[![Made with Slint](https://raw.githubusercontent.com/"
+                   "slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)]"
+                   "(https://slint.dev)")
+          open("release-body.md", "w", encoding="utf-8").write(
+              body + "\n\n" + badge + "\n")
 
       # latest.json: every platform's signed entry in one feed, with the
       # notes the sheet shows before anyone downloads.
@@ -319,5 +327,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: false
-          body_path: release-notes.md
+          body_path: release-body.md
           files: assets/*

@@ -133,13 +133,17 @@ tests green, and CLAUDE.md saying how it works.
 Then `rusty-ui`, `rusty-app` and `rusty-ipc` are deleted, and with them the
 `backend` feature split, which existed for the wasm frontend.
 
+## Decided
+
+- **The licence is GPLv3**, for rusty and for Slint, which it uses under
+  its GPLv3 option — rusty was PolyForm Noncommercial, which that option
+  cannot be combined with. Every dependency was checked against it (all
+  permissive or GPL-compatible; the one unusual licence, `terminfo`'s
+  WTFPL, is compatible). The "Made with Slint" badge is on the README and
+  on every release page, though GPLv3 does not ask for it.
+
 ## Decisions still open
 
-- **Slint's licence.** rusty is PolyForm Noncommercial, which rules out
-  Slint's GPLv3 option. Slint's Royalty-free License 2.0 covers desktop
-  applications at no cost and asks for attribution — Slint's `AboutSlint`
-  in the app (Help ▸ About), or the "Made with Slint" badge where the app
-  is published. The plan assumes the first; it is the owner's call.
 - **HTML.** What rusty renders as HTML today is Markdown: book chapters,
   the assistant's answers, hover documentation, release notes. The plan is
   a Markdown renderer of its own in Slint — headings, paragraphs as

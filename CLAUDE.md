@@ -5314,11 +5314,13 @@ of their own. So the picture comes from their code.
   anything inside the excluded firmware crate (`runs_examples`) — because
   `cargo run` there hands the image to espflash. An example has no Debug:
   the host debugger finds a test's binary by asking the test binaries.
-- **The crate carries the workspace's license, PolyForm Noncommercial.**
-  For the one crate here that other people link into their own firmware
-  that is a real restriction. Whether it should be permissive, and whether
-  to publish it to crates.io rather than be taken by git, is the owner's
-  call and not made here.
+- **The crate carries the workspace's license, GPLv3** (the workspace's
+  since the window moved to Slint under its GPLv3 option). For the one
+  crate here that other people link into their own firmware that is a
+  real condition: firmware that links it and is distributed is GPLv3 too.
+  Whether this crate alone should be permissive, and whether to publish it
+  to crates.io rather than be taken by git, is the owner's call and not
+  made here.
 - **`view/space.rs` is the page half of `crate::scene`** — the palette, each
   `Ink`'s colour, the SVG element each drawn piece becomes, the size
   observer — shared by the Math panel and the Draw tab, so a vector is the
