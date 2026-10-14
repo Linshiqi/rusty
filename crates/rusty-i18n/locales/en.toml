@@ -1963,6 +1963,8 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+memory-reading = "Measuring the build…"
+memory-ram-of = "{percent} of {capacity} nominal"
 git-no-diff = "No difference to show."
 git-drop-confirm = "Drop {name}?\nIts changes are gone once it is dropped."
 git-commit-staged = "Commit what is staged"

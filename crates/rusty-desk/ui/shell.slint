@@ -288,6 +288,38 @@ export struct LabParam {
     text: string,
 }
 
+// A build the Memory page can measure.
+export struct MemBuild {
+    path: string,
+    name: string,
+    profile: string,
+    size: string,
+    age: string,
+    stale: bool,
+    target: string,
+    chosen: bool,
+}
+
+// A crate's share, its bar against the largest crate's.
+export struct MemCrate {
+    name: string,
+    code: string,
+    rodata: string,
+    ram: string,
+    total: string,
+    bar: float,
+}
+
+// A section: 0 code, 1 read-only, 2 data, 3 bss.
+export struct MemSection {
+    name: string,
+    kind: string,
+    tone: int,
+    costs: string,
+    address: string,
+    size: string,
+}
+
 // A file in one of the Git panel's two lists: its letter and colour (0 grey,
 // 1 green, 2 amber, 3 crimson, 4 slate) and what they mean.
 export struct GitChange {
@@ -708,6 +740,28 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // The Memory page.
+    in property <int> mem-state;
+    in property <[MemBuild]> mem-builds;
+    in property <string> mem-problem;
+    in property <bool> mem-ready;
+    in property <string> mem-flash-value;
+    in property <string> mem-flash-unit;
+    in property <string> mem-flash-hint;
+    in property <int> mem-flash-tone;
+    in property <string> mem-ram-value;
+    in property <string> mem-ram-unit;
+    in property <string> mem-ram-hint;
+    in property <int> mem-ram-tone;
+    in property <string> mem-unattributed;
+    in property <string> mem-unattributed-unit;
+    in property <[MemCrate]> mem-crates;
+    in property <string> mem-more;
+    in property <string> mem-attributed;
+    in property <[MemSection]> mem-sections;
+    in property <string> mem-elf;
+    callback mem-pick(string);
 
     // The Git panel.
     in property <int> git-state;

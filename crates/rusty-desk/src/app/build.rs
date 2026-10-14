@@ -219,6 +219,7 @@ impl App {
                         .say(&super::activity::size_line(size), run::kind::PLAIN);
                     app.weighed(size);
                 }
+                app.memory_after_build();
                 then(app, true);
             },
         );

@@ -1,0 +1,397 @@
+// The Memory page: which build, the flash and the RAM it costs, every
+// crate's share with a bar against the largest, and the sections. Filled by
+// `src/app/memory.rs`.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Shell } from "shell.slint";
+import { Button, Caption, IconButton } from "widgets.slint";
+
+// A figure with its unit, a colour for how close to full it is, and a line
+// saying against what.
+component Readout inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> unit;
+    in property <string> hint;
+    // 0 neutral, 1 fine, 2 near, 3 over the line.
+    in property <int> tone;
+    border-radius: 8px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.line;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 2px;
+        Caption {
+            text: root.label;
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
+            Text {
+                text: root.value;
+                color: root.tone == 3 ? Theme.crimson : root.tone == 2 ? Theme.amber : root.tone == 1 ? Theme.patina : Theme.label;
+                font-size: 26px;
+                font-weight: 600;
+                font-family: Theme.mono;
+                vertical-alignment: bottom;
+            }
+            Text {
+                text: root.unit;
+                color: Theme.label-3;
+                font-size: Theme.small;
+                vertical-alignment: bottom;
+            }
+        }
+        Text {
+            text: root.hint;
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            wrap: word-wrap;
+        }
+    }
+}
+
+component Cell inherits Text {
+    in property <bool> align-right: true;
+    font-family: Theme.mono;
+    font-size: Theme.caption;
+    color: Theme.label-2;
+    horizontal-alignment: root.align-right ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+    vertical-alignment: center;
+}
+
+export component MemoryPage inherits Rectangle {
+    background: Theme.content;
+    init => {
+        Shell.act("memory.reread");
+    }
+
+    if Shell.mem-state == 0 || Shell.mem-state == 1: VerticalLayout {
+        padding: 24px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: Shell.mem-state == 0 ? @tr("memory.no-project-title") : @tr("memory.nothing-built-title");
+            color: Theme.label;
+            font-size: Theme.body;
+            font-weight: 600;
+        }
+        Text {
+            text: Shell.mem-state == 0 ? @tr("memory.no-project-detail") : @tr("memory.nothing-built-detail");
+            color: Theme.label-2;
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+        if Shell.mem-state == 1: HorizontalLayout {
+            alignment: start;
+            Button {
+                text: @tr("toolbar.build");
+                primary: true;
+                clicked => {
+                    Shell.act("run.build");
+                }
+            }
+        }
+    }
+
+    if Shell.mem-state == 2: ScrollView {
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            alignment: start;
+            // Which build is being measured — always said, even of one.
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                for build in Shell.mem-builds: Rectangle {
+                    height: 28px;
+                    width: build-row.preferred-width;
+                    border-radius: 6px;
+                    background: build.chosen ? Theme.selection : build-touch.has-hover ? Theme.hover : transparent;
+                    border-width: 1px;
+                    border-color: build.chosen ? Theme.rust : Theme.line;
+                    build-touch := TouchArea {
+                        clicked => {
+                            Shell.mem-pick(build.path);
+                        }
+                    }
+                    build-row := HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        Text {
+                            text: build.name;
+                            color: build.chosen ? Theme.rust : Theme.label;
+                            font-size: Theme.small;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: build.profile;
+                            color: Theme.label-3;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: build.size;
+                            color: Theme.label-3;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: build.age;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                        if build.stale: Text {
+                            text: build.target;
+                            color: Theme.amber;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                IconButton {
+                    icon: Icons.refresh;
+                    tip: @tr("memory.reread-hint");
+                    clicked => {
+                        Shell.act("memory.reread");
+                    }
+                }
+            }
+            if Shell.mem-problem != "": Text {
+                text: Shell.mem-problem;
+                color: Theme.crimson;
+                font-size: Theme.small;
+                wrap: word-wrap;
+            }
+            if Shell.mem-ready: HorizontalLayout {
+                spacing: 10px;
+                Readout {
+                    label: @tr("memory.flash-image");
+                    value: Shell.mem-flash-value;
+                    unit: Shell.mem-flash-unit;
+                    hint: Shell.mem-flash-hint;
+                    tone: Shell.mem-flash-tone;
+                }
+                Readout {
+                    label: @tr("memory.static-ram");
+                    value: Shell.mem-ram-value;
+                    unit: Shell.mem-ram-unit;
+                    hint: Shell.mem-ram-hint;
+                    tone: Shell.mem-ram-tone;
+                }
+                Readout {
+                    label: @tr("memory.unattributed");
+                    value: Shell.mem-unattributed;
+                    unit: Shell.mem-unattributed-unit;
+                    hint: @tr("memory.unattributed-hint");
+                }
+            }
+            if Shell.mem-ready: Caption {
+                text: @tr("memory.by-crate");
+            }
+            if Shell.mem-ready && Shell.mem-crates.length == 0: Text {
+                text: @tr("memory.no-symbols");
+                color: Theme.label-2;
+                font-size: Theme.small;
+                wrap: word-wrap;
+            }
+            if Shell.mem-ready && Shell.mem-crates.length > 0: VerticalLayout {
+                HorizontalLayout {
+                    height: 22px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 8px;
+                    Caption {
+                        horizontal-stretch: 1;
+                        text: @tr("memory.col-crate");
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 80px;
+                        text: @tr("memory.col-code");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 80px;
+                        text: @tr("memory.col-rodata");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 80px;
+                        text: @tr("memory.col-ram");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 80px;
+                        text: @tr("memory.col-total");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+                for item in Shell.mem-crates: Rectangle {
+                    height: 24px;
+                    Rectangle {
+                        x: 0;
+                        y: 2px;
+                        width: (parent.width - 360px) * item.bar;
+                        height: parent.height - 4px;
+                        border-radius: 2px;
+                        background: Theme.rust-fill;
+                    }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        Cell {
+                            horizontal-stretch: 1;
+                            align-right: false;
+                            text: item.name;
+                            color: Theme.label;
+                        }
+                        Cell {
+                            width: 80px;
+                            text: item.code;
+                        }
+                        Cell {
+                            width: 80px;
+                            text: item.rodata;
+                        }
+                        Cell {
+                            width: 80px;
+                            text: item.ram;
+                        }
+                        Cell {
+                            width: 80px;
+                            text: item.total;
+                            color: Theme.label;
+                            font-weight: 600;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    height: 32px;
+                    spacing: 10px;
+                    alignment: start;
+                    if Shell.mem-more != "": Button {
+                        y: 2px;
+                        text: Shell.mem-more;
+                        clicked => {
+                            Shell.act("memory.more");
+                        }
+                    }
+                    Text {
+                        text: Shell.mem-attributed;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            if Shell.mem-ready: Caption {
+                text: @tr("memory.by-section");
+            }
+            if Shell.mem-ready: VerticalLayout {
+                HorizontalLayout {
+                    height: 22px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 8px;
+                    Caption {
+                        horizontal-stretch: 1;
+                        text: @tr("memory.col-section");
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 200px;
+                        text: @tr("memory.col-costs");
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 110px;
+                        text: @tr("memory.col-address");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Caption {
+                        width: 80px;
+                        text: @tr("memory.col-size");
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+                for section in Shell.mem-sections: HorizontalLayout {
+                    height: 24px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 8px;
+                    Cell {
+                        horizontal-stretch: 1;
+                        align-right: false;
+                        text: section.name;
+                        color: Theme.label;
+                    }
+                    HorizontalLayout {
+                        width: 200px;
+                        spacing: 6px;
+                        Rectangle {
+                            y: 4px;
+                            height: 16px;
+                            width: kind.preferred-width + 12px;
+                            border-radius: 8px;
+                            background: section.tone == 0 ? Theme.rust-fill : section.tone == 1 ? Theme.slate.with-alpha(0.18) : section.tone == 2 ? Theme.amber-fill : Theme.patina-fill;
+                            kind := Text {
+                                text: section.kind;
+                                color: section.tone == 0 ? Theme.rust : section.tone == 1 ? Theme.slate : section.tone == 2 ? Theme.amber : Theme.patina;
+                                font-size: Theme.caption;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: section.costs;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Cell {
+                        width: 110px;
+                        text: section.address;
+                        color: Theme.label-3;
+                    }
+                    Cell {
+                        width: 80px;
+                        text: section.size;
+                    }
+                }
+            }
+            if Shell.mem-ready: Text {
+                text: Shell.mem-elf;
+                color: Theme.label-3;
+                font-family: Theme.mono;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    if Shell.mem-state == 3: Text {
+        x: 24px;
+        y: 24px;
+        text: @tr("desk.memory-reading");
+        color: Theme.label-3;
+        font-size: Theme.small;
+    }
+}

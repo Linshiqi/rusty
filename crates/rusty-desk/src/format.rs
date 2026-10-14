@@ -12,6 +12,20 @@ pub fn bytes(value: u64) -> String {
     }
 }
 
+/// [`bytes`] as its number and its unit, for a readout that sets them apart.
+pub fn bytes_parts(value: u64) -> (String, String) {
+    let text = bytes(value);
+    match text.rsplit_once(' ') {
+        Some((number, unit)) => (number.to_string(), unit.to_string()),
+        None => (text, String::new()),
+    }
+}
+
+/// A fraction as a whole percentage, for figures held to a budget.
+pub fn percent(fraction: f32) -> String {
+    format!("{:.0}%", fraction * 100.0)
+}
+
 /// Roughly how long ago, from seconds since the epoch, against `now`.
 /// Coarse on purpose: the question is "the commit I just made, or one from
 /// last week", and a clock time leaves the subtraction to the reader.

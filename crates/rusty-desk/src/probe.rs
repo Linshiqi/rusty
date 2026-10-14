@@ -85,6 +85,7 @@ pub fn start(window: &AppWindow) {
     let debugging = std::env::var_os("RUSTY_PROBE_DEBUG").is_some();
     let terminal = std::env::var_os("RUSTY_PROBE_TERM").is_some();
     let repository = std::env::var_os("RUSTY_PROBE_GIT").is_some();
+    let measuring = std::env::var_os("RUSTY_PROBE_MEMORY").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -197,6 +198,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if repository {
                     step.set(1100);
+                }
+                if measuring {
+                    step.set(1200);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -474,6 +478,42 @@ pub fn start(window: &AppWindow) {
             1136 if repository => {
                 eprintln!("git: search {:?}, selected {}", shell.get_git_search_count(), shell.get_git_selected());
                 snapshot(&window, &dir.join("git-branch.png"));
+                app.act("app.exit");
+            }
+            // The Memory page on a project that has been built: the builds,
+            // the two readouts, the crates and the sections.
+            1200 if measuring => app.act("memory.open"),
+            1201 if measuring => {
+                if !shell.get_mem_ready() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 500 {
+                        step.set(1201);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "memory: builds {:?}",
+                    shell
+                        .get_mem_builds()
+                        .iter()
+                        .map(|b| format!("{} {} {}{}", b.name, b.profile, b.size, if b.chosen { " *" } else { "" }))
+                        .collect::<Vec<_>>()
+                );
+                eprintln!(
+                    "memory: flash {} {} ({}), ram {} {} ({}), unattributed {}",
+                    shell.get_mem_flash_value(),
+                    shell.get_mem_flash_unit(),
+                    shell.get_mem_flash_hint(),
+                    shell.get_mem_ram_value(),
+                    shell.get_mem_ram_unit(),
+                    shell.get_mem_ram_hint(),
+                    shell.get_mem_unattributed()
+                );
+                for c in shell.get_mem_crates().iter().take(5) {
+                    eprintln!("memory: crate {} {} ({:.2})", c.name, c.total, c.bar);
+                }
+                eprintln!("memory: {} sections, more {:?}", shell.get_mem_sections().row_count(), shell.get_mem_more());
+                snapshot(&window, &dir.join("memory.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1064,7 +1104,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
