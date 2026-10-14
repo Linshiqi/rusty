@@ -23,6 +23,7 @@ mod drafts;
 mod environment;
 mod navigate;
 mod part;
+mod playground;
 mod saving;
 mod servers;
 mod wizard;
@@ -266,6 +267,7 @@ impl App {
         on!(on_note_action, |app, id| app.note_action(id));
         on!(on_env_install, |app, name, command| app
             .env_install(&command, &name));
+        on!(on_open_playground, |app, id| app.open_playground(&id));
         on!(on_wiz_go, |app, step| app.wizard_go(step));
         on!(on_wiz_filter, |app, query| app.wizard_filter(&query));
         on!(on_wiz_pick, |app, id| app.wizard_pick(&id));
@@ -327,6 +329,8 @@ impl App {
             "environment.refresh" => self.probe_environment(),
             "environment.install-missing" => self.install_missing(),
             "project.new" => self.open_wizard(),
+            "playground.reset" => self.reset_playground(),
+            "playground.keep" => self.keep_playground(),
             "wizard.create" => self.wizard_create(),
             "wizard.install" => self.wizard_install(),
             "welcome.open" => self.open_tab(Tab::Page("welcome")),
@@ -422,7 +426,15 @@ impl App {
         self.backup_timers.borrow_mut().clear();
         let opened = project.root.clone();
         let root = project.root.to_string_lossy().into_owned();
-        rusty_embed::config::record_recent(&root);
+        // A playground has its own doors; the recents are the projects
+        // somebody works on.
+        let playground = project
+            .embedded
+            .as_ref()
+            .is_ok_and(|found| found.playground.is_some());
+        if !playground {
+            rusty_embed::config::record_recent(&root);
+        }
         {
             let mut state = self.state.borrow_mut();
             for tab in std::mem::take(&mut state.tabs) {
@@ -432,8 +444,10 @@ impl App {
             }
             state.tabs = vec![Tab::Page("welcome")];
             state.active = Some(0);
-            state.recents.retain(|path| path != &root);
-            state.recents.insert(0, root);
+            if !playground {
+                state.recents.retain(|path| path != &root);
+                state.recents.insert(0, root);
+            }
             state.project = Some(project);
             if !state.layout.left.open {
                 state.layout.left.open = true;
@@ -981,6 +995,7 @@ impl App {
     fn sync_all(&self) {
         self.sync_project();
         self.sync_part();
+        self.sync_playground();
         self.sync_docks();
         self.sync_tabs();
         self.sync_tree();
@@ -1002,7 +1017,6 @@ impl App {
                 .unwrap_or_default()
                 .into(),
         );
-        shell.set_target(SharedString::from(t!("desk.simulator")));
         shell.set_activity(SharedString::from(t!("desk.ready")));
         let recents: Vec<Recent> = state
             .recents

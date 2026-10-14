@@ -218,7 +218,7 @@ tests green, and CLAUDE.md saying how it works.
    the first-run setup, the wizard and the playground. **The window names
    no part**: every difference between two chips is a key of the
    catalogue, and a test holds `rusty-desk`'s source to that.
-   *Done so far:* detection as the old window ran it (the firmware crate
+   *Done:* detection as the old window ran it (the firmware crate
    found below a workspace, the playground marked); the chip in the status
    bar, its vendor, build system and where it was read in the tooltip; the
    run target in the title bar; the project's problems first in Problems,
@@ -237,7 +237,12 @@ tests green, and CLAUDE.md saying how it works.
    typed, the consequences and the command; the generator checked before
    the button is offered, run in Output or rusty's template written, the
    workspace wrapped round it, and the project opened on its entry point —
-   proven by the probe writing a template part's project and opening it. `the_window_names_no_part`
+   proven by the probe writing a template part's project and opening it.
+   The playgrounds on the welcome page, each opened on its entry point and
+   kept out of the recents, the part's name in the title bar and a bar
+   across the top to restore the example — its drafts dropped with it, or
+   they would come back over it — or keep it as a project, what is on
+   screen written first. Code beside the board waits for the simulator (6). `the_window_names_no_part`
    scans every source and `.slint` file for a catalogue id, a family's
    name or a vendor's — proven by planting one.
 5. **Build, flash, watch.** The build system's own plan run in the dock,
