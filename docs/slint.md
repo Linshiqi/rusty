@@ -419,6 +419,12 @@ tests green, and CLAUDE.md saying how it works.
    committed with a two-line message, the graph read, the merge opened,
    `bad name` refused for its space, `probe/branch` made from a commit and
    checked out, and a search stepping to its first match.
+   Memory, a page: every build the project has, the one measured marked and
+   one built for another triple said so; the flash image and the static RAM
+   against the part's capacity, coloured as they near it; the unattributed
+   bytes; every crate's share with a bar against the largest; the sections.
+   A build re-measures a page that has been looked at. Proven on
+   `examples/blink-rust`: 15.6 KB of flash, `esp_hal` the largest crate.
 8. **The editor's depth**, now that everything it is for exists: folding,
    sticky scroll, the minimap, indent guides, test lenses, inlay hints,
    semantic colours, Vim, two groups.

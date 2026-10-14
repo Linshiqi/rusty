@@ -32,6 +32,7 @@ mod git;
 mod git_view;
 mod lab;
 mod lab_words;
+mod memory;
 mod menu;
 mod navigate;
 mod part;
@@ -88,6 +89,7 @@ impl Tab {
             Tab::Page("wizard") => t!("wizard.title"),
             Tab::Page("git") => t!("git.history"),
             Tab::Page("gitdiff") => t!("git.changes"),
+            Tab::Page("memory") => t!("panel.memory"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -150,6 +152,7 @@ struct State {
     search: search::Search,
     git: git::Git,
     menu: Option<&'static str>,
+    memory: memory::Memory,
     term: terminal::Term,
 }
 
@@ -411,6 +414,7 @@ impl App {
         on!(on_git_prompt_edited, |app| app.git_prompt_edited());
         on!(on_git_prompt_done, |app, ok| app.git_prompt_done(ok));
         on!(on_menu_picked, |app, id| app.menu_picked(&id));
+        on!(on_mem_pick, |app, path| app.memory_pick(&path));
         on!(on_menu_dismissed, |app| app.menu_dismissed());
         let weak = Rc::downgrade(self);
         shell.on_term_key(move |event| {
@@ -627,6 +631,7 @@ impl App {
                 self.git_shown();
             }
             other if other.starts_with("git.") => self.git_act(&other["git.".len()..]),
+            other if other.starts_with("memory.") => self.memory_act(&other["memory.".len()..]),
             "app.exit" => {
                 self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();
