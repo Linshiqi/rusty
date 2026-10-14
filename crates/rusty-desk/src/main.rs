@@ -48,7 +48,19 @@ fn main() -> Result<(), slint::PlatformError> {
     window.invoke_focus_window();
 
     match root {
-        Some(root) => app.open_project(root, file.map(|file| file.replace('\\', "/"))),
+        Some(root) => {
+            // The file in it, as the project names it: a path given whole is
+            // taken relative to the project when it is inside it, and left
+            // for the project to refuse when it is not.
+            let file = file.map(|file| {
+                std::path::Path::new(&file)
+                    .strip_prefix(&root)
+                    .map(|inside| inside.to_string_lossy().into_owned())
+                    .unwrap_or(file)
+                    .replace('\\', "/")
+            });
+            app.open_project(root, file)
+        }
         // Without a project the machine is still worth asking about: a
         // first run with no Rust says so before anybody opens anything.
         None => app.act("environment.refresh"),

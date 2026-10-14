@@ -1,32 +1,93 @@
-// The board beside the code: the sheet's picture, and over it what the
-// firmware is doing — each wire coloured by its net's level, each lamp's
-// lens as bright as its current, each switch's cap sunk while held. A cap
-// is pressed with the pointer while a run goes on. Filled by
-// `src/app/board.rs`.
+// The board beside the code. Each part's drawing is its own picture,
+// placed where the sheet puts it; over the pictures, what the firmware is
+// doing — each wire coloured by its net's level, each lamp's lens as bright
+// as its current, a digit's segments, a strip's pixels, a screen's text or
+// pixels, a servo's horn, a motor's rotor — and what is handled with the
+// pointer: a switch's cap or a keypad's key pressed, and under the board
+// the bench, a knob turned, a source or a sensor's reading slid.
+//
+// While nothing runs the sheet is a drawing: a press on a part selects and
+// drags it, a press on a pin starts a wire, a press on a wire selects it,
+// and the inspector beside it says what is selected. The editing itself is
+// `src/app/sheet.rs`; the drawing is `src/app/board.rs`.
 //
 // The sheet is dark in both themes, as a schematic sheet is the same colour
 // in every editor; the words on it are the window's own text, placed on
 // the sheet's coordinates and never turned.
 
+import { ScrollView, Slider } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
 import { Shell } from "shell.slint";
+import { Field, IconButton, RowButton, Tip } from "widgets.slint";
+
+// A reading on the bench, with what it means on hover.
+component Reading inherits Rectangle {
+    in property <string> text;
+    in property <string> tip;
+    in property <bool> bright;
+    Text {
+        width: 100%;
+        text: root.text;
+        color: root.bright ? #d7dce3 : #8a939f;
+        font-size: Theme.caption;
+        font-family: Theme.mono;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    touch := TouchArea {
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && root.tip != "" && !Tip.shown;
+        triggered => {
+            Tip.text = root.tip;
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y - 28px;
+            Tip.shown = true;
+        }
+    }
+}
+
+// A card floating over the sheet, in the window's colours.
+component Card inherits Rectangle {
+    background: Theme.raised;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.line;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000055;
+}
 
 export component BoardPanel inherits Rectangle {
     background: #101216;
     clip: true;
 
-    // Where the sheet is drawn: fitted whole and centred whenever the panel
-    // or the board changes size, then zoomed with the wheel about the
+    // Where the sheet is drawn: fitted whole and centred whenever a board
+    // loads or the panel changes size, then zoomed with the wheel about the
     // pointer and panned by dragging the sheet; a double-click fits again.
+    // `view-x` and `view-y` are the sheet point at `left` and `top`, so a
+    // board that grows while it is edited does not move under the pointer.
     in-out property <float> zoom: 1;
     in-out property <length> left;
     in-out property <length> top;
-    property <float> sheet-w: Shell.board-width;
-    property <float> sheet-h: Shell.board-height;
+    in-out property <float> view-x;
+    in-out property <float> view-y;
+    property <int> fit-gen: Shell.board-fit;
+    // About as tall as the bench draws, for the fit to leave it room.
+    property <length> bench-h: Shell.board-controls.length > 0 ? min(Shell.board-controls.length * 24px + 16px, root.height * 0.45) : 0;
     function fit() {
-        root.zoom = max(0.05, min((root.width - 24px) / 1px / max(Shell.board-width, 1), (root.height - 40px) / 1px / max(Shell.board-height, 1)));
+        root.zoom = max(0.05, min((root.width - 24px) / 1px / max(Shell.board-width, 1), (root.height - 40px - root.bench-h) / 1px / max(Shell.board-height, 1)));
+        root.view-x = Shell.board-x;
+        root.view-y = Shell.board-y;
         root.left = (root.width - Shell.board-width * root.zoom * 1px) / 2;
-        root.top = (root.height - 16px - Shell.board-height * root.zoom * 1px) / 2;
+        root.top = (root.height - 16px - root.bench-h - Shell.board-height * root.zoom * 1px) / 2;
     }
     changed width => {
         root.fit();
@@ -34,10 +95,7 @@ export component BoardPanel inherits Rectangle {
     changed height => {
         root.fit();
     }
-    changed sheet-w => {
-        root.fit();
-    }
-    changed sheet-h => {
+    changed fit-gen => {
         root.fit();
     }
     init => {
@@ -45,10 +103,17 @@ export component BoardPanel inherits Rectangle {
     }
 
     pure function sx(x: float) -> length {
-        return root.left + (x - Shell.board-x) * root.zoom * 1px;
+        return root.left + (x - root.view-x) * root.zoom * 1px;
     }
     pure function sy(y: float) -> length {
-        return root.top + (y - Shell.board-y) * root.zoom * 1px;
+        return root.top + (y - root.view-y) * root.zoom * 1px;
+    }
+    // The pointer, in the sheet's units.
+    pure function wx(at: length) -> float {
+        return root.view-x + (at - root.left) / 1px / root.zoom;
+    }
+    pure function wy(at: length) -> float {
+        return root.view-y + (at - root.top) / 1px / root.zoom;
     }
 
     if !Shell.board-shown: Text {
@@ -62,61 +127,156 @@ export component BoardPanel inherits Rectangle {
         wrap: word-wrap;
     }
 
-    // Under everything that takes a press: the sheet itself.
-    pan := TouchArea {
-        property <length> from-left;
-        property <length> from-top;
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.down) {
-                self.from-left = root.left;
-                self.from-top = root.top;
+    // Keys while the sheet has focus: the editor's, then the window's.
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (Shell.board-key(event)) {
+                return accept;
             }
+            reject
         }
-        moved => {
-            root.left = self.from-left + self.mouse-x - self.pressed-x;
-            root.top = self.from-top + self.mouse-y - self.pressed-y;
-        }
-        double-clicked => {
-            root.fit();
-        }
-        scroll-event(event) => {
-            if (event.delta-y == 0) {
-                return reject;
+
+        // Under everything that takes a press: the sheet itself. A press
+        // the editor does not take pans the view, as one with the middle
+        // button or Ctrl always does.
+        TouchArea {
+            property <length> from-left;
+            property <length> from-top;
+            property <bool> panning;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    keys.focus();
+                    Shell.board-library-open = false;
+                    self.from-left = root.left;
+                    self.from-top = root.top;
+                    self.panning = event.button != PointerEventButton.left || event.modifiers.control || event.modifiers.alt || !Shell.board-editing || !Shell.board-down(root.wx(self.mouse-x), root.wy(self.mouse-y), event.modifiers.shift);
+                }
+                if (event.kind == PointerEventKind.up && !self.panning) {
+                    Shell.board-up(root.wx(self.mouse-x), root.wy(self.mouse-y));
+                }
             }
-            let factor = event.delta-y > 0 ? 1.15 : 1 / 1.15;
-            let next = max(0.05, min(8, root.zoom * factor));
-            let applied = next / root.zoom;
-            root.left = self.mouse-x - (self.mouse-x - root.left) * applied;
-            root.top = self.mouse-y - (self.mouse-y - root.top) * applied;
-            root.zoom = next;
-            accept
+            moved => {
+                if (self.panning) {
+                    root.left = self.from-left + self.mouse-x - self.pressed-x;
+                    root.top = self.from-top + self.mouse-y - self.pressed-y;
+                } else {
+                    Shell.board-drag(root.wx(self.mouse-x), root.wy(self.mouse-y));
+                }
+            }
+            changed mouse-x => {
+                if (!self.pressed && Shell.board-editing) {
+                    Shell.board-hover(root.wx(self.mouse-x), root.wy(self.mouse-y));
+                }
+            }
+            changed mouse-y => {
+                if (!self.pressed && Shell.board-editing) {
+                    Shell.board-hover(root.wx(self.mouse-x), root.wy(self.mouse-y));
+                }
+            }
+            double-clicked => {
+                if (!Shell.board-editing || Shell.board-inspect == "") {
+                    root.fit();
+                }
+            }
+            scroll-event(event) => {
+                if (event.delta-y == 0) {
+                    return reject;
+                }
+                let factor = event.delta-y > 0 ? 1.15 : 1 / 1.15;
+                let next = max(0.05, min(8, root.zoom * factor));
+                let applied = next / root.zoom;
+                root.left = self.mouse-x - (self.mouse-x - root.left) * applied;
+                root.top = self.mouse-y - (self.mouse-y - root.top) * applied;
+                root.zoom = next;
+                accept
+            }
         }
     }
 
-    if Shell.board-shown: Image {
-        x: root.left;
-        y: root.top;
-        width: Shell.board-width * root.zoom * 1px;
-        height: Shell.board-height * root.zoom * 1px;
-        source: Shell.board-image;
+    for part in Shell.board-parts: Image {
+        x: root.sx(part.x);
+        y: root.sy(part.y);
+        width: part.w * root.zoom * 1px;
+        height: part.h * root.zoom * 1px;
+        source: part.image;
         image-fit: fill;
     }
+    for part in Shell.board-parts: Rectangle {
+        visible: part.selected;
+        x: root.sx(part.x) - 3px;
+        y: root.sy(part.y) - 3px;
+        width: part.w * root.zoom * 1px + 6px;
+        height: part.h * root.zoom * 1px + 6px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: #e05d38;
+    }
 
+    // A path in the sheet's units, over the board's whole box. Slint fits a
+    // path into its box less its stroke, so each box is grown by the
+    // stroke and the sheet's units land where the pictures' do.
     for wire in Shell.board-wires: Path {
-        x: root.left;
-        y: root.top;
-        width: Shell.board-width * root.zoom * 1px;
-        height: Shell.board-height * root.zoom * 1px;
+        x: root.sx(Shell.board-x) - self.stroke-width / 2;
+        y: root.sy(Shell.board-y) - self.stroke-width / 2;
+        width: Shell.board-width * root.zoom * 1px + self.stroke-width;
+        height: Shell.board-height * root.zoom * 1px + self.stroke-width;
         viewbox-x: Shell.board-x;
         viewbox-y: Shell.board-y;
         viewbox-width: Shell.board-width;
         viewbox-height: Shell.board-height;
+        fit: fill;
         commands: wire.commands;
         fill: transparent;
         // High green, low grey, unknown lighter; a pin under PWM is green
-        // and paler, a net switching rather than sitting.
-        stroke: wire.tone == 2 ? #5ecf7a : wire.tone == 3 ? #5ecf7a99 : wire.tone == 1 ? #5b6472 : #7d8694;
+        // and paler, a net switching rather than sitting. Selected, the
+        // editor's colour.
+        stroke: wire.selected ? #e05d38 : wire.tone == 2 ? #5ecf7a : wire.tone == 3 ? #5ecf7a99 : wire.tone == 1 ? #5b6472 : #7d8694;
+        stroke-width: max(1px, (wire.selected ? 2.4px : 1.6px) * root.zoom);
+        stroke-line-join: round;
+    }
+
+    // The wire being drawn, from its pin to the pointer.
+    if Shell.board-ghost != "": Path {
+        x: root.sx(Shell.board-x) - self.stroke-width / 2;
+        y: root.sy(Shell.board-y) - self.stroke-width / 2;
+        width: Shell.board-width * root.zoom * 1px + self.stroke-width;
+        height: Shell.board-height * root.zoom * 1px + self.stroke-width;
+        viewbox-x: Shell.board-x;
+        viewbox-y: Shell.board-y;
+        viewbox-width: Shell.board-width;
+        viewbox-height: Shell.board-height;
+        fit: fill;
+        commands: Shell.board-ghost;
+        fill: transparent;
+        stroke: #e05d38aa;
         stroke-width: max(1px, 1.6px * root.zoom);
+        stroke-line-join: round;
+    }
+    // The pin a press or a release would land on.
+    if Shell.board-target-shown: Rectangle {
+        x: root.sx(Shell.board-target-x) - 5px;
+        y: root.sy(Shell.board-target-y) - 5px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        border-width: 1.5px;
+        border-color: #e05d38;
+    }
+
+    for shape in Shell.board-shapes: Path {
+        x: root.sx(Shell.board-x) - self.stroke-width / 2;
+        y: root.sy(Shell.board-y) - self.stroke-width / 2;
+        width: Shell.board-width * root.zoom * 1px + self.stroke-width;
+        height: Shell.board-height * root.zoom * 1px + self.stroke-width;
+        viewbox-x: Shell.board-x;
+        viewbox-y: Shell.board-y;
+        viewbox-width: Shell.board-width;
+        viewbox-height: Shell.board-height;
+        fit: fill;
+        commands: shape.commands;
+        fill: shape.fill;
+        stroke: shape.stroke;
+        stroke-width: shape.width * root.zoom * 1px;
         stroke-line-join: round;
     }
 
@@ -125,12 +285,12 @@ export component BoardPanel inherits Rectangle {
         y: root.sy(lamp.y - lamp.r);
         width: lamp.r * 2 * root.zoom * 1px;
         height: self.width;
-        border-radius: self.width / 2;
+        border-radius: lamp.square ? root.zoom * 1px : self.width / 2;
         background: lamp.dark;
         // Lit, the lens is its colour and glows; dark, it is the colour
         // dimmed — a red LED is red on the desk with the power off.
         Rectangle {
-            border-radius: self.width / 2;
+            border-radius: parent.border-radius;
             background: lamp.lit;
             opacity: lamp.light;
             drop-shadow-blur: 10px * root.zoom * lamp.light;
@@ -138,19 +298,62 @@ export component BoardPanel inherits Rectangle {
         }
     }
 
-    for cap in Shell.board-switches: Rectangle {
-        x: root.sx(cap.x - cap.r);
-        y: root.sy(cap.y - cap.r);
-        width: cap.r * 2 * root.zoom * 1px;
+    // A screen's pixels: each run a line down the middle of its row, one
+    // row thick, so the rows fill the glass exactly.
+    for screen in Shell.board-screens: Path {
+        x: root.sx(screen.x) - self.stroke-width / 2;
+        y: root.sy(screen.y) - self.stroke-width / 2;
+        width: screen.w * root.zoom * 1px + self.stroke-width;
+        height: screen.h * root.zoom * 1px + self.stroke-width;
+        viewbox-width: screen.columns;
+        viewbox-height: screen.rows;
+        fit: fill;
+        commands: screen.commands;
+        fill: transparent;
+        stroke: #3ddc84;
+        stroke-width: screen.h / max(screen.rows, 1) * root.zoom * 1px;
+        // Not yet switched on is dimmed rather than blank: dark glass and a
+        // firmware that drew nothing are different faults.
+        opacity: screen.on ? 1 : 0.15;
+    }
+
+    // A motor's rotor turns as fast as its duty says and the way its
+    // bridge says; a braked or coasting one stands.
+    for rotor in Shell.board-rotors: Rectangle {
+        x: root.sx(rotor.x - rotor.r);
+        y: root.sy(rotor.y - rotor.r);
+        width: rotor.r * 2 * root.zoom * 1px;
         height: self.width;
         border-radius: self.width / 2;
-        background: cap.held ? #00000066 : touch.has-hover ? #ffffff14 : transparent;
-        border-width: cap.held ? 1px : 0;
+        border-width: 1px;
+        border-color: #5a626e;
+        background: #15181d;
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: 2px;
+            width: max(1px, 1.5px * root.zoom);
+            height: parent.height - 4px;
+            background: #c9d1d9;
+            transform-rotation: rotor.speed == 0 ? 0deg : (animation-tick() / 1ms * rotor.speed * 0.36) * 1deg;
+        }
+    }
+
+    // Pressed with the pointer while a run goes on; while the sheet is a
+    // drawing, a press on a part selects it instead.
+    for cap in Shell.board-switches: Rectangle {
+        x: root.sx(cap.x - cap.w / 2);
+        y: root.sy(cap.y - cap.h / 2);
+        width: cap.w * root.zoom * 1px;
+        height: cap.h * root.zoom * 1px;
+        border-radius: cap.radius * root.zoom * 1px;
+        background: cap.held ? (cap.key < 0 ? #00000066 : #4b5361) : touch.has-hover && !Shell.board-editing ? #ffffff14 : transparent;
+        border-width: cap.held && cap.key < 0 ? 1px : 0;
         border-color: #e05d38;
         touch := TouchArea {
+            enabled: !Shell.board-editing;
             mouse-cursor: pointer;
             changed pressed => {
-                Shell.board-press(cap.index, self.pressed);
+                Shell.board-press(cap.index, cap.key, self.pressed);
             }
         }
     }
@@ -165,6 +368,295 @@ export component BoardPanel inherits Rectangle {
         font-family: Theme.mono;
         color: word.kind == 1 ? #5fd0c8 : word.kind == 2 ? #d7dce3 : #98a1ae;
         horizontal-alignment: word.anchor == 0 ? TextHorizontalAlignment.left : word.anchor == 1 ? TextHorizontalAlignment.center : TextHorizontalAlignment.right;
+    }
+
+    for word in Shell.board-texts: Text {
+        x: word.anchor == 0 ? root.sx(word.x) : word.anchor == 1 ? root.sx(word.x) - 150px : root.sx(word.x) - 300px;
+        y: root.sy(word.y) - word.size * root.zoom * 0.85px;
+        width: 300px;
+        height: word.size * root.zoom * 1.2px;
+        text: word.text;
+        font-size: max(4px, word.size * root.zoom * 1px);
+        font-family: Theme.mono;
+        color: word.kind == 3 ? #3ddc84 : word.kind == 4 ? #d7dce3 : #8a939f;
+        horizontal-alignment: word.anchor == 0 ? TextHorizontalAlignment.left : word.anchor == 1 ? TextHorizontalAlignment.center : TextHorizontalAlignment.right;
+    }
+
+    // The editor's corner: the library, and undo and redo.
+    if Shell.board-shown && Shell.board-editing: Card {
+        x: 8px;
+        y: 8px;
+        width: corner.preferred-width;
+        height: corner.preferred-height;
+        corner := HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                icon: Icons.plus;
+                tip: @tr("desk.board-library");
+                active: Shell.board-library-open;
+                clicked => {
+                    Shell.board-library-open = !Shell.board-library-open;
+                    if (Shell.board-library-open) {
+                        Shell.board-library-query("");
+                    }
+                }
+            }
+            IconButton {
+                icon: Icons.undo;
+                tip: @tr("desk.board-undo");
+                clicked => {
+                    Shell.act("board.undo");
+                }
+            }
+            IconButton {
+                icon: Icons.redo;
+                tip: @tr("desk.board-redo");
+                clicked => {
+                    Shell.act("board.redo");
+                }
+            }
+        }
+    }
+
+    // The library: every symbol the sheet may place, narrowed as it is
+    // typed; a row adds its part in the middle of what is in view.
+    if Shell.board-library-open && Shell.board-editing: Card {
+        x: 8px;
+        y: 46px;
+        width: min(280px, root.width - 16px);
+        height: min(360px, root.height - 54px);
+        VerticalLayout {
+            padding: 6px;
+            spacing: 4px;
+            Field {
+                placeholder: @tr("desk.board-library-search");
+                edited(text) => {
+                    Shell.board-library-query(text);
+                }
+                init => {
+                    self.focus-all();
+                }
+            }
+            ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    for row in Shell.board-library: RowButton {
+                        height: 34px;
+                        clicked => {
+                            Shell.board-add(row.id);
+                            Shell.board-library-open = false;
+                            keys.focus();
+                        }
+                        VerticalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            alignment: center;
+                            Text {
+                                text: row.name;
+                                color: Theme.label;
+                                font-size: Theme.small;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.detail;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The inspector: what is selected, and what can be done to it.
+    if Shell.board-editing && Shell.board-inspect == "part": Card {
+        x: root.width - self.width - 8px;
+        y: 8px;
+        width: min(240px, root.width - 16px);
+        height: inspector.preferred-height;
+        inspector := VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            Text {
+                text: Shell.board-symbol;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                font-family: Theme.mono;
+                overflow: elide;
+            }
+            Text {
+                text: @tr("desk.board-reference");
+                color: Theme.label-2;
+                font-size: Theme.caption;
+            }
+            Field {
+                mono: true;
+                text: Shell.board-ref;
+                trouble: Shell.board-ref-problem != "";
+                accepted(text) => {
+                    Shell.board-rename(text);
+                    keys.focus();
+                }
+            }
+            if Shell.board-ref-problem != "": Text {
+                text: Shell.board-ref-problem;
+                color: Theme.crimson;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+            Text {
+                text: @tr("desk.board-value");
+                color: Theme.label-2;
+                font-size: Theme.caption;
+            }
+            Field {
+                text: Shell.board-value;
+                accepted(text) => {
+                    Shell.board-revalue(text);
+                    keys.focus();
+                }
+            }
+            for prop in Shell.board-props: VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: prop.key;
+                    color: Theme.label-2;
+                    font-size: Theme.caption;
+                    font-family: Theme.mono;
+                }
+                Field {
+                    mono: true;
+                    text: prop.value;
+                    accepted(text) => {
+                        Shell.board-reprop(prop.key, text);
+                        keys.focus();
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 2px;
+                alignment: start;
+                IconButton {
+                    icon: Icons.rotate;
+                    tip: @tr("desk.board-rotate");
+                    clicked => {
+                        Shell.act("board.rotate");
+                    }
+                }
+                IconButton {
+                    icon: Icons.mirror;
+                    tip: @tr("desk.board-mirror");
+                    clicked => {
+                        Shell.act("board.mirror");
+                    }
+                }
+                IconButton {
+                    icon: Icons.copy;
+                    tip: @tr("desk.board-duplicate");
+                    clicked => {
+                        Shell.act("board.duplicate");
+                    }
+                }
+                IconButton {
+                    icon: Icons.trash;
+                    tip: @tr("desk.board-delete");
+                    tint: Theme.crimson;
+                    clicked => {
+                        Shell.act("board.delete");
+                    }
+                }
+            }
+        }
+    }
+    if Shell.board-editing && Shell.board-inspect == "wire": Card {
+        x: root.width - self.width - 8px;
+        y: 8px;
+        width: wire-card.preferred-width;
+        height: wire-card.preferred-height;
+        wire-card := HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            IconButton {
+                icon: Icons.fit;
+                tip: @tr("desk.board-straighten");
+                clicked => {
+                    Shell.act("board.straighten");
+                }
+            }
+            IconButton {
+                icon: Icons.trash;
+                tip: @tr("desk.board-delete");
+                tint: Theme.crimson;
+                clicked => {
+                    Shell.act("board.delete");
+                }
+            }
+        }
+    }
+
+    // The bench: what is handled with the pointer — a knob, a source, a
+    // sensor's readings — under the board rather than on it, at the
+    // window's own size whatever the zoom, because a slider too small to
+    // grip is no slider and one hung off a part at the edge is off the
+    // pane.
+    VerticalLayout {
+        alignment: end;
+        if Shell.board-controls.length > 0: Rectangle {
+            background: #15181dee;
+            height: min(bench.preferred-height, root.height * 0.45);
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: #262b33;
+            }
+            ScrollView {
+                content-height: bench.preferred-height;
+                bench := VerticalLayout {
+                    padding: 8px;
+                    padding-bottom: Shell.board-caption != "" ? 22px : 8px;
+                    spacing: 2px;
+                    for control in Shell.board-controls: HorizontalLayout {
+                        spacing: 6px;
+                        min-height: 22px;
+                        if !control.slider: Text {
+                            text: control.label;
+                            color: #c4cad3;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        if control.slider: Text {
+                            width: 96px;
+                            text: control.label;
+                            color: #8a939f;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        if control.slider: Slider {
+                            horizontal-stretch: 1;
+                            minimum: control.min;
+                            maximum: control.max;
+                            value: control.value;
+                            enabled: control.live;
+                            changed(value) => {
+                                Shell.board-control(control.index, control.key, value);
+                            }
+                        }
+                        if control.slider: Reading {
+                            width: 84px;
+                            text: control.text;
+                            tip: control.tip;
+                            bright: control.live;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if Shell.board-caption != "": Text {

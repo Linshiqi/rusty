@@ -1,22 +1,20 @@
-//! The board as one picture: the devkit and every part drawn where the
-//! sheet puts them — what does not change while a run goes on. What does —
-//! a wire's level, a lamp's light, a cap held down — and every word on the
-//! sheet are drawn over it by whoever shows the board, so a pin moving
-//! never redraws the picture, and the words are the window's own text.
+//! The board's pictures: the devkit and every part, each drawn alone in
+//! its own frame — what does not change while a run goes on, and does not
+//! change when a part is moved either. What does change — a wire's level, a
+//! lamp's light, a cap held down — and every word on the sheet are drawn
+//! over them by whoever shows the board, so a pin moving never redraws a
+//! picture, and the words are the window's own text.
 
 use super::{
     art,
     geometry::{
-        EditPart, KitStyle, UNKNOWN_BOX, bounds, kit_art, kit_height, orient, part_box, pin_labels,
+        EditPart, KitStyle, UNKNOWN_BOX, kit_art, kit_height, orient, part_box, pin_labels,
         row_offset,
     },
 };
 use crate::nets::Row;
 
-/// Room round the parts, so a lead's name is not cut at the edge.
-const MARGIN: f64 = 24.0;
-
-/// The picture, and where on the sheet it sits.
+/// A picture, and where it sits.
 pub struct Picture {
     /// A whole SVG document whose user units are the sheet's.
     pub svg: String,
@@ -66,22 +64,38 @@ fn body(part: &EditPart, rows: &[Row], kit: &KitStyle, chip_label: &str) -> Stri
     )
 }
 
-/// The board drawn: every part where the sheet puts it.
-pub fn picture(parts: &[EditPart], rows: &[Row], kit: &KitStyle, chip_label: &str) -> Picture {
-    let ((x0, y0), (x1, y1)) = bounds(parts);
-    let origin = (x0 - MARGIN, y0 - MARGIN);
+/// Room round a part drawn alone, so a stroke on its edge is not cut.
+const PART_MARGIN: f64 = 2.0;
+
+/// One part drawn alone, in its own frame: turned and mirrored as it is,
+/// at no particular place. `origin` is the picture's top-left corner
+/// relative to the part's anchor, so it lands at `(x + origin.0, y +
+/// origin.1)` wherever the part is put — an editor draws every part with
+/// its own picture, and moving a part moves the picture rather than
+/// drawing the board again.
+pub fn part_picture(part: &EditPart, rows: &[Row], kit: &KitStyle, chip_label: &str) -> Picture {
+    let (x0, y0, x1, y1) = part_box(part);
+    let origin = (
+        x0 - part.inst.x - PART_MARGIN,
+        y0 - part.inst.y - PART_MARGIN,
+    );
     let size = (
-        (x1 - x0 + 2.0 * MARGIN).max(1.0),
-        (y1 - y0 + 2.0 * MARGIN).max(1.0),
+        (x1 - x0 + 2.0 * PART_MARGIN).max(1.0),
+        (y1 - y0 + 2.0 * PART_MARGIN).max(1.0),
     );
-    let mut svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="{}" height="{}">"#,
-        origin.0, origin.1, size.0, size.1, size.0, size.1
+    let mut placed = part.clone();
+    placed.inst.x = 0.0;
+    placed.inst.y = 0.0;
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="{}" height="{}">{}</svg>"#,
+        origin.0,
+        origin.1,
+        size.0,
+        size.1,
+        size.0,
+        size.1,
+        body(&placed, rows, kit, chip_label)
     );
-    for part in parts {
-        svg.push_str(&body(part, rows, kit, chip_label));
-    }
-    svg.push_str("</svg>");
     Picture { svg, origin, size }
 }
 
@@ -195,19 +209,51 @@ mod tests {
         sheet
     }
 
-    /// Every part is in the picture, turned and mirrored as it is, and the
-    /// picture covers them all with room to spare.
+    /// A part's picture is drawn in its own frame, turned and mirrored as
+    /// the part is but at no place, and set down at the part's anchor it
+    /// covers the part's box — so moving a part moves its picture and
+    /// draws nothing again.
     #[test]
-    fn the_picture_holds_every_part_where_the_sheet_puts_it() {
+    fn a_part_is_drawn_in_its_own_frame_and_covers_its_box() {
         let rows = kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));
         let parts = parts_of(&sheet(), &rows);
-        let drawn = picture(&parts, &rows, &kit_style(None, ""), "ESP32C3");
-        assert!(drawn.svg.starts_with("<svg"));
-        assert!(drawn.svg.contains(r#"translate(260 80)"#));
+        let kit = kit_style(None, "");
+        for part in &parts {
+            let drawn = part_picture(part, &rows, &kit, "ESP32C3");
+            assert!(
+                drawn.svg.starts_with("<svg"),
+                "{} is an SVG",
+                part.inst.reference
+            );
+            assert!(
+                drawn.svg.contains("translate(0 0)"),
+                "{} is drawn at no place",
+                part.inst.reference
+            );
+            let (x0, y0, x1, y1) = part_box(part);
+            let (left, top) = (part.inst.x + drawn.origin.0, part.inst.y + drawn.origin.1);
+            assert!(
+                left <= x0 && top <= y0,
+                "{} starts before its box",
+                part.inst.reference
+            );
+            assert!(
+                left + drawn.size.0 >= x1 && top + drawn.size.1 >= y1,
+                "{} ends after its box",
+                part.inst.reference
+            );
+        }
+        let turned = parts
+            .iter()
+            .find(|p| p.inst.rot == 90)
+            .expect("a turned part");
+        let drawn = part_picture(turned, &rows, &kit, "ESP32C3");
         assert!(drawn.svg.contains("rotate(90) scale(-1 1)"));
-        let ((x0, y0), (x1, y1)) = bounds(&parts);
-        assert!(drawn.origin.0 < x0 && drawn.origin.1 < y0);
-        assert!(drawn.origin.0 + drawn.size.0 > x1 && drawn.origin.1 + drawn.size.1 > y1);
+        // Moved, it draws the same picture.
+        let mut moved = turned.clone();
+        moved.inst.x += 64.0;
+        moved.inst.y -= 32.0;
+        assert_eq!(part_picture(&moved, &rows, &kit, "ESP32C3").svg, drawn.svg);
     }
 
     /// The resistor's reference is above it and its value below; every row

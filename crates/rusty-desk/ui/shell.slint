@@ -116,6 +116,32 @@ export struct BoardWire {
     commands: string,
     // 0 unknown, 1 low, 2 high, 3 switching under PWM.
     tone: int,
+    selected: bool,
+}
+
+// One part's drawing, placed: its picture covers this box in the sheet's
+// units, and moving the part moves the picture.
+export struct BoardPart {
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    image: image,
+    selected: bool,
+}
+
+// A property of the part the inspector shows: `max`, `addr`, a reading's
+// start.
+export struct BoardProp {
+    key: string,
+    value: string,
+}
+
+// A symbol the library offers: its id, its name and its library's.
+export struct LibraryRow {
+    id: string,
+    name: string,
+    detail: string,
 }
 
 export struct BoardWord {
@@ -125,7 +151,9 @@ export struct BoardWord {
     anchor: int,
     text: string,
     size: float,
-    // 0 a lead's name, 1 a reference, 2 a value.
+    // 0 a lead's name, 1 a reference, 2 a value; over the parts while a
+    // run goes on, 3 what a screen shows, 4 a reading, 5 a reading of
+    // nothing.
     kind: int,
 }
 
@@ -137,15 +165,70 @@ export struct BoardLamp {
     dark: color,
     // 0 dark to 1 at full current.
     light: float,
+    // A strip's pixel, square rather than round.
+    square: bool,
 }
 
+// Something pressed with the pointer: a switch's cap, or one key of a
+// keypad. A box in the sheet's units, its corners rounded by `radius`.
 export struct BoardSwitch {
     x: float,
     y: float,
-    r: float,
+    w: float,
+    h: float,
+    radius: float,
     held: bool,
     // The part, as the board numbers them.
     index: int,
+    // A keypad's key, row by row; -1 for a switch.
+    key: int,
+}
+
+// A shape drawn over the parts in the sheet's units: a digit's segment,
+// a servo's horn, a sounder's ring.
+export struct BoardShape {
+    commands: string,
+    fill: color,
+    stroke: color,
+    width: float,
+}
+
+// A screen's glass, in the sheet's units, and what the firmware's driver
+// lit on it in the screen's own pixels.
+export struct BoardScreen {
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    commands: string,
+    columns: float,
+    rows: float,
+    on: bool,
+}
+
+// A motor's rotor: turning `speed` turns a second, backwards when negative.
+export struct BoardRotor {
+    x: float,
+    y: float,
+    r: float,
+    speed: float,
+}
+
+// A line of the bench under the board: a slider and what it holds — a
+// knob, a source, a sensor's reading — or, without a slider, the part the
+// lines after it belong to.
+export struct BoardControl {
+    index: int,
+    key: string,
+    label: string,
+    slider: bool,
+    min: float,
+    max: float,
+    value: float,
+    text: string,
+    tip: string,
+    // Moving it reaches the firmware: a run is going.
+    live: bool,
 }
 
 // A channel of the Plot panel: its curve in the chart's units, and the
@@ -277,7 +360,39 @@ export global Shell {
     // The board beside the code: its picture, where on the sheet it sits,
     // and what moves over it.
     in property <bool> board-shown;
-    in property <image> board-image;
+    in property <[BoardPart]> board-parts;
+    // Changes when a board loads: the view fits it.
+    in property <int> board-fit;
+    // Nothing runs: the sheet is a drawing, and a press edits it.
+    in property <bool> board-editing;
+    // The wire being drawn, in the sheet's units, and the pin it would land
+    // on.
+    in property <string> board-ghost;
+    in property <bool> board-target-shown;
+    in property <float> board-target-x;
+    in property <float> board-target-y;
+    // The inspector: "part", "wire" or nothing, and what it says.
+    in property <string> board-inspect;
+    in property <string> board-ref;
+    in property <string> board-value;
+    in property <string> board-symbol;
+    in property <[BoardProp]> board-props;
+    in property <string> board-ref-problem;
+    callback board-rename(string);
+    callback board-revalue(string);
+    callback board-reprop(string, string);
+    // The library: which symbols match what is typed.
+    in-out property <bool> board-library-open;
+    in property <[LibraryRow]> board-library;
+    callback board-library-query(string);
+    callback board-add(string);
+    // The pointer on the sheet, in its units: a press the editor took (or
+    // the view pans), the drag after it, the release, and hovering.
+    callback board-down(float, float, bool) -> bool;
+    callback board-drag(float, float);
+    callback board-up(float, float);
+    callback board-hover(float, float);
+    callback board-key(KeyEvent) -> bool;
     in property <float> board-x;
     in property <float> board-y;
     in property <float> board-width;
@@ -286,8 +401,16 @@ export global Shell {
     in property <[BoardWord]> board-words;
     in property <[BoardLamp]> board-lamps;
     in property <[BoardSwitch]> board-switches;
+    in property <[BoardShape]> board-shapes;
+    in property <[BoardScreen]> board-screens;
+    in property <[BoardRotor]> board-rotors;
+    in property <[BoardControl]> board-controls;
+    // Words that change while a run goes on: a screen's text, a motor's.
+    in property <[BoardWord]> board-texts;
     in property <string> board-caption;
-    callback board-press(int, bool);
+    // A part pressed or let go, and which key of it; a slider moved.
+    callback board-press(int, int, bool);
+    callback board-control(int, string, float);
 
     // The Plot panel.
     in property <[PlotCurve]> plot-curves;

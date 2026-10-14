@@ -309,12 +309,40 @@ tests green, and CLAUDE.md saying how it works.
    The board beside the code, in the right dock: the old window's drawing
    — `art`, `geometry`, `edit`, `layout`, `glow`, `readout`, with their
    seventy-two tests — moved into `rusty_embed::board` for both windows,
-   and `board::picture` composing the devkit and every part's body into
-   one SVG the window draws as an image. What moves is the window's own
-   over it: each wire coloured by its net's level, each lamp's lens as
-   bright as its current, each switch's cap held under the pointer, and
-   every word — a lead's name, a reference, a value — as the window's text,
-   never turned. All of it read through `rusty_embed::period`, read again
+   and `board::picture` drawing each part alone in its own frame, an image
+   the window places where the part is, so moving a part draws nothing
+   again. What moves is the window's own over the pictures: each wire
+   coloured by its net's level, each lamp's lens as bright as its current,
+   an RGB lens's mixed colour, a digit's segments each lit for its share of
+   the period, a strip's pixels as the bytes on its wire said, a screen as
+   the firmware's SSD1306 or SH1106 driver drew it (or its `[rusty:disp]`
+   line), a servo's horn where the pulse puts it, a motor's rotor turning
+   with its duty and its bridge, a sounder's ring; each switch's cap and
+   each keypad key pressed under the pointer; and every word — a lead's
+   name, a reference, a value — as the window's text, never turned. The
+   live layer's models are made once and changed row by row: a model
+   replaced under a held cap took the cap's press area with it, and the
+   release went nowhere. Under the board the bench: a knob, a source and
+   each reading of a sensor as a slider at the window's own size whatever
+   the zoom — hung under its part, a slider at a zoom that fits the board
+   was off the pane — live only while a simulation runs, with what the
+   converter last read in the source's tooltip. Proven on sense-board (the
+   source slid to 1024, the firmware's own `knob` following), on the
+   emulator probes for the display, the keypad (a key pressed, `down 1`
+   printed), the strip (three pixels lit green, red and blue) and LEDC (a
+   motor at 75% forward, a servo, a sounder).
+   While nothing runs the sheet is a drawing (`app/sheet.rs`, over
+   `board::edit` and `geometry`): a press on a part selects and drags it —
+   bends belong to the sheet, so only the leg to the first bend stretches
+   — a press on a pin pulls a wire that lands on a pin or a wire and
+   otherwise begins one drawn click by click (Space turns the live leg,
+   Backspace takes a click back, Escape drops it), a press on a wire
+   selects it; R, M, Ctrl+D, Delete, Ctrl+Z and Ctrl+Y; an inspector for
+   the reference, the value and every prop, a library to add from, and the
+   file written four hundred milliseconds after the last change. Proven by
+   the probe's edit run: a part dragged and turned, an LED added and wired
+   to GPIO2, the wire undone and redone, the LED deleted, the file read
+   back after each save. All of it read through `rusty_embed::period`, read again
    only when a level or a press changes and re-weighted when a duty does;
    at most a redraw a frame. Fitted whole; the wheel zooms about the
    pointer, a drag pans, a double-click fits again. A press joins two
