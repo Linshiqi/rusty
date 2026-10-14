@@ -49,6 +49,11 @@ pub mod draw;
 // and unconditional so the setup screen can reason about a report it already
 // holds rather than asking the backend what it just told it.
 pub mod setup;
+// What a run is doing and how it ended, read off the lines it prints — the
+// title bar's activity view in both windows. Pure: lines in, a verdict out.
+pub mod activity;
+// Where a build's errors are, from what the compiler printed. Pure.
+pub mod buildlog;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,

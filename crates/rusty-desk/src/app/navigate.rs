@@ -108,6 +108,18 @@ impl App {
         });
     }
 
+    /// A place a tool printed: a file of the project by its relative path,
+    /// or one outside it by its absolute one, opened to be read.
+    pub(super) fn open_place(self: &Rc<Self>, path: String, at: (usize, usize)) {
+        if !std::path::Path::new(&path).is_absolute() {
+            self.open_file_at(path, Some(at));
+        } else if let Some(inside) = self.root().and_then(|root| within(&root, &path)) {
+            self.open_file_at(inside, Some(at));
+        } else {
+            self.open_outside(path, Some(at));
+        }
+    }
+
     /// A file outside the project — the definition of something in a
     /// dependency, or in a toolchain's header — opened to be read. The
     /// server named it, so it is a file the server has read; nothing in
@@ -414,7 +426,7 @@ impl App {
 
 /// `path` as the project at `root` names it — relative, `/` between —
 /// when it is inside it. A drive letter's case is not a difference.
-fn within(root: &std::path::Path, path: &str) -> Option<String> {
+pub(super) fn within(root: &std::path::Path, path: &str) -> Option<String> {
     let plain = |text: &str| {
         let text = text.replace('\\', "/");
         let mut chars = text.chars();

@@ -208,8 +208,11 @@ impl App {
             }
             return;
         }
-        let at = (row.kind != 0).then_some((row.line as usize, row.col as usize));
-        self.open_file_at(row.path.to_string(), at);
+        if row.kind == 0 {
+            self.open_file_at(row.path.to_string(), None);
+        } else {
+            self.open_place(row.path.to_string(), (row.line as usize, row.col as usize));
+        }
     }
 
     pub(super) fn sync_problems(&self) {
@@ -249,6 +252,42 @@ impl App {
                     path: SharedString::new(),
                     line: index as i32,
                     col: 0,
+                    count: 0,
+                });
+            }
+        }
+        // What the last build's compiler said, which a server's check does
+        // not always see: C a build script compiled, a project before its
+        // compile database exists. A record of that build, so not counted
+        // beside what the servers see now.
+        let built = &state.build_log.errors;
+        if !built.is_empty() {
+            rows.push(ProblemRow {
+                kind: 0,
+                text: SharedString::from(t!("desk.problems-build")),
+                detail: SharedString::new(),
+                path: SharedString::new(),
+                line: -1,
+                col: 0,
+                count: built.len() as i32,
+            });
+            for error in built {
+                let name = error.path.rsplit(['/', '\\']).next().unwrap_or(&error.path);
+                rows.push(ProblemRow {
+                    kind: 1,
+                    text: error.message.lines().next().unwrap_or_default().into(),
+                    detail: format!(
+                        "{name} {}",
+                        t!(
+                            "desk.caret",
+                            line = error.line.to_string(),
+                            col = error.col.to_string()
+                        )
+                    )
+                    .into(),
+                    path: error.path.as_str().into(),
+                    line: error.line as i32 - 1,
+                    col: error.col as i32 - 1,
                     count: 0,
                 });
             }
@@ -330,6 +369,12 @@ impl App {
             (format!("{} · {busy}", status.label), 1, busy.clone())
         } else {
             (status.label.clone(), 0, String::new())
+        };
+        // An icon in the bar: what it is doing, and any trouble, on hover.
+        let tip = if tip.is_empty() || text.contains(&tip) {
+            text.clone()
+        } else {
+            format!("{text}\n{tip}")
         };
         shell.set_server(SharedString::from(text));
         shell.set_server_state(kind);

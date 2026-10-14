@@ -260,7 +260,7 @@ fn PickerList() -> impl IntoView {
         let boot_rows = boot
             .into_iter()
             .map(|device| {
-                let transport = controller::boot_transport(&device);
+                let transport = rusty_embed::boot_transport(&device);
                 let picked = match (&chosen, &transport) {
                     (Some(Transport::Uf2 { drive: a }), Transport::Uf2 { drive: b }) => a == b,
                     (Some(Transport::Dfu { device: a, .. }), Transport::Dfu { device: b, .. }) => {

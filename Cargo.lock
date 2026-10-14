@@ -7632,6 +7632,7 @@ dependencies = [
  "image",
  "regex",
  "rfd",
+ "rusty-core",
  "rusty-edit",
  "rusty-embed",
  "rusty-i18n",

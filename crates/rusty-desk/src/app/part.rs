@@ -93,7 +93,12 @@ impl App {
         let target = target_of(project.map(|p| &p.embedded), chip);
         let (chip_name, chip_tip) = match (chip, project.and_then(|p| p.embedded.as_ref().ok())) {
             (Some(chip), Some(found)) => {
-                let mut tip = format!("{} · {}", chip.vendor_name, found.build.system.label());
+                let mut tip = format!(
+                    "{} · {} · {}",
+                    chip.name,
+                    chip.vendor_name,
+                    found.build.system.label()
+                );
                 if let Some(source) = &found.chip_source {
                     tip.push_str(" · ");
                     tip.push_str(source);
@@ -104,6 +109,11 @@ impl App {
         };
         shell.set_chip(chip_name.into());
         shell.set_chip_tip(chip_tip.into());
+        shell.set_target_kind(SharedString::from(match target {
+            Target::Simulator => "simulator",
+            Target::Board(_) => "board",
+            _ => "",
+        }));
         shell.set_target(SharedString::from(match target {
             Target::Nothing => String::new(),
             Target::NotAProject => t!("desk.target-not-a-project"),

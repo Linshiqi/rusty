@@ -58,6 +58,11 @@ export struct ProblemRow {
 export struct OutputLine {
     text: string,
     kind: int,
+    // The place it names, which a click goes to: a path (empty for none),
+    // a line and a column counted from zero.
+    path: string,
+    line: int,
+    col: int,
 }
 
 // A row of the Environment page: a group's heading, or a tool — its
@@ -119,7 +124,15 @@ export global Shell {
 
     // The run loop: where it runs, and what is happening.
     in property <string> target;
+    // What kind of place the target is: "simulator", "board", or empty for
+    // none — the icon the run control shows, its name in the tooltip.
+    in property <string> target-kind;
     in property <string> activity;
+    // What kind of run, as an icon's name, and its clock while it runs.
+    in property <string> activity-kind;
+    in property <string> activity-clock;
+    // 0 nothing has run, 1 running, 2 ended well, 3 ended badly.
+    in property <int> activity-state;
     in property <bool> running;
 
     // The docks: open, their size, their panels and which is in front.
@@ -205,6 +218,7 @@ export global Shell {
 
     // What the window ran, line by line.
     in property <[OutputLine]> output;
+    callback output-click(int);
 
     // What the language servers found, file by file.
     in property <[ProblemRow]> problems;

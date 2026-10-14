@@ -35,7 +35,10 @@ mod wizard;
 mod workbench;
 
 pub use command::{CommandPlan, LogLevel, LogLine, LogStream};
-pub use device::{BootDevice, BootKind, FlashAction, Probe, SerialPort, Transport, UsbIdentity};
+pub use device::{
+    BootDevice, BootKind, FlashAction, Probe, SerialPort, Transport, UsbIdentity, boot_transport,
+    only_candidate, serial_capable, usable_boot,
+};
 pub use firmware::Firmware;
 pub use memory::{CrateSize, MemoryReport, MemoryTotals, SectionKind, SectionSize};
 pub use part::{

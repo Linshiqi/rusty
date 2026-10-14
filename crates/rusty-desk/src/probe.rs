@@ -19,6 +19,9 @@
 //! nothing is generated or downloaded — and says what opened. With
 //! `RUSTY_PROBE_PLAYGROUND` it ends by opening the first playground the
 //! welcome page offers, and says whether it stayed out of the recents.
+//! With `RUSTY_PROBE_BUILD` it types nothing: it builds the project as
+//! Ctrl+Shift+B does, waits for the verdict, and says what the title bar,
+//! the dock and Problems made of it.
 
 use std::{
     cell::{Cell, RefCell},
@@ -50,6 +53,7 @@ pub fn start(window: &AppWindow) {
     let saves = std::env::var_os("RUSTY_PROBE_SAVES").is_some();
     let made = std::env::var_os("RUSTY_PROBE_NEW").map(PathBuf::from);
     let playground = std::env::var_os("RUSTY_PROBE_PLAYGROUND").is_some();
+    let build = std::env::var_os("RUSTY_PROBE_BUILD").is_some();
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
     let before: Rc<RefCell<Option<String>>> = Rc::default();
@@ -85,6 +89,10 @@ pub fn start(window: &AppWindow) {
         if (30..=40).contains(&n) && shell.get_active_kind() != "file" {
             return;
         }
+        // A build has an answer when the title bar has a verdict.
+        if build && n == 302 && matches!(shell.get_activity_state(), 0 | 1) {
+            return;
+        }
         // And for the machine's answer before photographing the page.
         if n == 193 && shell.get_env_probing() {
             return;
@@ -116,7 +124,43 @@ pub fn start(window: &AppWindow) {
                 .map(|(text, ..)| text)
         };
         match n {
-            25 => snapshot(&window, &dir.join("open.png")),
+            25 => {
+                snapshot(&window, &dir.join("open.png"));
+                // Nothing typed: the build writes every draft first.
+                if build {
+                    step.set(300);
+                }
+            }
+            300 if build => app.act("run.build"),
+            303 if build => {
+                snapshot(&window, &dir.join("built.png"));
+                let output = shell.get_output();
+                let links = output.iter().filter(|line| !line.path.is_empty()).count();
+                eprintln!(
+                    "build: {:?} (state {}); {} lines, {} of them places; problems: {:?}",
+                    shell.get_activity(),
+                    shell.get_activity_state(),
+                    output.row_count(),
+                    links,
+                    shell
+                        .get_problems()
+                        .iter()
+                        .map(|row| format!("{} {}", row.text, row.detail))
+                        .collect::<Vec<_>>()
+                );
+                // The first place a line names, clicked.
+                if let Some(at) = output.iter().position(|line| !line.path.is_empty()) {
+                    shell.invoke_output_click(at as i32);
+                }
+            }
+            310 if build => {
+                snapshot(&window, &dir.join("place.png"));
+                eprintln!(
+                    "build: the click opened {:?}",
+                    shell.get_active_title()
+                );
+                app.act("app.exit");
+            }
             41 => key(Key::End.into()),
             42..=101 => {
                 let text = ["f", "o", "o", "_", "b", "a", "r", " "][(n as usize) % 8];

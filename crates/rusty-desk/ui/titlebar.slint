@@ -5,7 +5,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
-import { IconButton } from "widgets.slint";
+import { IconButton, Tip } from "widgets.slint";
 import { Shell } from "shell.slint";
 
 // A word with a chevron that opens a list: the project, the branch, the
@@ -78,19 +78,14 @@ component RunControl inherits Rectangle {
             border-radius: 6px;
             background: target-touch.has-hover ? Theme.hover : transparent;
             HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 8px;
-                spacing: 6px;
+                padding-left: 8px;
+                padding-right: 6px;
+                spacing: 4px;
                 Icon {
-                    path: Icons.chip;
-                    size: 14px;
+                    path: Shell.target-kind == "simulator" ? Icons.simulate : Shell.target-kind == "board" ? Icons.chip : Icons.warn;
+                    size: 15px;
+                    color: Shell.target-kind == "" ? Theme.amber : Theme.label;
                     y: (parent.height - self.height) / 2;
-                }
-                Text {
-                    text: Shell.target;
-                    color: Theme.label;
-                    font-size: Theme.small;
-                    vertical-alignment: center;
                 }
                 Icon {
                     path: Icons.chevron;
@@ -101,7 +96,23 @@ component RunControl inherits Rectangle {
             }
             target-touch := TouchArea {
                 clicked => {
+                    Tip.shown = false;
                     Shell.act("run.choose-target");
+                }
+                changed has-hover => {
+                    if (!self.has-hover) {
+                        Tip.shown = false;
+                    }
+                }
+            }
+            Timer {
+                interval: 600ms;
+                running: target-touch.has-hover && Shell.target != "" && !Tip.shown;
+                triggered => {
+                    Tip.text = Shell.target;
+                    Tip.x = target.absolute-position.x;
+                    Tip.y = target.absolute-position.y + target.height + 4px;
+                    Tip.shown = true;
                 }
             }
         }
@@ -152,14 +163,6 @@ export component TitleBar inherits Rectangle {
         spacing: 12px;
         RunControl {
             y: (parent.height - self.height) / 2;
-        }
-        Text {
-            text: Shell.activity;
-            color: Theme.label-3;
-            font-size: Theme.small;
-            vertical-alignment: center;
-            overflow: elide;
-            max-width: 260px;
         }
     }
 

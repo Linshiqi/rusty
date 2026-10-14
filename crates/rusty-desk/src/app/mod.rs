@@ -19,6 +19,8 @@ use rusty_embed::WindowLayout;
 use rusty_i18n::{Locale, t};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 
+mod activity;
+mod build;
 mod drafts;
 mod environment;
 mod navigate;
@@ -115,6 +117,8 @@ struct State {
     listed: Vec<(String, String, Pick)>,
     environment: environment::Environment,
     wizard: wizard::Wizard,
+    activities: activity::Activities,
+    build_log: build::BuildLog,
 }
 
 pub struct App {
@@ -134,6 +138,10 @@ pub struct App {
     noted: RefCell<HashSet<String>>,
     /// What the window runs, one at a time, into the Output dock.
     runner: Runner,
+    /// When the window started: the activity view's clock counts from it.
+    started: std::time::Instant,
+    /// Ticks while something runs, so the view's clock moves.
+    clock: slint::Timer,
 }
 
 impl App {
@@ -162,6 +170,8 @@ impl App {
             problems_timer: Timer::default(),
             noted: RefCell::default(),
             runner,
+            started: std::time::Instant::now(),
+            clock: slint::Timer::default(),
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 recents: saved.recent_projects.clone(),
@@ -268,6 +278,8 @@ impl App {
         on!(on_env_install, |app, name, command| app
             .env_install(&command, &name));
         on!(on_open_playground, |app, id| app.open_playground(&id));
+        on!(on_output_click, |app, index| app
+            .output_click(index as usize));
         on!(on_wiz_go, |app, step| app.wizard_go(step));
         on!(on_wiz_filter, |app, query| app.wizard_filter(&query));
         on!(on_wiz_pick, |app, id| app.wizard_pick(&id));
@@ -369,6 +381,8 @@ impl App {
             "project.menu" => self.open_picker(Mode::Projects),
             "app.menu" => self.open_picker(Mode::Commands),
             "run.stop" => self.runner.stop(),
+            "run.build" => self.build(Box::new(|_, _| {})),
+            "output.show" => self.show_panel("bottom", "output"),
             "output.clear" => self.runner.clear(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
@@ -996,6 +1010,7 @@ impl App {
         self.sync_project();
         self.sync_part();
         self.sync_playground();
+        self.sync_activity();
         self.sync_docks();
         self.sync_tabs();
         self.sync_tree();
@@ -1017,7 +1032,6 @@ impl App {
                 .unwrap_or_default()
                 .into(),
         );
-        shell.set_activity(SharedString::from(t!("desk.ready")));
         let recents: Vec<Recent> = state
             .recents
             .iter()
