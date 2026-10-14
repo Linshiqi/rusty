@@ -1887,6 +1887,7 @@ yaw = "偏航"
 instrument = "机头高于地平线 {nose} · 右翼下沉 {bank} · 航向 {heading}"
 
 [desk]
+terminal-restart = "再开一个 shell"
 search-found = "{files} 个文件中有 {hits} 处匹配"
 search-first = "只列出前面的：{said}"
 debug-no-gdb = "没有安装这颗芯片的调试器——仿真器的工具可以安装对应的 gdb。"

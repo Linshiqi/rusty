@@ -1963,6 +1963,7 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+terminal-restart = "Start another shell"
 search-found = "{hits} matches in {files} files"
 search-first = "The first {said}"
 debug-no-gdb = "No debugger for this chip is installed — the simulator's tools install the matching gdb."

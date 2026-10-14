@@ -20,6 +20,8 @@ rusty-edit = { path = "../rusty-edit" }
 rusty-embed = { path = "../rusty-embed" }
 rusty-i18n = { path = "../rusty-i18n" }
 rusty-lsp = { path = "../rusty-lsp" }
+rusty-term = { path = "../rusty-term" }
+unicode-width = "0.2.2"
 rfd = "0.16.0"
 arboard = "3.6.1"
 regex = "1.13.1"

@@ -7638,11 +7638,13 @@ dependencies = [
  "rusty-embed",
  "rusty-i18n",
  "rusty-lsp",
+ "rusty-term",
  "slint",
  "slint-build",
  "sys-locale",
  "tempfile",
  "toml 1.1.4+spec-1.1.0",
+ "unicode-width",
 ]
 
 [[package]]

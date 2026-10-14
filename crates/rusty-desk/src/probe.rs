@@ -83,6 +83,7 @@ pub fn start(window: &AppWindow) {
     let edits = std::env::var_os("RUSTY_PROBE_EDIT").is_some();
     let drawing = std::env::var_os("RUSTY_PROBE_DRAW").is_some();
     let debugging = std::env::var_os("RUSTY_PROBE_DEBUG").is_some();
+    let terminal = std::env::var_os("RUSTY_PROBE_TERM").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -190,6 +191,9 @@ pub fn start(window: &AppWindow) {
                 if debugging {
                     step.set(900);
                 }
+                if terminal {
+                    step.set(1000);
+                }
             }
             500 if sim => app.act("run.run"),
             // A breakpoint beside the line that toggles the LED, then F5: the
@@ -259,6 +263,59 @@ pub fn start(window: &AppWindow) {
             }
             915 if debugging => {
                 eprintln!("debug: after stop live={} status {:?}", shell.get_debug_live(), shell.get_debug_status());
+                app.act("app.exit");
+            }
+            // The Terminal: a shell comes up, a command typed into it runs,
+            // and what it printed is on the screen.
+            1000 if terminal => {
+                shell.invoke_show_panel("bottom".into(), "terminal".into());
+            }
+            1001 if terminal => {
+                // The prompt is up once the screen has any text on it.
+                if screen_text(&shell).trim().is_empty() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 500 {
+                        step.set(1001);
+                    }
+                    return;
+                }
+                eprintln!("terminal: up after {} ticks", waited.get());
+                for c in "echo rusty-term-$((6*7))".chars() {
+                    key(c.to_string().into());
+                }
+                key(Key::Return.into());
+                waited.set(0);
+            }
+            1002 if terminal => {
+                if !screen_text(&shell).contains("rusty-term-42") {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 500 {
+                        step.set(1002);
+                    }
+                    return;
+                }
+                eprintln!("terminal: answered after {} ticks", waited.get());
+            }
+            1010 if terminal => {
+                let text = screen_text(&shell);
+                eprintln!(
+                    "terminal: {} rows, cursor {}:{}, exited {:?}\n{}",
+                    shell.get_term_rows().row_count(),
+                    shell.get_term_cursor_row(),
+                    shell.get_term_cursor_col(),
+                    shell.get_term_exited(),
+                    text.lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n")
+                );
+                snapshot(&window, &dir.join("terminal.png"));
+                // The shell asked to leave: the panel says so and offers another.
+                for c in "exit".chars() {
+                    key(c.to_string().into());
+                }
+                key(Key::Return.into());
+            }
+            1040 if terminal => {
+                eprintln!("terminal: after exit {:?}", shell.get_term_exited());
+                snapshot(&window, &dir.join("terminal-exited.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -849,7 +906,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
@@ -997,6 +1054,21 @@ fn report(what: &str, samples: &[Duration]) {
         at(0.9),
         ms[ms.len() - 1]
     );
+}
+
+/// What the terminal shows, a line a row.
+fn screen_text(shell: &Shell) -> String {
+    shell
+        .get_term_rows()
+        .iter()
+        .map(|row| {
+            row.spans
+                .iter()
+                .map(|s| s.text.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn snapshot(window: &AppWindow, path: &Path) {

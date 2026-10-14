@@ -40,6 +40,7 @@ mod search;
 mod servers;
 mod sheet;
 mod sim;
+mod terminal;
 mod waves;
 mod wizard;
 
@@ -142,6 +143,7 @@ struct State {
     debug: debug::Debug,
     registers: registers::Registers,
     search: search::Search,
+    term: terminal::Term,
 }
 
 pub struct App {
@@ -365,6 +367,16 @@ impl App {
         on!(on_search_edited, |app, what, text| app
             .search_edited(&what, &text));
         on!(on_search_open, |app, index| app.search_open(index));
+        on!(on_term_resized, |app, cols, rows| app
+            .term_resized(cols, rows));
+        on!(on_term_scroll, |app, lines| app.term_scroll(lines));
+        let weak = Rc::downgrade(self);
+        shell.on_term_key(move |event| {
+            weak.upgrade().is_some_and(|app| {
+                let m = event.modifiers;
+                app.term_key(&event.text, m.control, m.alt, m.shift)
+            })
+        });
         on!(on_registers_toggle, |app, name| app.registers_toggle(&name));
         on!(on_lab_source_text, |app, index, text| app
             .lab_source_text(index, &text));
@@ -557,6 +569,9 @@ impl App {
             "flight.close" => self.flight_close(true),
             "flight.open" => self.flight_close(false),
             "registers.fetch" => self.fetch_svd(),
+            "terminal.restart" => self.term_start(),
+            "terminal.ensure" => self.term_ensure(),
+            "terminal.redraw" => self.sync_term(),
             "debug.pause" => self.debug_control("pause"),
             "debug.over" => self.debug_control("over"),
             "debug.into" => self.debug_control("into"),

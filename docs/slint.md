@@ -390,6 +390,18 @@ tests green, and CLAUDE.md saying how it works.
 7. **The rest of the workbench**: Git, project search, crates and features,
    disk and memory, the terminal, the assistant and its tools, Markdown
    pages.
+   Search, in the left dock: ripgrep's engine as it is typed, case, word
+   and regex switches, include and exclude globs, every hit under its file
+   with the match picked out. The Terminal, in the bottom dock: the shell
+   `rusty_term` starts in a pty, drawn as its styled runs on a grid of the
+   editor's font — each run at its column, a wide character in its own two
+   cells, so a line of Chinese does not push the cursor off its place —
+   the sixteen colours the theme's, the cube and greys xterm's. Keys go as
+   a terminal sends them (Ctrl+letter the control code, so Ctrl+C
+   interrupts), Ctrl+Shift+V pastes, the wheel scrolls back, and a shell
+   that exits says so with a button for another. Proven with PowerShell:
+   `echo rusty-term-$((6*7))` answered `rusty-term-42`, the pty took the
+   panel's ten rows, and `exit` left the notice.
 8. **The editor's depth**, now that everything it is for exists: folding,
    sticky scroll, the minimap, indent guides, test lenses, inlay hints,
    semantic colours, Vim, two groups.
