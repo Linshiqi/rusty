@@ -11,7 +11,8 @@
 //! carry its own untested copy of four of these functions. [`follow`] is
 //! there too: what the server said about one text, carried across an edit
 //! to the next — the client's diagnostics and the editor's inlay hints by
-//! one rule.
+//! one rule. And [`squiggle`]: where a diagnostic is drawn on its line, for
+//! every editor that draws one and every hover that has to find it there.
 //!
 //! Its own crate for the same reason the terminal is: a language server is a
 //! long-lived process with a wire protocol, and neither belongs inside the
@@ -25,6 +26,7 @@
 pub mod follow;
 pub mod model;
 pub mod positions;
+pub mod squiggle;
 
 pub use model::*;
 

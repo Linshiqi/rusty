@@ -248,7 +248,45 @@ pub fn start(window: &AppWindow) {
                 let caret = app.editor().status().map(|(line, ..)| line);
                 eprintln!("go to line 3: the caret is on line {caret:?}");
             }
-            260 => {
+            // What the language server found: waited for, up to a minute,
+            // then the Problems panel photographed. A project with nothing
+            // wrong in it waits the whole minute and says so.
+            252..=1750 => {
+                if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
+                    eprintln!(
+                        "language server: {:?}, {} errors, {} warnings after {:.1} s",
+                        shell.get_server().as_str(),
+                        shell.get_errors(),
+                        shell.get_warnings(),
+                        f64::from(n - 252) * 0.04
+                    );
+                    app.act("problems.show");
+                    step.set(1760);
+                }
+            }
+            1762 => {
+                chord(&[Key::Control], Key::Home.into());
+                app.act("problem.next");
+            }
+            1765 => snapshot(&window, &dir.join("problems.png")),
+            // The hover card: on the problem F8 went to, and then on the
+            // second word of the line below the first, whatever it is.
+            1766 => app.act("editor.show-hover"),
+            1790 => snapshot(&window, &dir.join("hover-problem.png")),
+            1791 => {
+                app.editor().go_to(15, Some(21));
+                app.act("editor.show-hover");
+            }
+            1830 => snapshot(&window, &dir.join("hover.png")),
+            // And on a type with documentation: the struct named on the
+            // twelfth line, its doc comment rendered as Markdown.
+            1831 => {
+                app.editor().hide_hover();
+                app.editor().go_to(12, Some(14));
+                app.act("editor.show-hover");
+            }
+            1870 => snapshot(&window, &dir.join("hover-docs.png")),
+            1880 => {
                 app.act("app.exit");
                 let kept = rusty_embed::config::data_dir()
                     .and_then(|data| std::fs::read_dir(data.join("backups")).ok())

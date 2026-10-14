@@ -35,7 +35,7 @@ pub(super) fn decorate(
     let segments: Vec<(u32, u32, DiagSeverity, String)> = diags
         .iter()
         .filter_map(|d| {
-            let (from, to) = crate::squiggle::drawn_on(d, index, &text)?;
+            let (from, to) = rusty_lsp::squiggle::drawn_on(d, index, &text)?;
             Some((from, to, d.severity, d.message.clone()))
         })
         .collect();

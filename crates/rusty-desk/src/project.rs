@@ -13,6 +13,9 @@ pub struct Project {
     pub expanded: BTreeSet<String>,
     /// Every file, for the finder, in tree order.
     pub files: Vec<String>,
+    /// What detection made of it — the build system, the part, what is
+    /// missing — or why it could not say.
+    pub embedded: Result<rusty_embed::EmbeddedProject, String>,
 }
 
 /// A row of the tree as shown: how deep, the entry, and whether it is open.
@@ -36,12 +39,14 @@ impl Project {
             .unwrap_or_else(|| root.display().to_string());
         let mut files = Vec::new();
         collect_files(&entries, &mut files);
+        let embedded = rusty_embed::project::detect(&root).map_err(|error| error.to_string());
         Ok(Project {
             root,
             name,
             entries,
             expanded: BTreeSet::new(),
             files,
+            embedded,
         })
     }
 
@@ -103,6 +108,7 @@ mod tests {
             ],
             expanded: BTreeSet::new(),
             files: vec![],
+            embedded: Err("not read".into()),
         };
         let names = |p: &Project| p.rows().into_iter().map(|r| r.name).collect::<Vec<_>>();
         assert_eq!(names(&project), ["src", "Cargo.toml"]);

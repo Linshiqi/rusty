@@ -10,6 +10,8 @@ mod catalogue;
 mod docks;
 mod editor;
 mod keys;
+mod language;
+mod lsp;
 mod picker;
 mod probe;
 mod project;

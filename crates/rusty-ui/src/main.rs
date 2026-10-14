@@ -24,7 +24,6 @@ mod ipc;
 mod lab;
 mod paint;
 mod scene;
-mod squiggle;
 mod state;
 mod testrun;
 mod theme;

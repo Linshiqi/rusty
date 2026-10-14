@@ -40,6 +40,19 @@ export struct Note {
     action: string,
 }
 
+// A row of the Problems panel: a file (0), then its errors (1), warnings
+// (2) and the rest (3); where it is, for a click to go to.
+export struct ProblemRow {
+    kind: int,
+    text: string,
+    detail: string,
+    path: string,
+    line: int,
+    col: int,
+    // A file's row: how many problems are under it.
+    count: int,
+}
+
 export struct Recent {
     name: string,
     path: string,
@@ -80,11 +93,17 @@ export global Shell {
     in property <int> errors;
     in property <int> warnings;
     in property <string> server;
+    // Running (0), busy (1), degraded (2), down (3); and what it said.
+    in property <int> server-state;
+    in property <string> server-tip;
     in property <string> caret;
     in property <string> language;
     in property <string> encoding;
     in property <string> eol;
     in property <string> chip;
+
+    // What the language servers found, file by file.
+    in property <[ProblemRow]> problems;
 
     // The project's files.
     in property <[TreeRow]> tree;
@@ -122,6 +141,7 @@ export global Shell {
     callback picker-query(string);
     callback picker-pick(int);
     callback dismiss-note(int);
+    callback problem-click(int);
     callback note-action(int);
     callback set-theme(string);
     callback set-language(string);

@@ -15,7 +15,7 @@
 //! the last thing written on its line is drawn one cell wide there, and a
 //! point anywhere else widens to the word it touches.
 
-use rusty_lsp::FileDiagnostic;
+use crate::FileDiagnostic;
 
 /// The columns of line `index`, whose text is `text`, that `d`'s squiggle
 /// covers: half-open, in Unicode scalars, `None` where it draws nothing on
@@ -82,7 +82,7 @@ fn widened(chars: &[char], at: u32) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_lsp::DiagSeverity;
+    use crate::DiagSeverity;
 
     fn diag(start: (u32, u32), end: (u32, u32)) -> FileDiagnostic {
         FileDiagnostic {
