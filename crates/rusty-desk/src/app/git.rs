@@ -506,47 +506,17 @@ impl App {
     /// a pull or a discard wrote it. An edited one is left alone: its draft
     /// is somebody's work.
     fn follow_disk(self: &Rc<Self>) {
-        let Some(root) = self.root() else { return };
-        let open: Vec<(String, String)> = {
-            let state = self.state.borrow();
-            state
-                .tabs
-                .iter()
-                .filter_map(|tab| match tab {
-                    Tab::File(path) if !self.editor.is_dirty(path) => self
-                        .editor
-                        .draft_of(path)
-                        .map(|(text, ..)| (path.clone(), text)),
-                    _ => None,
-                })
-                .collect()
-        };
-        if open.is_empty() {
-            return;
-        }
-        work::spawn(
-            move || {
-                open.into_iter()
-                    .filter_map(|(path, text)| {
-                        match rusty_edit::text_file::read_text(&root, &path) {
-                            Ok(rusty_edit::text_file::TextFile::Text { text: now, .. })
-                                if now != text =>
-                            {
-                                Some((path, now))
-                            }
-                            _ => None,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            },
-            |app, moved| {
-                for (path, text) in moved {
-                    if !app.editor.is_dirty(&path) {
-                        app.editor.reload(&path, text);
-                    }
-                }
-            },
-        );
+        let open: Vec<String> = self
+            .state
+            .borrow()
+            .tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                Tab::File(path) => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        self.follow_changed(open);
     }
 
     // ---- writing ---------------------------------------------------------

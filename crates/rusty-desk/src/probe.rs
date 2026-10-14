@@ -91,6 +91,7 @@ pub fn start(window: &AppWindow) {
     let reading = std::env::var_os("RUSTY_PROBE_MD").is_some();
     let sums = std::env::var_os("RUSTY_PROBE_MATH").is_some();
     let cloning = std::env::var_os("RUSTY_PROBE_CLONE").map(PathBuf::from);
+    let following = std::env::var_os("RUSTY_PROBE_WATCH").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -221,6 +222,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if cloning.is_some() {
                     step.set(1800);
+                }
+                if following {
+                    step.set(1900);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -731,6 +735,33 @@ pub fn start(window: &AppWindow) {
                     return;
                 }
                 eprintln!("clone: opened {:?}", app.root_path());
+                app.act("app.exit");
+            }
+            // The disk moved under the window: the open file rewritten and a
+            // new one made by somebody else, both seen.
+            1900 if following => {
+                if let Some(root) = app.root_path() {
+                    let _ = std::fs::write(root.join("src/main.rs"), "fn main() {
+    // changed outside
+}
+");
+                    let _ = std::fs::write(root.join("src/extra.rs"), "pub fn extra() {}
+");
+                }
+                waited.set(0);
+            }
+            1901 if following => {
+                let reloaded = draft().is_some_and(|t| t.contains("changed outside"));
+                let listed = shell.get_tree().iter().any(|r| r.name.as_str() == "extra.rs")
+                    || shell.get_tree().iter().any(|r| r.name.as_str() == "src");
+                if !reloaded || !listed {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(1901);
+                    }
+                    return;
+                }
+                eprintln!("watch: reloaded {reloaded} after {} ticks; draft {:?}", waited.get(), draft());
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1321,7 +1352,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some()) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
