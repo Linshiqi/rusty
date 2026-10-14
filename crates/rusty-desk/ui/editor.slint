@@ -7,6 +7,8 @@
 
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { IconButton, Tip } from "widgets.slint";
 
 export struct Piece {
     text: string,
@@ -16,7 +18,8 @@ export struct Piece {
 }
 
 // Something drawn on a row behind or under its text: a selection (0), a
-// caret that is not the primary one (1).
+// caret that is not the primary one (1), a match of the find bar's query
+// (2), the match the selection is (3), the scope find searches (4).
 export struct Mark {
     x: length,
     width: length,
@@ -50,6 +53,341 @@ export global Code {
     callback pointer(int /* kind */, int /* row */, length /* x */, length /* y */, KeyboardModifiers);
 }
 
+// The find bar, filled by `src/editor/` (`find.rs` is its arithmetic).
+export global Find {
+    in-out property <bool> open;
+    in-out property <bool> replacing;
+    in-out property <string> query;
+    in-out property <string> replacement;
+    in property <bool> case;
+    in property <bool> word;
+    in property <bool> regex;
+    in property <bool> scoped;
+    // "3 of 12", "No results", or what is wrong with the expression.
+    in property <string> count;
+    // Nothing found, or a query that does not read: the field says so.
+    in property <bool> trouble;
+    callback edited(string);
+    callback replacement-edited(string);
+    // `case`, `word`, `regex` or `scope`.
+    callback toggle(string);
+    callback step(bool /* forward */);
+    callback replace(bool /* all */);
+    callback select-all();
+    callback close();
+}
+
+// An option of the query: a word or two of type, lit while it is on.
+component Toggle inherits Rectangle {
+    in property <string> text;
+    in property <string> tip;
+    in property <bool> on;
+    callback clicked;
+    width: 22px;
+    height: 20px;
+    border-radius: 4px;
+    background: root.on ? Theme.rust-fill : touch.has-hover ? Theme.hover : transparent;
+    border-width: root.on ? 1px : 0;
+    border-color: Theme.rust;
+    Text {
+        text: root.text;
+        color: root.on ? Theme.rust : Theme.label-2;
+        font-size: Theme.caption;
+        font-family: Theme.mono;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => {
+            Tip.shown = false;
+            root.clicked();
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && !Tip.shown;
+        triggered => {
+            Tip.text = root.tip;
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
+// What the bar does with a key in either of its fields: Escape closes, F3
+// steps, Alt and a letter turns an option, as VS Code's widget does.
+component FindField inherits Rectangle {
+    in property <string> placeholder;
+    in property <bool> trouble;
+    in property <length> inset;
+    in-out property <string> text;
+    callback edited(string);
+    callback enter(KeyEvent) -> bool;
+
+    public function focus-all() {
+        input.focus();
+        input.select-all();
+    }
+
+    height: 26px;
+    border-radius: 5px;
+    background: Theme.sunken;
+    border-width: 1px;
+    border-color: root.trouble ? Theme.crimson : input.has-focus ? Theme.rust : transparent;
+    clip: true;
+    input := TextInput {
+        x: 8px;
+        width: parent.width - 16px - root.inset;
+        height: parent.height;
+        text <=> root.text;
+        color: Theme.label;
+        font-size: Theme.small;
+        font-family: Theme.mono;
+        vertical-alignment: center;
+        single-line: true;
+        edited => {
+            root.edited(self.text);
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                Find.close();
+                return accept;
+            }
+            if (event.text == Key.F3) {
+                Find.step(!event.modifiers.shift);
+                return accept;
+            }
+            if (event.modifiers.alt && !event.modifiers.control) {
+                if (event.text == "c" || event.text == "C") {
+                    Find.toggle("case");
+                    return accept;
+                }
+                if (event.text == "w" || event.text == "W") {
+                    Find.toggle("word");
+                    return accept;
+                }
+                if (event.text == "r" || event.text == "R") {
+                    Find.toggle("regex");
+                    return accept;
+                }
+                if (event.text == "l" || event.text == "L") {
+                    Find.toggle("scope");
+                    return accept;
+                }
+            }
+            if (event.text == Key.Return && root.enter(event)) {
+                return accept;
+            }
+            reject
+        }
+    }
+    if root.text == "": Text {
+        x: 8px;
+        height: parent.height;
+        text: root.placeholder;
+        color: Theme.label-3;
+        font-size: Theme.small;
+        vertical-alignment: center;
+    }
+}
+
+// The bar itself, in the editor's top-right corner: the query and its
+// options, where the selection is among the matches, the steps, the scope;
+// and under it, while replacing, what a match becomes.
+component FindBar inherits Rectangle {
+    public function focus-query() {
+        query.focus-all();
+    }
+
+    public function focus-replacement() {
+        replacement.focus-all();
+    }
+
+    width: 470px;
+    height: column.preferred-height;
+    background: Theme.overlay;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 14px;
+    drop-shadow-color: #00000040;
+    drop-shadow-offset-y: 3px;
+    TouchArea { }
+    column := HorizontalLayout {
+        padding: 4px;
+        spacing: 2px;
+        IconButton {
+            width: 18px;
+            height: Find.replacing ? 56px : 26px;
+            glyph: 13px;
+            icon: Find.replacing ? Icons.chevron : Icons.chevron-right;
+            tip: @tr("desk.find-toggle-replace");
+            clicked => {
+                Find.replacing = !Find.replacing;
+                if (Find.replacing) {
+                    replacement.focus-all();
+                } else {
+                    query.focus-all();
+                }
+            }
+        }
+        VerticalLayout {
+            spacing: Find.replacing ? 4px : 0px;
+            HorizontalLayout {
+                spacing: 3px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 26px;
+                    query := FindField {
+                        width: parent.width;
+                        placeholder: @tr("desk.find");
+                        trouble: Find.trouble;
+                        inset: 72px;
+                        text <=> Find.query;
+                        edited(text) => {
+                            Find.edited(text);
+                        }
+                        enter(event) => {
+                            if (event.modifiers.alt) {
+                                Find.select-all();
+                            } else {
+                                Find.step(!event.modifiers.shift);
+                            }
+                            true
+                        }
+                    }
+                    HorizontalLayout {
+                        x: parent.width - self.preferred-width - 3px;
+                        y: 3px;
+                        spacing: 1px;
+                        Toggle {
+                            text: "Aa";
+                            tip: @tr("desk.find-case");
+                            on: Find.case;
+                            clicked => {
+                                Find.toggle("case");
+                            }
+                        }
+                        Toggle {
+                            text: "ab";
+                            tip: @tr("desk.find-word");
+                            on: Find.word;
+                            clicked => {
+                                Find.toggle("word");
+                            }
+                        }
+                        Toggle {
+                            text: ".*";
+                            tip: @tr("desk.find-regex");
+                            on: Find.regex;
+                            clicked => {
+                                Find.toggle("regex");
+                            }
+                        }
+                    }
+                }
+                Text {
+                    width: 96px;
+                    text: Find.count;
+                    color: Find.trouble ? Theme.crimson : Theme.label-2;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                IconButton {
+                    width: 24px;
+                    height: 26px;
+                    glyph: 14px;
+                    icon: Icons.arrow-up;
+                    tip: @tr("desk.find-previous");
+                    clicked => {
+                        Find.step(false);
+                    }
+                }
+                IconButton {
+                    width: 24px;
+                    height: 26px;
+                    glyph: 14px;
+                    icon: Icons.arrow-down;
+                    tip: @tr("desk.find-next");
+                    clicked => {
+                        Find.step(true);
+                    }
+                }
+                IconButton {
+                    width: 24px;
+                    height: 26px;
+                    glyph: 14px;
+                    icon: Icons.in-selection;
+                    active: Find.scoped;
+                    tip: @tr("desk.find-scope");
+                    clicked => {
+                        Find.toggle("scope");
+                    }
+                }
+                IconButton {
+                    width: 24px;
+                    height: 26px;
+                    glyph: 13px;
+                    icon: Icons.close;
+                    tip: @tr("desk.find-close");
+                    clicked => {
+                        Find.close();
+                    }
+                }
+            }
+            // Always there, so the corner's chevron can put the keys in it.
+            HorizontalLayout {
+                height: Find.replacing ? 26px : 0px;
+                visible: Find.replacing;
+                spacing: 3px;
+                replacement := FindField {
+                    horizontal-stretch: 1;
+                    placeholder: @tr("desk.find-replace-with");
+                    text <=> Find.replacement;
+                    edited(text) => {
+                        Find.replacement-edited(text);
+                    }
+                    enter(event) => {
+                        Find.replace(event.modifiers.control && event.modifiers.alt);
+                        true
+                    }
+                }
+                IconButton {
+                    width: 26px;
+                    height: 26px;
+                    glyph: 15px;
+                    icon: Icons.replace;
+                    tip: @tr("desk.find-replace-one");
+                    clicked => {
+                        Find.replace(false);
+                    }
+                }
+                IconButton {
+                    width: 26px;
+                    height: 26px;
+                    glyph: 15px;
+                    icon: Icons.replace-all;
+                    tip: @tr("desk.find-replace-all");
+                    clicked => {
+                        Find.replace(true);
+                    }
+                }
+                Rectangle {
+                    width: 48px;
+                }
+            }
+        }
+    }
+}
+
 export component CodeView inherits Rectangle {
     in property <length> gutter: 64px;
 
@@ -57,6 +395,14 @@ export component CodeView inherits Rectangle {
 
     public function focus-input() {
         sink.focus();
+    }
+
+    public function focus-find(replace: bool) {
+        if (replace) {
+            bar.focus-replacement();
+        } else {
+            bar.focus-query();
+        }
     }
 
     list := ListView {
@@ -77,9 +423,10 @@ export component CodeView inherits Rectangle {
             for mark in row.marks: Rectangle {
                 x: root.gutter + mark.x;
                 y: mark.kind == 1 ? 2px : 0;
-                width: mark.kind == 1 ? 2px : mark.width;
+                // A caret, and a match of nothing (`^`), are a bar.
+                width: mark.kind == 1 ? 2px : max(mark.width, 2px);
                 height: mark.kind == 1 ? parent.height - 4px : parent.height;
-                background: mark.kind == 1 ? Theme.rust : Theme.text-selection;
+                background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : Theme.text-selection;
             }
             Text {
                 x: 0;
@@ -163,5 +510,11 @@ export component CodeView inherits Rectangle {
                 self.text = "";
             }
         }
+    }
+
+    bar := FindBar {
+        x: parent.width - self.width - 22px;
+        y: 0;
+        visible: Find.open;
     }
 }

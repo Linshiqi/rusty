@@ -123,6 +123,7 @@ export component StatusBar inherits Rectangle {
 export component Picker inherits Rectangle {
     public function focus-field() {
         field.focus();
+        field.set-selection-offsets(Shell.picker-text.character-count, Shell.picker-text.character-count);
     }
 
     background: #00000033;
@@ -154,6 +155,7 @@ export component Picker inherits Rectangle {
                 border-radius: 7px;
                 background: Theme.sunken;
                 field := TextInput {
+                    text <=> Shell.picker-text;
                     x: 10px;
                     width: parent.width - 20px;
                     height: parent.height;

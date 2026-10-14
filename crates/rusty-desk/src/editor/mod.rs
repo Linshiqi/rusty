@@ -14,6 +14,8 @@ pub mod backup;
 mod clip;
 mod cursors;
 mod document;
+mod find;
+mod finding;
 mod history;
 mod indent;
 mod keymap;
@@ -38,7 +40,7 @@ use rusty_edit::{
 };
 use slint::{ComponentHandle, ModelRc};
 
-use crate::{AppWindow, Code, work};
+use crate::{AppWindow, Code, Find, work};
 use cursors::Cursor;
 use document::Change;
 pub use document::Document;
@@ -103,13 +105,17 @@ pub struct Surface {
     marked: RefCell<Range<usize>>,
     /// The widest line seen, for how far the view scrolls sideways.
     widest: Cell<f32>,
+    /// The find bar, and what it found, which the rows draw.
+    finding: RefCell<finding::Finding>,
+    found: Rc<RefCell<find::Marks>>,
 }
 
 impl Surface {
     pub fn new(window: &AppWindow, files: Arc<Files>) -> Rc<Surface> {
         let current: Shared = Rc::default();
         let metrics = Rc::new(RefCell::new(Metrics::measure(window)));
-        let rows = Rc::new(Rows::new(current.clone(), metrics.clone()));
+        let found: Rc<RefCell<find::Marks>> = Rc::default();
+        let rows = Rc::new(Rows::new(current.clone(), metrics.clone(), found.clone()));
         window
             .global::<Code>()
             .set_rows(ModelRc::from(rows.clone()));
@@ -128,6 +134,8 @@ impl Surface {
             copied_line: RefCell::default(),
             marked: RefCell::new(0..0),
             widest: Cell::new(0.0),
+            finding: RefCell::default(),
+            found,
         });
         surface.wire(window);
         surface
@@ -274,6 +282,8 @@ impl Surface {
         self.widest.set(self.metrics.borrow().widest(&doc.borrow()));
         *self.current.borrow_mut() = Some(doc);
         *self.marked.borrow_mut() = 0..0;
+        self.finding.borrow_mut().scope = None;
+        self.research(None);
         self.rows.reset();
         if let Some(window) = self.window.upgrade() {
             let code = window.global::<Code>();
@@ -306,6 +316,36 @@ impl Surface {
         }
     }
 
+    /// Ctrl+G's line and column, counted from one: the caret there, and the
+    /// line in the middle of the view when it was not on screen.
+    pub fn go_to(&self, line: usize, col: Option<usize>) {
+        let Some(doc) = self.doc() else { return };
+        let (at, line) = {
+            let d = doc.borrow();
+            let line = line.saturating_sub(1).min(d.lines.count() - 1);
+            let col = col.map_or(0, |col| col.saturating_sub(1));
+            (d.lines.byte(&d.text, line, col), line)
+        };
+        if let Some(window) = self.window.upgrade() {
+            let code = window.global::<Code>();
+            let (row, view) = (code.get_row_height(), code.get_view_height());
+            let top = line as f32 * row;
+            let scrolled = -code.get_scroll_y();
+            if top < scrolled || top + row > scrolled + view {
+                code.set_scroll_y(-(top - (view - row) / 2.0).max(0.0));
+            }
+        }
+        self.set_cursors(vec![Cursor::caret(at)]);
+        if let Some(window) = self.window.upgrade() {
+            window.invoke_focus_code();
+        }
+    }
+
+    /// How many lines the document on screen has.
+    pub fn line_count(&self) -> Option<usize> {
+        Some(self.doc()?.borrow().lines.count())
+    }
+
     /// The caret on screen as people number it, and what the document is
     /// written as: line and column from one, charset, line endings.
     pub fn status(&self) -> Option<(usize, usize, &'static str, &'static str)> {
@@ -336,6 +376,7 @@ impl Surface {
     // ---- the view's callbacks --------------------------------------------
 
     fn wire(self: &Rc<Self>, window: &AppWindow) {
+        self.wire_find(&window.global::<Find>());
         let code = window.global::<Code>();
         let this = Rc::downgrade(self);
         code.on_typed(move |text| {
@@ -410,7 +451,11 @@ impl Surface {
                 None
             }
             Command::SingleCursor => {
-                self.set_cursors(vec![primary]);
+                if single && self.finding_open() {
+                    self.find_close();
+                } else {
+                    self.set_cursors(vec![primary]);
+                }
                 None
             }
             Command::Backspace { word } => {
@@ -812,6 +857,7 @@ impl Surface {
         self.paint(doc);
         let path = doc.borrow().path.clone();
         self.tell_edit(&path);
+        self.research(Some(change));
         self.cursors_moved();
     }
 
@@ -843,6 +889,7 @@ impl Surface {
             self.rows.changed(was.start, was.end);
             self.rows.changed(now.start, now.end);
         }
+        self.find_follow_selection();
         self.show_caret();
     }
 

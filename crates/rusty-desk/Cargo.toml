@@ -19,6 +19,7 @@ rusty-embed = { path = "../rusty-embed" }
 rusty-i18n = { path = "../rusty-i18n" }
 rfd = "0.16.0"
 arboard = "3.6.1"
+regex = "1.13.1"
 sys-locale = "0.3.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
