@@ -51,6 +51,7 @@ mod servers;
 mod sheet;
 mod sim;
 mod terminal;
+mod watch;
 mod waves;
 mod wizard;
 
@@ -166,6 +167,7 @@ struct State {
     math: math::Math,
     /// Markdown files shown as their source rather than as a page.
     markdown_source: HashSet<String>,
+    watching: watch::Watching,
     term: terminal::Term,
 }
 
@@ -774,6 +776,7 @@ impl App {
         self.sync_all();
         self.sync_problems();
         self.start_servers();
+        self.watch_project();
         self.probe_environment();
         self.load_board(None);
         self.bring_back_drafts(opened);
