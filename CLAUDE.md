@@ -208,6 +208,12 @@ cargo run -p rusty-lsp --example diag_probe -- <project> <file> [seconds]
 # landing while a check is still compiling a crate restarts it.
 cargo run -p rusty-lsp --example save_probe -- <project> <file> [seconds]
 
+# A mistake typed into a line and taken back, and every diagnostics publish
+# for the file between: whether a squiggle left on screen is still in the
+# server's answer or only in the window's. `--save` saves the mistake, so
+# the check reports it too, and leaves the mend unsaved for a while.
+cargo run -p rusty-lsp --example fix_probe -- <project> <file> <line> <from> <to> [--save]
+
 # What painting a file costs: whole, after a one-line edit halfway down, and
 # after a block comment opened at the top — the check that a keystroke in a
 # long file repaints its own line and not the file (see "Large files").
@@ -1159,6 +1165,26 @@ is what it changed.
   that is a tooltip that does not appear — and are dropped unless the card
   they were asked for is still up. `impl core::ops::Mul for Quaternion {}`
   offering *Implement missing members* is the case this was built for.
+- **A key puts the card away, and what the check found follows the
+  edits.** The card is about the text as it was when it was asked for, and
+  nothing closed it but the pointer: a `;` typed for a `,` and mended under
+  a resting pointer left `expected COMMA` up, with its fixes, over a line
+  with nothing wrong in it — reported in those words. Any key but a
+  modifier puts it away, as VS Code's does (`keys.rs`; Ctrl alone keeps it,
+  being how a link is asked for), an answer landing after the text changed
+  is dropped, and the card's `on_card` goes false whenever the card goes,
+  since a card taken away under the pointer never hears it leave. Under the
+  card was the second half: rust-analyzer's own `expected COMMA` went the
+  moment the change reached it, measured with `fix_probe`, but the check
+  runs on a save and at no other time, so the saved `;`'s `struct fields
+  are separated by ,` stayed under the `,` that mended it, in the editor
+  and in Problems, until the next save. The client now carries both
+  sources across every change it sends (`Shared::follow_edit`,
+  `rusty_lsp::follow`): moved with the text before them, and gone where the
+  edit took away the text they were about — VS Code's decorations, which
+  never grow when typed at the edge. The editor's inlay hints follow by the
+  same arithmetic (`crate::inlay::follow` calls it), so a line cannot move
+  one way for a hint and another for a squiggle.
 - **Two askers need numbered answers.** The client kept *one* code-action
   slot per file, and an accepted fix was applied from it by index. That was
   safe while the caret was the only asker; with a hover asking too, a card

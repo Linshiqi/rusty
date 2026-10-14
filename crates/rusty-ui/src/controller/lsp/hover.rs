@@ -94,12 +94,27 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
     // to it, and showing only the type reads as an editor that cannot see the
     // red line under the cursor.
     let problem = problem_at(state, &path, line, col);
+    // The text it is about: a key pressed while the server answers puts the
+    // card away (`keys.rs`), and an answer landing after it would put back
+    // a card about the text before the key.
+    let asked = state
+        .editor
+        .draft
+        .with_untracked(|draft| rusty_lsp::text_mark(draft));
 
     spawn_local(async move {
         let info = ipc::call::<_, Option<HoverInfo>>(cmd::lsp::HOVER, &args)
             .await
             .ok()
             .flatten();
+        if state
+            .editor
+            .draft
+            .try_with_untracked(|draft| rusty_lsp::text_mark(draft))
+            != Some(asked)
+        {
+            return;
+        }
         // A card for the diagnostic even when the server has nothing to say
         // about the position, which is common at exactly the places that are
         // broken enough to be underlined.

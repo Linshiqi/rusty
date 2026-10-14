@@ -175,4 +175,14 @@ impl Pane {
             std::time::Duration::from_millis(300),
         );
     }
+
+    /// The card taken down at once, with any still on its way: the
+    /// generation moves on, so neither the grace nor the ask a settled
+    /// pointer scheduled acts for a moment that has passed.
+    pub(super) fn put_hover_away(self) {
+        self.hover_gen.update(|generation| *generation += 1);
+        if self.state.editor.hover.with_untracked(Option::is_some) {
+            self.state.editor.hover.set(None);
+        }
+    }
 }
