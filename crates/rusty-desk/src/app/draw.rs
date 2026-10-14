@@ -156,7 +156,7 @@ fn flaw_text(flaw: Flaw) -> String {
 
 /// An ink as the panel names it: a theme's colour by number, or the colour
 /// itself.
-fn ink_of(ink: Ink) -> (i32, slint::Color) {
+pub(super) fn ink_of(ink: Ink) -> (i32, slint::Color) {
     let rgb = |hex: &str| {
         let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
         slint::Color::from_rgb_u8((value >> 16) as u8, (value >> 8) as u8, value as u8)
@@ -178,7 +178,7 @@ fn ink_of(ink: Ink) -> (i32, slint::Color) {
 }
 
 /// `x,y x,y …` as path commands, closed.
-fn polygon(points: &str) -> String {
+pub(super) fn polygon(points: &str) -> String {
     let mut out = String::new();
     for (index, pair) in points.split_whitespace().enumerate() {
         out.push_str(if index == 0 { "M " } else { " L " });

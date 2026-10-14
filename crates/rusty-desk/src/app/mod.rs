@@ -26,6 +26,7 @@ mod device;
 mod drafts;
 mod draw;
 mod environment;
+mod flight;
 mod navigate;
 mod part;
 mod playground;
@@ -131,6 +132,7 @@ struct State {
     devices: device::Devices,
     sim: sim::Sim,
     draw: draw::Drawings,
+    flight: flight::Flight,
 }
 
 pub struct App {
@@ -157,6 +159,10 @@ pub struct App {
     board_models: board::Models,
     /// A Plot redraw is on its way.
     plot_due: Cell<bool>,
+    /// A Flight redraw is on its way.
+    flight_due: Cell<bool>,
+    /// Steps the plant while the loop is closed.
+    plant_clock: slint::Timer,
     /// When the window started: the activity view's clock counts from it.
     started: std::time::Instant,
     /// Ticks while something runs, so the view's clock moves.
@@ -192,6 +198,8 @@ impl App {
             board: RefCell::default(),
             board_models: board::Models::new(window),
             plot_due: Cell::new(false),
+            flight_due: Cell::new(false),
+            plant_clock: slint::Timer::default(),
             started: std::time::Instant::now(),
             clock: slint::Timer::default(),
             state: RefCell::new(State {
@@ -506,6 +514,8 @@ impl App {
             "draw.front" => self.draw_look(Some(rusty_embed::scene::Look::Front)),
             "draw.side" => self.draw_look(Some(rusty_embed::scene::Look::Side)),
             "draw.fit" => self.draw_look(None),
+            "flight.close" => self.flight_close(true),
+            "flight.open" => self.flight_close(false),
             "output.clear" => self.runner.clear(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
@@ -1200,6 +1210,7 @@ impl App {
                 Glyph::Plot => icons.get_plot(),
                 Glyph::Waves => icons.get_waves(),
                 Glyph::Draw => icons.get_draw(),
+                Glyph::Flight => icons.get_flight(),
             }
         };
         let state = self.state.borrow();
@@ -1207,6 +1218,7 @@ impl App {
             "plot" => !state.sim.plot.channels.is_empty() || !state.sim.params.is_empty(),
             "waves" => !state.sim.trace.events.is_empty(),
             "draw" => !state.draw.is_empty(),
+            "flight" => !state.sim.sensors.is_empty(),
             _ => true,
         };
         let panels = |dock: Dock| -> ModelRc<PanelTab> {

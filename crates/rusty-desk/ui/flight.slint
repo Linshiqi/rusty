@@ -1,0 +1,254 @@
+// The Flight tab: the craft as it leans, a horizon from the rates, the
+// three axes the firmware names, each motor's duty, and the switch that
+// closes the loop through rusty's plant. Filled by `src/app/flight.rs`.
+
+import { ScrollView, CheckBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Shell } from "shell.slint";
+
+export component FlightPanel inherits Rectangle {
+    pure function ink(code: int, rgb: color) -> color {
+        return code == 3 ? Theme.line : code == 4 ? Theme.label-2 : code == 5 ? Theme.rust : code == 6 ? Theme.label-3 : code == 7 ? Theme.slate : code == 8 ? Theme.amber : code == 9 ? Theme.patina : rgb;
+    }
+
+    ScrollView {
+        VerticalLayout {
+            padding: 14px;
+            spacing: 12px;
+            alignment: start;
+            if Shell.flight-nothing: Text {
+                text: @tr("dock.flight.empty-lead") + "[rusty:tel] gyro_r=…" + @tr("dock.flight.empty-mid") + "[rusty:pwm] 0=0.62" + @tr("dock.flight.empty-tail") + "examples/rate-loop" + @tr("dock.flight.empty-end");
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+            if !Shell.flight-nothing: HorizontalLayout {
+                spacing: 24px;
+                alignment: start;
+                // The craft, as it leans.
+                VerticalLayout {
+                    spacing: 4px;
+                    Rectangle {
+                        width: 132px;
+                        height: 132px;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        background: Theme.sunken;
+                        clip: true;
+                        if !Shell.flight-craft-known: Text {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            text: @tr("dock.flight.no-attitude");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        for piece in Shell.flight-craft: Path {
+                            visible: piece.kind <= 1;
+                            x: -self.stroke-width / 2;
+                            y: -self.stroke-width / 2;
+                            width: 132px + self.stroke-width;
+                            height: 132px + self.stroke-width;
+                            viewbox-width: 132;
+                            viewbox-height: 132;
+                            fit: fill;
+                            commands: piece.kind <= 1 ? piece.commands : "";
+                            fill: piece.kind == 1 ? root.ink(piece.ink, piece.rgb).with-alpha(piece.fill) : transparent;
+                            stroke: root.ink(piece.ink, piece.rgb);
+                            stroke-width: (piece.kind == 1 ? 1 : piece.width) * 1px;
+                            stroke-line-cap: round;
+                            opacity: piece.opacity;
+                        }
+                        for piece in Shell.flight-craft: Rectangle {
+                            visible: piece.kind == 3;
+                            x: (piece.x - piece.r) * 1px;
+                            y: (piece.y - piece.r) * 1px;
+                            width: piece.r * 2px;
+                            height: piece.r * 2px;
+                            border-radius: piece.r * 1px;
+                            background: root.ink(piece.ink, piece.rgb);
+                        }
+                    }
+                    Text {
+                        width: 132px;
+                        text: Shell.flight-craft-text;
+                        color: Theme.label-2;
+                        font-size: Theme.caption;
+                        font-family: Theme.mono;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        width: 132px;
+                        text: Shell.flight-craft-source;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                // The horizon, from the rates.
+                Rectangle {
+                    width: 132px;
+                    height: 132px;
+                    border-radius: 66px;
+                    border-width: 1px;
+                    border-color: Theme.line-strong;
+                    background: Theme.sunken;
+                    clip: true;
+                    Rectangle {
+                        x: -parent.width * 0.4;
+                        y: -parent.height * 0.4 + Shell.flight-horizon-shift * 1px;
+                        width: parent.width * 1.8;
+                        height: parent.height * 1.8;
+                        transform-rotation: Shell.flight-horizon-roll * 1deg;
+                        Rectangle {
+                            y: 0;
+                            height: parent.height / 2;
+                            background: #1d3350;
+                        }
+                        Rectangle {
+                            y: parent.height / 2;
+                            height: parent.height / 2;
+                            background: #2a2016;
+                        }
+                        Rectangle {
+                            y: parent.height / 2;
+                            height: 1px;
+                            background: Theme.label-3;
+                        }
+                    }
+                    Rectangle {
+                        width: 40px;
+                        height: 1px;
+                        background: Theme.rust;
+                    }
+                    Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.rust;
+                    }
+                    if !Shell.flight-horizon-known: Rectangle {
+                        background: Theme.content.with-alpha(0.7);
+                        Text {
+                            text: @tr("misc.no-channel");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                        }
+                    }
+                }
+                // The three axes the firmware names.
+                VerticalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    for axis in Shell.flight-axes: VerticalLayout {
+                        width: 13rem;
+                        HorizontalLayout {
+                            Text {
+                                horizontal-stretch: 1;
+                                text: axis.label;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                            }
+                            Text {
+                                text: axis.value;
+                                color: axis.known ? Theme.label : Theme.label-3;
+                                font-size: Theme.small;
+                                font-family: Theme.mono;
+                            }
+                        }
+                        Text {
+                            text: axis.channel;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            font-family: axis.known ? Theme.mono : "";
+                        }
+                    }
+                }
+                // Each motor's duty.
+                VerticalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Text {
+                        text: @tr("dock.flight.motors");
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        font-weight: 600;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        for motor in Shell.flight-motors: VerticalLayout {
+                            width: 36px;
+                            spacing: 2px;
+                            Text {
+                                text: motor.text;
+                                color: Theme.label-2;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                horizontal-alignment: center;
+                            }
+                            Rectangle {
+                                height: 92px;
+                                Rectangle {
+                                    x: (parent.width - 16px) / 2;
+                                    width: 16px;
+                                    border-radius: 3px;
+                                    background: Theme.sunken;
+                                }
+                                Rectangle {
+                                    x: (parent.width - 16px) / 2;
+                                    width: 16px;
+                                    height: max(2px, motor.duty * 92px);
+                                    y: parent.height - self.height;
+                                    border-radius: 3px;
+                                    background: Theme.rust;
+                                }
+                            }
+                            Text {
+                                text: motor.pin;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+            // The plant: the switch, what it feeds, and why it cannot yet.
+            if !Shell.flight-nothing: Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+            if !Shell.flight-nothing: HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+                CheckBox {
+                    text: @tr("dock.flight.close-loop");
+                    checked: Shell.flight-closed;
+                    enabled: Shell.flight-ready || Shell.flight-closed;
+                    toggled => {
+                        Shell.act(self.checked ? "flight.close" : "flight.open");
+                    }
+                }
+                if Shell.flight-closed: Text {
+                    text: Shell.flight-feeds;
+                    color: Theme.rust;
+                    font-size: Theme.caption;
+                    font-family: Theme.mono;
+                    vertical-alignment: center;
+                }
+            }
+            if !Shell.flight-nothing: Text {
+                text: Shell.flight-help;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

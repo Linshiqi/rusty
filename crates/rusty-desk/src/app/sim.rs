@@ -161,6 +161,7 @@ impl App {
                 self.sync_docks();
             }
             self.plot_moved();
+            self.flight_moved();
             // What came before the marker is the firmware's own words — a
             // test harness's `test name ... `.
             if !before.trim().is_empty() {
@@ -182,10 +183,17 @@ impl App {
             return true;
         }
         if let Some(sensor) = rusty_embed::parse_sensor_def(text) {
+            // A sensor declaration brings the Flight tab.
+            let first = sim.sensors.is_empty();
             match sim.sensors.iter_mut().find(|s| s.name == sensor.name) {
                 Some(known) => *known = sensor,
                 None => sim.sensors.push(sensor),
             }
+            drop(state);
+            if first {
+                self.sync_docks();
+            }
+            self.flight_moved();
             return true;
         }
         if let Some(source) = rusty_embed::parse_pin_source(text) {
@@ -217,6 +225,7 @@ impl App {
             }
             drop(state);
             self.board_moved();
+            self.flight_moved();
             return true;
         }
         if let Some(shown) = rusty_embed::parse_display_report(text) {
@@ -522,8 +531,13 @@ impl App {
             Ended::Failed(code) => self.conclude(code.or(Some(1))),
             Ended::Refused => self.conclude(Some(1)),
         }
-        // The sheet is a drawing again, and its controls reach nothing.
+        // The sheet is a drawing again, and its controls reach nothing; a
+        // plant left spinning would hand the next run a rate nobody
+        // commanded.
         self.sync_board_live();
+        if self.state.borrow().flight.closed {
+            self.flight_close(false);
+        }
         if restart {
             self.simulate();
         }
