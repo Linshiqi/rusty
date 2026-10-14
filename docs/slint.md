@@ -342,7 +342,24 @@ tests green, and CLAUDE.md saying how it works.
    file written four hundred milliseconds after the last change. Proven by
    the probe's edit run: a part dragged and turned, an LED added and wired
    to GPIO2, the wire undone and redone, the LED deleted, the file read
-   back after each save. All of it read through `rusty_embed::period`, read again
+   back after each save.
+   The run's instruments, each a bottom-dock panel that arrives with what
+   it reads: Waves (a lane per pin on the trace's clock, zoomed and
+   followed, exported as VCD), Draw (`rusty-draw`'s scenes in a space
+   turned by dragging, the angles between arrows sharing a tail and the
+   hand three make), Flight (the craft as it leans, a horizon, each motor's
+   duty, and rusty's plant closed between the motors and the declared
+   sensors at 50 Hz) and Signals (each source given a signal while the run
+   goes on, the console's channels fed at the host's pace, and four
+   instruments — time, spectrum, a response swept or read off a recording,
+   a filter designed against the signal with its `no_std` code). Their
+   arithmetic moved out of the old window into `rusty_embed::{waves,
+   scene, lab}` with its tests, so both windows draw from one copy. Proven
+   by probes: the keypad's sixteen lanes on the firmware's clock, the cross
+   product example's three arrows and two right angles, rate-loop's loop
+   closed through the plant, and filter-lab's played tone, converter and
+   both channels, its spectrum, its design, and the recording measured at
+   5 and 50 Hz. All of it read through `rusty_embed::period`, read again
    only when a level or a press changes and re-weighted when a duty does;
    at most a redraw a frame. Fitted whole; the wheel zooms about the
    pointer, a drag pans, a double-click fits again. A press joins two

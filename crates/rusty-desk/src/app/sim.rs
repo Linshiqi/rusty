@@ -99,6 +99,11 @@ impl Sim {
     pub(super) fn has_pins(&self) -> bool {
         self.pins.is_some()
     }
+
+    /// The emulator's pins, to work with off the window's thread.
+    pub(super) fn pins_channel(&self) -> Option<PinChannel> {
+        self.pins.clone()
+    }
 }
 
 /// What a run needs worked out before anything starts: the plan, what the
@@ -248,6 +253,16 @@ impl App {
             if moved {
                 self.board_moved();
             }
+            // Every stamped conversion is kept for the Signals tab: with a
+            // signal playing it is a sample of it, on the firmware's clock.
+            if let Some(at_us) = report.at_us {
+                self.lab_conversion(report.pin, at_us, report.counts);
+            }
+            return true;
+        }
+        if let Some(report) = rusty_embed::wave::parse_wave_report(text) {
+            drop(state);
+            self.lab_switched(report, text);
             return true;
         }
         if let Some(report) = rusty_embed::parse_i2c_report(text) {
@@ -257,9 +272,7 @@ impl App {
             }
             return true;
         }
-        if rusty_embed::parse_spi_report(text).is_some()
-            || rusty_embed::wave::parse_wave_report(text).is_some()
-        {
+        if rusty_embed::parse_spi_report(text).is_some() {
             // What crossed a bus or a converter: the board's instruments
             // read these once they arrive.
             return true;
@@ -415,12 +428,14 @@ impl App {
         {
             let mut state = self.state.borrow_mut();
             state.sim.reset();
+            state.lab.clear_capture();
             state.sim.plan = Some(plan);
             state.sim.ports = ports;
         }
         // Nothing of the last run's left drawn.
         self.sync_plot();
         self.sync_waves();
+        self.sync_lab();
         self.board_moved();
         self.runner.clear();
         self.begin(Kind::Simulate, None);

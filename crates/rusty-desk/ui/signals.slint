@@ -1,0 +1,700 @@
+// The Signals tab: on the left the sources — each signal on the sheet,
+// given a new one while the run goes on, and the channels the firmware
+// declared on its console — and on the right four instruments: the time
+// view, the spectrum, a response swept or read off a recording, and a
+// filter designed against the signal. Filled by `src/app/lab.rs`; every
+// chart is a path in a thousand units by a hundred, stretched over its box.
+
+import { ScrollView, ComboBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Shell, LabDot, LabTick } from "shell.slint";
+import { Field, Segments } from "widgets.slint";
+
+// A word that picks something, lit when it is the one.
+component Choice inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    in property <color> ink: transparent;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 22px;
+    width: row.preferred-width + 12px;
+    border-radius: 5px;
+    background: root.on ? Theme.sunken : touch.has-hover && root.enabled ? Theme.sunken.with-alpha(0.5) : transparent;
+    opacity: root.enabled ? 1 : 0.4;
+    row := HorizontalLayout {
+        x: 6px;
+        spacing: 4px;
+        if root.ink != transparent: Text {
+            text: "—";
+            color: root.ink;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text;
+            color: root.on ? Theme.label : Theme.label-3;
+            font-size: Theme.caption;
+            font-family: Theme.mono;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A chart's box: a path or two over a thousand by a hundred.
+component Chart inherits Rectangle {
+    in property <string> grid;
+    in property <string> under;
+    in property <color> under-ink: #6d7480;
+    in property <string> dashed;
+    in property <color> dashed-ink: #5fd0c8;
+    in property <string> line;
+    in property <color> line-ink: #e0a838;
+    in property <string> label;
+    in property <string> range;
+    in property <[LabDot]> dots;
+    border-radius: 4px;
+    background: Theme.sunken.with-alpha(0.4);
+    clip: true;
+    if root.grid != "": Path {
+        x: -self.stroke-width / 2;
+        y: -self.stroke-width / 2;
+        width: parent.width + self.stroke-width;
+        height: parent.height + self.stroke-width;
+        viewbox-width: 1000;
+        viewbox-height: 100;
+        fit: fill;
+        commands: root.grid;
+        stroke: #3c434e;
+        stroke-width: 1px;
+    }
+    if root.under != "": Path {
+        x: -self.stroke-width / 2;
+        y: -self.stroke-width / 2;
+        width: parent.width + self.stroke-width;
+        height: parent.height + self.stroke-width;
+        viewbox-width: 1000;
+        viewbox-height: 100;
+        fit: fill;
+        commands: root.under;
+        stroke: root.under-ink;
+        stroke-width: 1px;
+    }
+    if root.dashed != "": Path {
+        x: -self.stroke-width / 2;
+        y: -self.stroke-width / 2;
+        width: parent.width + self.stroke-width;
+        height: parent.height + self.stroke-width;
+        viewbox-width: 1000;
+        viewbox-height: 100;
+        fit: fill;
+        commands: root.dashed;
+        stroke: root.dashed-ink;
+        stroke-width: 1.2px;
+        opacity: 0.8;
+    }
+    if root.line != "": Path {
+        x: -self.stroke-width / 2;
+        y: -self.stroke-width / 2;
+        width: parent.width + self.stroke-width;
+        height: parent.height + self.stroke-width;
+        viewbox-width: 1000;
+        viewbox-height: 100;
+        fit: fill;
+        commands: root.line;
+        stroke: root.line-ink;
+        stroke-width: 1.4px;
+    }
+    for dot in root.dots: Rectangle {
+        x: dot.x / 1000 * parent.width - 2.5px;
+        y: dot.y / 100 * parent.height - 2.5px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: #e0a838;
+    }
+    Text {
+        x: 6px;
+        y: 2px;
+        text: root.label;
+        color: Theme.label-3;
+        font-size: Theme.caption;
+        font-family: Theme.mono;
+    }
+    Text {
+        x: parent.width - self.width - 6px;
+        y: 2px;
+        text: root.range;
+        color: Theme.label-4;
+        font-size: Theme.caption;
+        font-family: Theme.mono;
+    }
+}
+
+// The frequencies under a chart.
+component Ticks inherits Rectangle {
+    in property <[LabTick]> ticks;
+    height: 16px;
+    for tick in root.ticks: Text {
+        x: tick.at * parent.width - self.width / 2;
+        text: tick.text;
+        color: Theme.label-4;
+        font-size: Theme.caption;
+        font-family: Theme.mono;
+    }
+}
+
+// A labelled field that takes a number when it is accepted.
+component Number inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> text;
+    in property <string> placeholder;
+    in property <length> field-width: 72px;
+    callback accepted(string);
+    spacing: 4px;
+    Text {
+        text: root.label;
+        color: Theme.label-3;
+        font-size: Theme.caption;
+        vertical-alignment: center;
+    }
+    Field {
+        width: root.field-width;
+        height: 24px;
+        mono: true;
+        text: root.text;
+        placeholder: root.placeholder;
+        accepted(text) => {
+            root.accepted(text);
+        }
+    }
+}
+
+export component SignalsPanel inherits Rectangle {
+    HorizontalLayout {
+        // The sources.
+        Rectangle {
+            width: 272px;
+            ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    padding-bottom: 8px;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        height: 26px;
+                        Text {
+                            text: @tr("lab.sources");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if Shell.lab-sources.length == 0: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        Text {
+                            text: @tr("lab.no-sources");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            wrap: word-wrap;
+                        }
+                    }
+                    for source[index] in Shell.lab-sources: Rectangle {
+                        height: source-rows.preferred-height;
+                        background: source.picked ? Theme.sunken : transparent;
+                        TouchArea {
+                            clicked => {
+                                Shell.lab-pick-source(index);
+                            }
+                        }
+                        source-rows := VerticalLayout {
+                            padding: 8px;
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 4px;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Rectangle {
+                                    y: (parent.height - self.height) / 2;
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: #5fd0c8;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: source.label;
+                                    color: Theme.label;
+                                    font-size: Theme.small;
+                                    font-family: Theme.mono;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                // The first row names the list; a pick plays its
+                                // preset and the list reads as itself again.
+                                ComboBox {
+                                    width: 120px;
+                                    enabled: Shell.lab-live;
+                                    model: Shell.lab-preset-names;
+                                    current-index: 0;
+                                    selected => {
+                                        if (self.current-index > 0) {
+                                            Shell.lab-preset(index, self.current-index - 1);
+                                        }
+                                        self.current-index = 0;
+                                    }
+                                }
+                            }
+                            Field {
+                                height: 24px;
+                                mono: true;
+                                enabled: Shell.lab-live;
+                                text: source.text;
+                                trouble: source.error != "";
+                                accepted(text) => {
+                                    Shell.lab-source-text(index, text);
+                                }
+                            }
+                            if source.error != "": Text {
+                                text: source.error;
+                                color: Theme.crimson;
+                                font-size: Theme.caption;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    if Shell.lab-console.length > 0: VerticalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-top: 10px;
+                        spacing: 4px;
+                        Text {
+                            text: @tr("lab.console-heading");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: @tr("lab.console-note");
+                            color: Theme.amber;
+                            font-size: Theme.caption;
+                            wrap: word-wrap;
+                        }
+                        for row in Shell.lab-console: HorizontalLayout {
+                            spacing: 6px;
+                            if row.axis < 0: Text {
+                                horizontal-stretch: 1;
+                                text: row.name + "  " + row.unit;
+                                color: Theme.label;
+                                font-size: Theme.small;
+                                font-family: Theme.mono;
+                            }
+                            if row.axis >= 0: Text {
+                                width: 14px;
+                                text: row.axis;
+                                color: Theme.label-4;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                vertical-alignment: center;
+                            }
+                            if row.axis >= 0: Field {
+                                height: 24px;
+                                mono: true;
+                                enabled: Shell.lab-live;
+                                text: row.text;
+                                placeholder: "sine f=2 a=1";
+                                accepted(text) => {
+                                    Shell.lab-console-text(row.name, row.axis, text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        // The instruments.
+        VerticalLayout {
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                padding: 6px;
+                padding-left: 12px;
+                alignment: start;
+                Segments {
+                    labels: [@tr("lab.view-time"), @tr("lab.view-spectrum"), @tr("lab.view-response"), @tr("lab.view-design")];
+                    values: ["0", "1", "2", "3"];
+                    value: Shell.lab-view;
+                    picked(value) => {
+                        Shell.lab-set("view", value.to-float());
+                    }
+                }
+            }
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+            if Shell.lab-refused != "": Text {
+                text: Shell.lab-refused;
+                color: Theme.crimson;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+
+            // Time: every record on one clock.
+            if Shell.lab-view == 0: VerticalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 2px;
+                    alignment: start;
+                    Text {
+                        text: @tr("lab.window");
+                        color: Theme.label-4;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                    for seconds[index] in ["0.05 s", "0.2 s", "1 s", "5 s", "20 s"]: Choice {
+                        text: seconds;
+                        on: Shell.lab-window == index;
+                        clicked => {
+                            Shell.lab-set("window", index);
+                        }
+                    }
+                    if Shell.lab-host-clock: Text {
+                        text: "  " + @tr("lab.host-clock");
+                        color: Theme.amber;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                }
+                if Shell.lab-lanes.length == 0: Text {
+                    text: @tr("lab.time-empty");
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+                for lane in Shell.lab-lanes: Chart {
+                    min-height: 22px;
+                    vertical-stretch: 1;
+                    line: lane.commands;
+                    line-ink: lane.ink;
+                    label: lane.label;
+                    range: lane.scale;
+                }
+            }
+
+            // Spectrum: any record, as frequencies.
+            if Shell.lab-view == 1: VerticalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 2px;
+                    for record[index] in Shell.lab-records: Choice {
+                        text: record.label;
+                        ink: record.ink;
+                        on: record.on;
+                        clicked => {
+                            Shell.lab-pick-record("spectrum", index);
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    for seconds[index] in ["1 s", "5 s", "20 s"]: Choice {
+                        text: seconds;
+                        on: Shell.lab-span == index;
+                        clicked => {
+                            Shell.lab-set("span", index);
+                        }
+                    }
+                    for name[index] in ["Hann", "Blackman", @tr("lab.window-rectangular")]: Choice {
+                        text: name;
+                        on: Shell.lab-window-kind == index;
+                        clicked => {
+                            Shell.lab-set("window-kind", index);
+                        }
+                    }
+                    Choice {
+                        text: @tr("lab.log-axis");
+                        on: Shell.lab-log;
+                        clicked => {
+                            Shell.lab-set("log", 0);
+                        }
+                    }
+                }
+                if Shell.lab-spectrum-empty: Text {
+                    text: @tr("lab.spectrum-empty");
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+                if !Shell.lab-spectrum-empty: Chart {
+                    vertical-stretch: 1;
+                    min-height: 80px;
+                    grid: Shell.lab-spectrum-grid;
+                    dashed: Shell.lab-spectrum-tones;
+                    line: Shell.lab-spectrum-path;
+                    range: Shell.lab-spectrum-range;
+                }
+                if !Shell.lab-spectrum-empty: Ticks {
+                    ticks: Shell.lab-spectrum-ticks;
+                }
+                if !Shell.lab-spectrum-empty: Text {
+                    text: Shell.lab-spectrum-caption;
+                    color: Theme.label-4;
+                    font-size: Theme.caption;
+                    font-family: Theme.mono;
+                }
+            }
+
+            // Response: a sweep, or a recording read.
+            if Shell.lab-view == 2: VerticalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    for field[index] in Shell.lab-sweep-fields: Number {
+                        label: field.label;
+                        text: field.text;
+                        accepted(text) => {
+                            Shell.lab-field("sweep", index, text);
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("lab.sweep-input");
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                    ComboBox {
+                        width: 160px;
+                        model: Shell.lab-input-names;
+                        current-index: Shell.lab-input-index;
+                        selected => {
+                            Shell.lab-pick-record("input", self.current-index);
+                        }
+                    }
+                    Text {
+                        text: @tr("lab.sweep-output");
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                    ComboBox {
+                        width: 160px;
+                        model: Shell.lab-output-names;
+                        current-index: Shell.lab-output-index;
+                        selected => {
+                            Shell.lab-pick-record("output", self.current-index);
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    Choice {
+                        text: @tr("lab.measure-recorded");
+                        enabled: Shell.lab-measure-ready;
+                        clicked => {
+                            Shell.act("lab.measure-recorded");
+                        }
+                    }
+                    if Shell.lab-sweeping: Choice {
+                        text: @tr("lab.sweep-stop");
+                        clicked => {
+                            Shell.act("lab.sweep-stop");
+                        }
+                    }
+                    if !Shell.lab-sweeping: Choice {
+                        text: @tr("lab.sweep-start");
+                        on: true;
+                        enabled: Shell.lab-sweep-ready;
+                        clicked => {
+                            Shell.act("lab.sweep-start");
+                        }
+                    }
+                }
+                Text {
+                    text: Shell.lab-status;
+                    color: Theme.label-4;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+                if Shell.lab-response-empty: Text {
+                    text: @tr("lab.response-empty");
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                }
+                Chart {
+                    vertical-stretch: 1;
+                    min-height: 48px;
+                    grid: Shell.lab-response-grid;
+                    dashed: Shell.lab-gain-curve;
+                    line: Shell.lab-gain-measured;
+                    dots: Shell.lab-gain-dots;
+                    label: @tr("lab.gain");
+                    range: Shell.lab-gain-range;
+                }
+                Chart {
+                    vertical-stretch: 1;
+                    min-height: 48px;
+                    grid: "M 0 50 H 1000";
+                    dashed: Shell.lab-phase-curve;
+                    line: Shell.lab-phase-measured;
+                    dots: Shell.lab-phase-dots;
+                    label: @tr("lab.phase");
+                    range: "−180° … 180°";
+                }
+                Ticks {
+                    ticks: Shell.lab-response-ticks;
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    Text {
+                        text: "● " + @tr("lab.measured");
+                        color: #e0a838;
+                        font-size: Theme.caption;
+                    }
+                    Text {
+                        text: "- - " + @tr("lab.designed");
+                        color: #5fd0c8;
+                        font-size: Theme.caption;
+                    }
+                }
+            }
+
+            // Design: a filter against the signal, and its code.
+            if Shell.lab-view == 3: ScrollView {
+                VerticalLayout {
+                    padding: 8px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 6px;
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        ComboBox {
+                            width: 180px;
+                            model: Shell.lab-kind-names;
+                            current-index: Shell.lab-kind-index;
+                            selected => {
+                                Shell.lab-set("kind", self.current-index);
+                            }
+                        }
+                        Number {
+                            label: @tr("lab.design-rate");
+                            text: Shell.lab-design-rate;
+                            placeholder: Shell.lab-design-rate-hint;
+                            field-width: 80px;
+                            accepted(text) => {
+                                Shell.lab-field("rate", 0, text);
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        for param[index] in Shell.lab-params: Number {
+                            label: param.label;
+                            text: param.text;
+                            accepted(text) => {
+                                Shell.lab-field("param", index, text);
+                            }
+                        }
+                        if Shell.lab-fir-window >= 0: HorizontalLayout {
+                            spacing: 2px;
+                            for name[index] in ["Hann", "Blackman", @tr("lab.window-rectangular")]: Choice {
+                                text: name;
+                                on: Shell.lab-fir-window == index;
+                                clicked => {
+                                    Shell.lab-set("fir-window", index);
+                                }
+                            }
+                        }
+                    }
+                    if !Shell.lab-design-ok: Text {
+                        text: Shell.lab-design-note;
+                        color: Theme.crimson;
+                        font-size: Theme.caption;
+                        wrap: word-wrap;
+                    }
+                    if Shell.lab-design-ok: Chart {
+                        height: 110px;
+                        grid: Shell.lab-design-grid;
+                        under: Shell.lab-design-spectrum;
+                        line: Shell.lab-design-response;
+                        label: @tr("lab.design-response");
+                        range: "−100 … 5 dB";
+                    }
+                    if Shell.lab-design-ok: Ticks {
+                        ticks: Shell.lab-design-ticks;
+                    }
+                    if Shell.lab-design-ok && Shell.lab-design-before != "": Chart {
+                        height: 90px;
+                        under: Shell.lab-design-before;
+                        under-ink: #5fd0c8;
+                        line: Shell.lab-design-after;
+                        label: Shell.lab-design-time;
+                    }
+                    if Shell.lab-design-ok: HorizontalLayout {
+                        alignment: start;
+                        Number {
+                            label: @tr("lab.code-name");
+                            text: Shell.lab-code-name;
+                            field-width: 128px;
+                            accepted(text) => {
+                                Shell.lab-field("code-name", 0, text);
+                            }
+                        }
+                    }
+                    if Shell.lab-design-ok && Shell.lab-code-refusal != "": Text {
+                        text: Shell.lab-code-refusal;
+                        color: Theme.crimson;
+                        font-size: Theme.caption;
+                        wrap: word-wrap;
+                    }
+                    // The code, to select and copy.
+                    if Shell.lab-design-ok && Shell.lab-code != "": Rectangle {
+                        height: min(code.preferred-height + 16px, 260px);
+                        border-radius: 6px;
+                        background: Theme.sunken;
+                        clip: true;
+                        code := TextInput {
+                            x: 10px;
+                            y: 8px;
+                            width: parent.width - 20px;
+                            text: Shell.lab-code;
+                            read-only: true;
+                            single-line: false;
+                            color: Theme.label-2;
+                            font-size: Theme.caption;
+                            font-family: Theme.mono;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

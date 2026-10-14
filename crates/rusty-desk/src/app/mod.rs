@@ -27,6 +27,8 @@ mod drafts;
 mod draw;
 mod environment;
 mod flight;
+mod lab;
+mod lab_words;
 mod navigate;
 mod part;
 mod playground;
@@ -133,6 +135,7 @@ struct State {
     sim: sim::Sim,
     draw: draw::Drawings,
     flight: flight::Flight,
+    lab: lab::Lab,
 }
 
 pub struct App {
@@ -350,6 +353,18 @@ impl App {
         on!(on_plot_solo, |app, name| app.plot_solo(&name));
         on!(on_waves_resized, |app, width| app.waves_resized(width));
         on!(on_draw_resized, |app, w, h| app.draw_resized(w, h));
+        on!(on_lab_pick_source, |app, index| app.lab_pick_source(index));
+        on!(on_lab_source_text, |app, index, text| app
+            .lab_source_text(index, &text));
+        on!(on_lab_preset, |app, index, preset| app
+            .lab_preset(index, preset));
+        on!(on_lab_console_text, |app, name, axis, text| app
+            .lab_console_text(&name, axis, &text));
+        on!(on_lab_set, |app, what, index| app.lab_set(&what, index));
+        on!(on_lab_pick_record, |app, what, index| app
+            .lab_pick_record(&what, index));
+        on!(on_lab_field, |app, what, index, text| app
+            .lab_field(&what, index, &text));
         on!(on_draw_orbit, |app, dx, dy| app.draw_orbit(dx, dy));
         on!(on_draw_zoom, |app, delta| app.draw_zoom(delta));
         on!(on_draw_pick, |app, title| app.draw_pick(&title));
@@ -516,6 +531,9 @@ impl App {
             "draw.fit" => self.draw_look(None),
             "flight.close" => self.flight_close(true),
             "flight.open" => self.flight_close(false),
+            "lab.sweep-start" => self.lab_sweep_start(),
+            "lab.sweep-stop" => self.lab_sweep_stop(),
+            "lab.measure-recorded" => self.lab_measure_recorded(),
             "output.clear" => self.runner.clear(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
@@ -1211,6 +1229,7 @@ impl App {
                 Glyph::Waves => icons.get_waves(),
                 Glyph::Draw => icons.get_draw(),
                 Glyph::Flight => icons.get_flight(),
+                Glyph::Signals => icons.get_signals(),
             }
         };
         let state = self.state.borrow();
@@ -1219,6 +1238,15 @@ impl App {
             "waves" => !state.sim.trace.events.is_empty(),
             "draw" => !state.draw.is_empty(),
             "flight" => !state.sim.sensors.is_empty(),
+            "signals" => {
+                state.lab.has_signals()
+                    || state
+                        .sim
+                        .plan
+                        .as_ref()
+                        .and_then(|plan| plan.board.as_ref())
+                        .is_some_and(|sheet| !rusty_embed::lab::sources_of(sheet).is_empty())
+            }
             _ => true,
         };
         let panels = |dock: Dock| -> ModelRc<PanelTab> {

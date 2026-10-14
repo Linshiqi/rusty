@@ -319,6 +319,39 @@ pub fn start(window: &AppWindow) {
                     app.act("flight.close");
                 }
             }
+            // A signal on the sheet: the Signals tab, each instrument in turn.
+            579 if sim => {
+                if shell.get_lab_sources().row_count() > 0 {
+                    shell.invoke_show_panel("bottom".into(), "signals".into());
+                }
+            }
+            581 if sim => {
+                if shell.get_bottom_front() == "signals" {
+                    eprintln!(
+                        "sim: signals sources {:?}; lanes {:?}",
+                        shell.get_lab_sources().iter().map(|s| format!("{} {}", s.label, s.text)).collect::<Vec<_>>(),
+                        shell.get_lab_lanes().iter().map(|l| format!("{} {}", l.label, l.scale)).collect::<Vec<_>>()
+                    );
+                    snapshot(&window, &dir.join("signals-time.png"));
+                    shell.invoke_lab_set("view".into(), 1);
+                }
+            }
+            583 if sim => {
+                if shell.get_bottom_front() == "signals" {
+                    eprintln!("sim: spectrum {:?}", shell.get_lab_spectrum_caption());
+                    snapshot(&window, &dir.join("signals-spectrum.png"));
+                    shell.invoke_lab_set("view".into(), 3);
+                }
+            }
+            585 if sim => {
+                if shell.get_bottom_front() == "signals" {
+                    eprintln!("sim: design ok {} note {:?}", shell.get_lab_design_ok(), shell.get_lab_design_note());
+                    snapshot(&window, &dir.join("signals-design.png"));
+                    shell.invoke_lab_set("view".into(), 2);
+                    app.act("lab.measure-recorded");
+                    eprintln!("sim: response {:?}", shell.get_lab_status());
+                }
+            }
             // The first slider under a part moved a quarter of its way, as a
             // hand would.
             575 if sim => {

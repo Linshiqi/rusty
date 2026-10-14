@@ -1887,6 +1887,7 @@ yaw = "偏航"
 instrument = "机头高于地平线 {nose} · 右翼下沉 {bank} · 航向 {heading}"
 
 [desk]
+sim-no-signal = "当前没有运行能播放信号的仿真——只有 rusty 的模拟器能播放。"
 board-library = "添加零件"
 board-library-search = "搜索零件"
 board-undo = "撤销"

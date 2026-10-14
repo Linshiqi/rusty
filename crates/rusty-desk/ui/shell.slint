@@ -231,6 +231,63 @@ export struct BoardControl {
     live: bool,
 }
 
+// The Signals tab: a source on the sheet, what it plays, and why the text
+// would not read.
+export struct LabSource {
+    label: string,
+    text: string,
+    picked: bool,
+    error: string,
+}
+
+// A preset signal: its id, and its name in the window's language.
+export struct LabPreset {
+    id: string,
+    name: string,
+}
+
+// A console channel's heading (`axis` -1) or one of its axes.
+export struct LabConsole {
+    name: string,
+    unit: string,
+    axis: int,
+    text: string,
+}
+
+// A lane of the Time view: what it is, its colour, its path across a
+// thousand units by a hundred, and the range it is drawn over.
+export struct LabLane {
+    label: string,
+    ink: color,
+    commands: string,
+    scale: string,
+}
+
+// A record offered to an instrument, or a choice of kind.
+export struct LabRecord {
+    label: string,
+    ink: color,
+    on: bool,
+}
+
+// A frequency marked on an axis, `at` of its width.
+export struct LabTick {
+    at: float,
+    text: string,
+}
+
+// A measured point, in a chart's thousand by a hundred.
+export struct LabDot {
+    x: float,
+    y: float,
+}
+
+// A field of the sweep's plan or the design's parameters.
+export struct LabParam {
+    label: string,
+    text: string,
+}
+
 // One axis of the Flight tab: what it is, the channel the firmware names
 // for it, and its newest value.
 export struct FlightAxis {
@@ -473,6 +530,73 @@ export global Shell {
     // A part pressed or let go, and which key of it; a slider moved.
     callback board-press(int, int, bool);
     callback board-control(int, string, float);
+
+    // The Signals tab.
+    in property <[LabSource]> lab-sources;
+    in property <[LabPreset]> lab-presets;
+    in property <[string]> lab-preset-names;
+    in property <[LabConsole]> lab-console;
+    in property <bool> lab-live;
+    in-out property <int> lab-view;
+    in property <string> lab-refused;
+    in property <int> lab-window;
+    in property <[LabLane]> lab-lanes;
+    in property <bool> lab-host-clock;
+    in property <[LabRecord]> lab-records;
+    in property <int> lab-span;
+    in property <int> lab-window-kind;
+    in property <bool> lab-log;
+    in property <bool> lab-spectrum-empty: true;
+    in property <string> lab-spectrum-path;
+    in property <string> lab-spectrum-grid;
+    in property <string> lab-spectrum-tones;
+    in property <[LabTick]> lab-spectrum-ticks;
+    in property <string> lab-spectrum-range;
+    in property <string> lab-spectrum-caption;
+    in property <[LabParam]> lab-sweep-fields;
+    in property <[string]> lab-input-names;
+    in property <int> lab-input-index;
+    in property <[string]> lab-output-names;
+    in property <int> lab-output-index;
+    in property <bool> lab-sweeping;
+    in property <bool> lab-sweep-ready;
+    in property <bool> lab-measure-ready;
+    in property <string> lab-status;
+    in property <string> lab-gain-curve;
+    in property <string> lab-gain-measured;
+    in property <string> lab-phase-curve;
+    in property <string> lab-phase-measured;
+    in property <[LabDot]> lab-gain-dots;
+    in property <[LabDot]> lab-phase-dots;
+    in property <string> lab-response-grid;
+    in property <[LabTick]> lab-response-ticks;
+    in property <string> lab-gain-range;
+    in property <bool> lab-response-empty: true;
+    in property <[string]> lab-kind-names;
+    in property <int> lab-kind-index;
+    in property <[LabParam]> lab-params;
+    in property <int> lab-fir-window: -1;
+    in property <string> lab-design-rate;
+    in property <string> lab-design-rate-hint;
+    in property <bool> lab-design-ok;
+    in property <string> lab-design-note;
+    in property <string> lab-design-response;
+    in property <string> lab-design-spectrum;
+    in property <string> lab-design-grid;
+    in property <[LabTick]> lab-design-ticks;
+    in property <string> lab-design-before;
+    in property <string> lab-design-after;
+    in property <string> lab-design-time;
+    in property <string> lab-code-name;
+    in property <string> lab-code;
+    in property <string> lab-code-refusal;
+    callback lab-pick-source(int);
+    callback lab-source-text(int, string);
+    callback lab-preset(int, int);
+    callback lab-console-text(string, int, string);
+    callback lab-set(string, int);
+    callback lab-pick-record(string, int);
+    callback lab-field(string, int, string);
 
     // The Flight tab.
     in property <bool> flight-nothing: true;

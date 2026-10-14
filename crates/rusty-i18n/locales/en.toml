@@ -1963,6 +1963,7 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+sim-no-signal = "Nothing running plays a signal — only rusty's emulator plays one."
 board-library = "Add a part"
 board-library-search = "Search parts"
 board-undo = "Undo"
