@@ -8,16 +8,14 @@ use leptos::prelude::*;
 use rusty_embed::dsp;
 use rusty_i18n::t;
 
-use super::chart::{self, PLAYED};
 use super::spectrum::{frequency_ticks, place, record_label, records_offered};
 use crate::controller;
 use crate::lab::Played;
 use crate::lab::record::{self, Of};
 use crate::lab::sweep::Point;
 use crate::state::{AppState, TraceClock};
-
-/// The design's curve is drawn at this many frequencies across the band.
-const CURVE: usize = 240;
+use rusty_embed::lab::chart::{self, PLAYED};
+use rusty_embed::lab::response::design_curve;
 
 /// The rate the firmware prints `channel` at, read off its stamps.
 pub(super) fn channel_rate(state: AppState, channel: &str) -> Option<f64> {
@@ -28,30 +26,6 @@ pub(super) fn channel_rate(state: AppState, channel: &str) -> Option<f64> {
         let (_, points) = plot.channels.iter().find(|(known, _)| known == channel)?;
         record::from_channel(points).map(|r| r.rate)
     })
-}
-
-/// The design's own gain and phase across `from..=to`, at the rate it runs
-/// at — or nothing, for a median or a design that cannot be realised.
-fn design_curve(design: &dsp::Design, rate: f64, from: f64, to: f64) -> Vec<Point> {
-    let Ok(filter) = design.realize(rate) else {
-        return Vec::new();
-    };
-    let top = to.min(rate / 2.0 * 0.999);
-    if top <= from {
-        return Vec::new();
-    }
-    let ratio = (top / from).ln() / (CURVE - 1) as f64;
-    (0..CURVE)
-        .filter_map(|n| {
-            let freq = from * (ratio * n as f64).exp();
-            let response = filter.response(freq)?;
-            Some(Point {
-                freq,
-                gain: response.gain,
-                phase: response.phase,
-            })
-        })
-        .collect()
 }
 
 #[component]
@@ -389,32 +363,5 @@ fn ResponseChart(
                 <span><span style=format!("color: {PLAYED}")>"- - "</span>{t!("lab.designed")}</span>
             </p>
         </div>
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rusty_embed::dsp::{Design, Pass};
-
-    /// The design's curve is its own response: a Butterworth low-pass reads
-    /// −3 dB at its cutoff, and a curve asked for past half the rate stops
-    /// there.
-    #[test]
-    fn the_designed_curve_is_the_filters_own() {
-        let design = Design::Butterworth {
-            pass: Pass::Low,
-            order: 2,
-            cutoff: 10.0,
-        };
-        let curve = design_curve(&design, 1000.0, 1.0, 100.0);
-        let at_cutoff = curve
-            .iter()
-            .min_by(|a, b| (a.freq - 10.0).abs().total_cmp(&(b.freq - 10.0).abs()))
-            .unwrap();
-        assert!((dsp::db(at_cutoff.gain) + 3.0).abs() < 0.2, "{at_cutoff:?}");
-        let past = design_curve(&design, 100.0, 1.0, 1000.0);
-        assert!(past.iter().all(|p| p.freq < 50.0));
-        assert!(design_curve(&Design::Median { taps: 5 }, 1000.0, 1.0, 100.0).is_empty());
     }
 }

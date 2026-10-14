@@ -17,7 +17,7 @@ use rusty_i18n::t;
 
 use crate::state::{AppState, LabView};
 
-mod chart;
+use rusty_embed::lab::chart;
 mod design;
 mod response;
 mod sources;

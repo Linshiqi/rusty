@@ -6,13 +6,13 @@
 
 /// One colour per lane, cycled — the Plot panel's inks, so a telemetry
 /// channel is the same colour in both.
-pub(super) const INK: [&str; 8] = [
+pub const INK: [&str; 8] = [
     "#e0a838", "#5aa9e6", "#7bc47f", "#e06c75", "#b48ead", "#56b6c2", "#d19a66", "#98c379",
 ];
 
 /// The colour of what was played: the generator's own, as drawn on the
 /// sheet.
-pub(super) const PLAYED: &str = "#5fd0c8";
+pub const PLAYED: &str = "#5fd0c8";
 
 /// Points thinned to at most two a column — the lowest and the highest that
 /// fall in it, in the order they came — so ten thousand samples are drawn
@@ -20,7 +20,7 @@ pub(super) const PLAYED: &str = "#5fd0c8";
 /// one sample wide still reaches the height it had.
 ///
 /// `points` are `(x, y)` with `x` from 0 to 1 across the chart.
-pub(super) fn thin(points: &[(f64, f64)], columns: usize) -> Vec<(f64, f64)> {
+pub fn thin(points: &[(f64, f64)], columns: usize) -> Vec<(f64, f64)> {
     if columns == 0 || points.len() <= 2 * columns {
         return points.to_vec();
     }
@@ -65,7 +65,7 @@ pub(super) fn thin(points: &[(f64, f64)], columns: usize) -> Vec<(f64, f64)> {
 /// different claim from "at its minimum" — and a small wobble on a large
 /// value is drawn small: the floor is five percent of the lane's own
 /// magnitude, the Plot panel's rule for the same reason.
-pub(super) fn band(values: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
+pub fn band(values: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
     let (mut low, mut high) = (f64::MAX, f64::MIN);
     for value in values.filter(|v| v.is_finite()) {
         low = low.min(value);
@@ -85,7 +85,7 @@ pub(super) fn band(values: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
 /// `range` and upward, a hair inside the edges so a line at the top of its
 /// range is not cut in half. A value that is not a number breaks the line
 /// rather than drawing to nowhere.
-pub(super) fn path(points: &[(f64, f64)], range: (f64, f64), width: f64, height: f64) -> String {
+pub fn path(points: &[(f64, f64)], range: (f64, f64), width: f64, height: f64) -> String {
     let (low, high) = range;
     let span = (high - low).max(1e-12);
     let mut out = String::new();
@@ -106,7 +106,7 @@ pub(super) fn path(points: &[(f64, f64)], range: (f64, f64), width: f64, height:
 
 /// A number for an axis: three significant figures and no exponent a
 /// person has to decode.
-pub(super) fn tick(value: f64) -> String {
+pub fn tick(value: f64) -> String {
     if value == 0.0 || !value.is_finite() {
         return "0".to_string();
     }
