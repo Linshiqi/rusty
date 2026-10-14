@@ -82,6 +82,7 @@ pub fn start(window: &AppWindow) {
     let sim = std::env::var_os("RUSTY_PROBE_SIM").is_some();
     let edits = std::env::var_os("RUSTY_PROBE_EDIT").is_some();
     let drawing = std::env::var_os("RUSTY_PROBE_DRAW").is_some();
+    let debugging = std::env::var_os("RUSTY_PROBE_DEBUG").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -186,8 +187,80 @@ pub fn start(window: &AppWindow) {
                 if drawing {
                     step.set(800);
                 }
+                if debugging {
+                    step.set(900);
+                }
             }
             500 if sim => app.act("run.run"),
+            // A breakpoint beside the line that toggles the LED, then F5: the
+            // firmware boots frozen, gdb attaches, and it stops there.
+            900 if debugging => {
+                let text = draft().unwrap_or_default();
+                let line = text
+                    .lines()
+                    .position(|l| l.contains("toggle()") || l.contains("set_high()") || l.contains("set_level("))
+                    .unwrap_or(0);
+                eprintln!("debug: a breakpoint on line {}: {:?}", line + 1, text.lines().nth(line));
+                code.invoke_toggle_breakpoint(line as i32);
+                app.act("run.debug");
+            }
+            901 if debugging => {
+                // Stopped in the firmware's own source — not at the reset the
+                // target is frozen at when gdb attaches — and a moment later,
+                // when the frame's variables have come in.
+                let at_source = shell
+                    .get_debug_frames()
+                    .iter()
+                    .next()
+                    .is_some_and(|f| f.place.contains("main.rs"));
+                if !(shell.get_debug_stopped() && at_source) {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 4000 {
+                        step.set(901);
+                    }
+                }
+            }
+            902 if debugging => {}
+            903 if debugging => {
+                shell.invoke_show_panel("bottom".into(), "registers".into());
+            }
+            908 if debugging => {
+                eprintln!(
+                    "debug: registers loaded {} svd {} rows {}",
+                    shell.get_registers_loaded(),
+                    shell.get_registers_svd(),
+                    shell.get_registers_rows().row_count()
+                );
+                snapshot(&window, &dir.join("debug-registers.png"));
+                shell.invoke_show_panel("bottom".into(), "debug".into());
+                eprintln!(
+                    "debug: after {} ticks {:?}; frames {:?}; variables {:?}; error {:?}",
+                    waited.get(),
+                    shell.get_debug_status(),
+                    shell.get_debug_frames().iter().map(|f| format!("{} {}", f.function, f.place)).collect::<Vec<_>>(),
+                    shell.get_debug_variables().iter().map(|v| format!("{}={}", v.name, v.value)).collect::<Vec<_>>(),
+                    shell.get_debug_error()
+                );
+                snapshot(&window, &dir.join("debug-stopped.png"));
+                app.act("debug.over");
+            }
+            909 if debugging => {
+                if !shell.get_debug_stopped() {
+                    step.set(909);
+                    return;
+                }
+                eprintln!(
+                    "debug: stepped {:?}; frames {:?}",
+                    shell.get_debug_status(),
+                    shell.get_debug_frames().iter().take(2).map(|f| format!("{} {}", f.function, f.place)).collect::<Vec<_>>()
+                );
+                snapshot(&window, &dir.join("debug-stepped.png"));
+                app.act("run.stop");
+            }
+            915 if debugging => {
+                eprintln!("debug: after stop live={} status {:?}", shell.get_debug_live(), shell.get_debug_status());
+                app.act("app.exit");
+            }
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -776,7 +849,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

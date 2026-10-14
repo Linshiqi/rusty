@@ -7633,6 +7633,7 @@ dependencies = [
  "regex",
  "rfd",
  "rusty-core",
+ "rusty-dbg",
  "rusty-edit",
  "rusty-embed",
  "rusty-i18n",

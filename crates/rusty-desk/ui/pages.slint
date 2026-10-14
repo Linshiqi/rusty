@@ -2,6 +2,7 @@
 // a page. Pages are documents: what is read or edited at length opens here,
 // beside the files, and is moved and closed the way a file is.
 
+import { Transport } from "debug.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
@@ -430,6 +431,12 @@ export component EditorArea inherits Rectangle {
                 name: Shell.active-title;
             }
             if Shell.active-kind == "": Welcome { }
+            // The debugger's transport, over the code while a session is
+            // live: an overlay, so its arrival moves nothing.
+            if Shell.debug-live: Transport {
+                x: (parent.width - self.width) / 2;
+                y: 8px;
+            }
         }
     }
 }

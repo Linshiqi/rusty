@@ -56,6 +56,7 @@ pub use document::Document;
 use history::Kind;
 use keymap::Command;
 pub use metrics::Metrics;
+pub use rows::Gutter;
 use rows::Rows;
 
 type Shared = Rc<RefCell<Option<Rc<RefCell<Document>>>>>;
@@ -64,6 +65,7 @@ type Shared = Rc<RefCell<Option<Rc<RefCell<Document>>>>>;
 type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
 /// Who is told when the caret moves.
 type OnCaret = RefCell<Option<Box<dyn Fn()>>>;
+type OnBreakpoint = RefCell<Option<Box<dyn Fn(String, u32)>>>;
 
 /// A press being dragged: what the press itself selected — a point, a word
 /// or a line — which every move extends from.
@@ -103,6 +105,11 @@ pub struct Surface {
     current: Shared,
     metrics: Rc<RefCell<Metrics>>,
     rows: Rc<Rows>,
+    /// The margin's breakpoints and the debugger's stop, shared with the
+    /// rows that draw them.
+    gutter: Rc<RefCell<Gutter>>,
+    /// Told the line a click beside its number asked a breakpoint for.
+    on_breakpoint: OnBreakpoint,
     window: slint::Weak<AppWindow>,
     on_edit: OnEdit,
     on_caret: OnCaret,
@@ -138,11 +145,13 @@ impl Surface {
         let current: Shared = Rc::default();
         let metrics = Rc::new(RefCell::new(Metrics::measure(window)));
         let found: Rc<RefCell<find::Marks>> = Rc::default();
+        let gutter: Rc<RefCell<Gutter>> = Rc::default();
         let rows = Rc::new(Rows::new(
             current.clone(),
             metrics.clone(),
             found.clone(),
             problems.clone(),
+            gutter.clone(),
         ));
         window
             .global::<Code>()
@@ -154,6 +163,8 @@ impl Surface {
             current,
             metrics,
             rows,
+            gutter,
+            on_breakpoint: RefCell::default(),
             window: window.as_weak(),
             on_edit: RefCell::default(),
             on_caret: RefCell::default(),
@@ -177,6 +188,22 @@ impl Surface {
 
     pub fn on_edit(&self, tell: impl Fn(&str) + 'static) {
         *self.on_edit.borrow_mut() = Some(Box::new(tell));
+    }
+
+    /// Who decides what a click beside a line's number does: the debugger
+    /// holds the breakpoints.
+    pub fn on_breakpoint(&self, tell: impl Fn(String, u32) + 'static) {
+        *self.on_breakpoint.borrow_mut() = Some(Box::new(tell));
+    }
+
+    /// The margin's state, to change; [`Surface::gutter_changed`] redraws it.
+    pub fn gutter(&self) -> Rc<RefCell<Gutter>> {
+        self.gutter.clone()
+    }
+
+    /// The margin changed: every row on screen is drawn again.
+    pub fn gutter_changed(&self) {
+        self.rows.reset();
     }
 
     pub fn on_caret(&self, tell: impl Fn() + 'static) {
@@ -525,6 +552,16 @@ impl Surface {
         code.on_completion_pick(move |row| {
             if let Some(this) = this.upgrade() {
                 this.completion_pick(row as usize);
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_toggle_breakpoint(move |row| {
+            let Some(this) = this.upgrade() else { return };
+            let Some(path) = this.current_path() else {
+                return;
+            };
+            if let Some(tell) = this.on_breakpoint.borrow().as_ref() {
+                tell(path, row.max(0) as u32);
             }
         });
         let this = Rc::downgrade(self);

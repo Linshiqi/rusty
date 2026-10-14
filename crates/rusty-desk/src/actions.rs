@@ -88,6 +88,10 @@ pub const ALL: &[Action] = &[
     action("run.flash", "toolbar.flash", Some("Ctrl+U")),
     action("run.monitor", "menu.device.monitor", Some("Ctrl+Shift+M")),
     action("run.debug", "toolbar.debug", Some("F5")),
+    action("debug.pause", "debugger.pause", Some("F6")),
+    action("debug.over", "debugger.step-over", Some("F10")),
+    action("debug.into", "debugger.step-into", Some("F11")),
+    action("debug.out", "debugger.step-out", Some("Shift+F11")),
     action("app.exit", "desk.exit", None),
     // Reached from a button, not looked for by name.
     Action {

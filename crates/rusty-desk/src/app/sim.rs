@@ -73,6 +73,9 @@ pub(super) struct Sim {
     pub(super) shown: Vec<String>,
     /// Run again once this run has stopped.
     restart: bool,
+    /// This run debugs: the build is unoptimised, the emulator waits frozen
+    /// on its gdbstub, and gdb attaches once it is up.
+    pub(super) debugging: Option<(String, u16)>,
 }
 
 impl Sim {
@@ -115,10 +118,10 @@ struct Prepared {
     ports: Option<rusty_embed::Ports>,
 }
 
-fn prepare(root: PathBuf) -> Result<Prepared, String> {
+fn prepare(root: PathBuf, debug: bool) -> Result<Prepared, String> {
     let firmware = rusty_embed::project::firmware_root(&root);
     let detected = rusty_embed::project::detect(&firmware).map_err(|e| e.to_string())?;
-    let plan = simulate::plan(&detected, false);
+    let plan = simulate::plan(&detected, debug);
     let mut start = Start::default();
     if plan.supported && plan.missing.is_empty() {
         // The sheet's declarations: button polarity, analog pins, the
@@ -379,6 +382,12 @@ impl App {
 
     /// Run in the simulator — or, while a simulation runs, run it again.
     pub(super) fn simulate(self: &Rc<Self>) {
+        self.simulate_as(false);
+    }
+
+    /// Run in the simulator, or with `debug`, boot it frozen for the
+    /// debugger.
+    pub(super) fn simulate_as(self: &Rc<Self>, debug: bool) {
         if self.runner.is_running() {
             if self.activity_kind() == Some(Kind::Simulate) {
                 self.state.borrow_mut().sim.restart = true;
@@ -391,16 +400,16 @@ impl App {
         let Some(root) = self.root() else { return };
         self.write_all_then(move |_| {
             work::spawn(
-                move || prepare(root),
-                |app, prepared| match prepared {
-                    Ok(prepared) => app.simulate_with(prepared),
+                move || prepare(root, debug),
+                move |app, prepared| match prepared {
+                    Ok(prepared) => app.simulate_with(prepared, debug),
                     Err(reason) => app.note(2, reason),
                 },
             );
         });
     }
 
-    fn simulate_with(self: &Rc<Self>, prepared: Prepared) {
+    fn simulate_with(self: &Rc<Self>, prepared: Prepared, debug: bool) {
         let Prepared {
             plan,
             start,
@@ -421,6 +430,21 @@ impl App {
             );
             return;
         }
+        // A debug run needs the debugger the plan found; without one it is
+        // the plan's tool to install, as every other missing tool is.
+        let debugging = match (debug, plan.debug.as_ref()) {
+            (false, _) => None,
+            (true, Some(target)) => Some((target.elf.clone(), target.port)),
+            (true, None) => {
+                let names: Vec<String> = plan.debug_tool.iter().map(|t| t.name.clone()).collect();
+                self.note_with(
+                    2,
+                    t!("desk.debug-no-gdb"),
+                    (!names.is_empty()).then_some(NoteAction::Install(names)),
+                );
+                return;
+            }
+        };
         let steps: VecDeque<CommandPlan> = plan.steps.clone().into();
         // The board as this run's plan has it, beside the code.
         self.load_board(Some(plan.clone()));
@@ -431,6 +455,7 @@ impl App {
             state.lab.clear_capture();
             state.sim.plan = Some(plan);
             state.sim.ports = ports;
+            state.sim.debugging = debugging;
         }
         // Nothing of the last run's left drawn.
         self.sync_plot();
@@ -482,6 +507,11 @@ impl App {
         dir: PathBuf,
     ) {
         let mut said = Vec::new();
+        let debugging = self.state.borrow().sim.debugging.clone();
+        if let Some((_, port)) = &debugging {
+            step.extend_args(super::debug::gdbstub_args(*port));
+            said.push(t!("desk.debug-frozen", port = *port));
+        }
         if let Some(port) = simulate::free_port() {
             step.extend_args(simulate::qmp_args_for(&step.program, port));
         }
@@ -510,6 +540,10 @@ impl App {
         }
         for line in said {
             self.heard(&line);
+        }
+        // Frozen at reset with its gdbstub listening: attach the debugger.
+        if let Some((elf, port)) = debugging {
+            self.debug_attach(elf, port);
         }
         if let Some(port) = pins_port {
             // The sheet's own circuit, walked in step with the firmware;
@@ -553,8 +587,13 @@ impl App {
         if self.state.borrow().flight.closed {
             self.flight_close(false);
         }
+        // A debug session ends with the run that booted its target.
+        if self.state.borrow().debug.live() {
+            self.debug_stop();
+        }
         if restart {
-            self.simulate();
+            let debug = self.state.borrow().sim.debugging.is_some();
+            self.simulate_as(debug);
         }
     }
 }
