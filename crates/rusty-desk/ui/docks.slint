@@ -1,0 +1,207 @@
+// The three docks. Each holds panels, one in front, picked from a row of
+// tabs at its top — Zed's docks, with VS Code's names for what is in them.
+
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { IconButton, RowButton, Caption } from "widgets.slint";
+import { ListView } from "std-widgets.slint";
+import { Shell, PanelTab, TreeRow } from "shell.slint";
+
+// The row of a dock's panels. A tab is its icon and, in front, its name.
+component DockHeader inherits Rectangle {
+    in property <string> dock;
+    in property <[PanelTab]> panels;
+    in property <string> front;
+    height: 34px;
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 2px;
+        alignment: start;
+        for panel in root.panels: Rectangle {
+            y: (parent.height - self.height) / 2;
+            height: 26px;
+            width: row.preferred-width;
+            border-radius: Theme.radius;
+            background: panel.id == root.front ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+            row := HorizontalLayout {
+                padding-left: 7px;
+                padding-right: 8px;
+                spacing: 6px;
+                Icon {
+                    y: (parent.height - self.height) / 2;
+                    path: panel.icon;
+                    size: 15px;
+                    color: panel.id == root.front ? Theme.rust : Theme.label-2;
+                }
+                if panel.id == root.front: Text {
+                    text: panel.title;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+            touch := TouchArea {
+                clicked => {
+                    Shell.show-panel(root.dock, panel.id);
+                }
+            }
+        }
+    }
+}
+
+// A panel that has not moved to this window yet says so, plainly.
+export component NotYet inherits Rectangle {
+    in property <string> name;
+    VerticalLayout {
+        alignment: center;
+        padding: 24px;
+        spacing: 6px;
+        Text {
+            text: root.name;
+            color: Theme.label-2;
+            font-size: Theme.body;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: @tr("desk.not-yet");
+            color: Theme.label-3;
+            font-size: Theme.small;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// The project's files: a flat list of rows with depths, made by the Rust
+// side from the folders that are open, so only what is shown exists.
+component ProjectTree inherits Rectangle {
+    if !Shell.has-project: VerticalLayout {
+        alignment: center;
+        padding: 20px;
+        Text {
+            text: @tr("chrome.no-project-title");
+            color: Theme.label-3;
+            font-size: Theme.small;
+            horizontal-alignment: center;
+        }
+    }
+    if Shell.has-project: ListView {
+        for row[index] in Shell.tree: RowButton {
+            height: 24px;
+            selected: row.selected;
+            clicked => {
+                Shell.tree-click(index);
+            }
+            HorizontalLayout {
+                padding-left: 8px + row.depth * 12px;
+                padding-right: 8px;
+                spacing: 4px;
+                Rectangle {
+                    width: 12px;
+                    if row.dir: Icon {
+                        path: Icons.chevron;
+                        size: 11px;
+                        color: Theme.label-3;
+                        transform-rotation: row.open ? 0deg : -90deg;
+                    }
+                }
+                Text {
+                    text: row.name;
+                    color: row.dir ? Theme.label : Theme.label-2;
+                    font-size: Theme.body;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}
+
+export component LeftDock inherits Rectangle {
+    background: Theme.sidebar;
+    VerticalLayout {
+        DockHeader {
+            dock: "left";
+            panels: Shell.left-panels;
+            front: Shell.left-front;
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        Rectangle {
+            if Shell.left-front == "project": ProjectTree { }
+            if Shell.left-front == "search": NotYet {
+                name: @tr("panel.search");
+            }
+            if Shell.left-front == "git": NotYet {
+                name: @tr("panel.git");
+            }
+        }
+    }
+}
+
+export component BottomDock inherits Rectangle {
+    background: Theme.content;
+    VerticalLayout {
+        HorizontalLayout {
+            DockHeader {
+                dock: "bottom";
+                panels: Shell.bottom-panels;
+                front: Shell.bottom-front;
+            }
+            IconButton {
+                y: 3px;
+                icon: Icons.close;
+                tip: @tr("desk.hide-dock");
+                clicked => {
+                    Shell.act("dock.bottom");
+                }
+            }
+            Rectangle {
+                width: 6px;
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        Rectangle {
+            if Shell.bottom-front == "output": NotYet {
+                name: @tr("dock.tab.output");
+            }
+            if Shell.bottom-front == "problems": NotYet {
+                name: @tr("dock.tab.problems");
+            }
+            if Shell.bottom-front == "terminal": NotYet {
+                name: @tr("dock.tab.terminal");
+            }
+        }
+    }
+}
+
+export component RightDock inherits Rectangle {
+    background: Theme.sidebar;
+    VerticalLayout {
+        DockHeader {
+            dock: "right";
+            panels: Shell.right-panels;
+            front: Shell.right-front;
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        Rectangle {
+            if Shell.right-front == "board": NotYet {
+                name: @tr("desk.board");
+            }
+            if Shell.right-front == "assistant": NotYet {
+                name: @tr("panel.assistant");
+            }
+        }
+    }
+}

@@ -1,36 +1,142 @@
-// The window. For now it is the code surface alone, while the editor is
-// proven; the shell around it comes next (docs/slint.md).
+// The window: the title bar, the three docks around the editor area, the
+// status bar, and what floats over them. docs/slint.md has the design.
 
-import { CodeView, Row, Piece } from "editor.slint";
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Splitter, Tip } from "widgets.slint";
+import { Shell, PanelTab, DocTab, TreeRow, PickRow, Note, Recent } from "shell.slint";
+import { Code, Row, Piece } from "editor.slint";
+import { TitleBar } from "titlebar.slint";
+import { LeftDock, BottomDock, RightDock } from "docks.slint";
+import { EditorArea } from "pages.slint";
+import { StatusBar, Picker, Notes, Tooltip } from "chrome.slint";
 
-export { Row, Piece }
+export { Theme, Icons, Shell, Code, Tip, Row, Piece, PanelTab, DocTab, TreeRow, PickRow, Note, Recent }
 
 export component AppWindow inherits Window {
-    title: "rusty";
-    preferred-width: 1200px;
-    preferred-height: 800px;
-    default-font-size: 13px;
+    // What the task bar calls the window: the file, the project, rusty.
+    in property <string> caption: "rusty";
+    title: root.caption;
+    icon: @image-url("../icons/rusty.png");
+    no-frame: true;
+    resize-border-width: 6px;
+    preferred-width: 1280px;
+    preferred-height: 820px;
+    min-width: 640px;
+    min-height: 400px;
+    background: Theme.window;
+    default-font-size: Theme.body;
 
-    in property <[Row]> rows <=> view.rows;
-    in property <int> caret-line <=> view.caret-line;
-    in property <length> caret-x <=> view.caret-x;
-    in property <length> content-width <=> view.content-width;
-    in property <string> probe-text <=> view.probe-text;
-    out property <length> probe-width <=> view.probe-width;
-    out property <length> view-height <=> view.view-height;
-    out property <length> row-height <=> view.row-height;
-    in-out property <length> scroll-y <=> view.scroll-y;
+    // What the editor measures its characters with (`src/editor/metrics.rs`).
+    in property <string> probe-text;
+    out property <length> probe-width: probe.preferred-width;
 
-    callback key <=> view.key;
-    callback typed <=> view.typed;
-    callback pressed <=> view.pressed;
-
-    public function focus-input() {
-        view.focus-input();
+    public function focus-code() {
+        area.focus-code();
     }
 
-    view := CodeView {
-        width: parent.width;
-        height: parent.height;
+    public function focus-window() {
+        scope.focus();
     }
+
+    probe := Text {
+        visible: false;
+        text: root.probe-text;
+        font-family: Theme.mono;
+        font-size: Code.font-size;
+    }
+
+    // Keys nothing focused took arrive here, and the bindings get them.
+    scope := FocusScope {
+        key-pressed(event) => {
+            if (Shell.key(event)) {
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            TitleBar {
+                maximized: root.maximized;
+                minimize => {
+                    root.minimized = true;
+                }
+                toggle-maximize => {
+                    root.maximized = !root.maximized;
+                }
+                close => {
+                    root.close();
+                }
+            }
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+            HorizontalLayout {
+                if Shell.left-open: LeftDock {
+                    width: Shell.left-size;
+                }
+                if Shell.left-open: Splitter {
+                    property <length> start;
+                    pressed => {
+                        self.start = Shell.left-size;
+                    }
+                    dragged(travel) => {
+                        Shell.left-size = clamp(self.start + travel, 160px, 640px);
+                    }
+                    released => {
+                        Shell.dock-resized("left", Shell.left-size);
+                    }
+                }
+                VerticalLayout {
+                    area := EditorArea { }
+                    if Shell.bottom-open: Splitter {
+                        property <length> start;
+                        vertical: false;
+                        pressed => {
+                            self.start = Shell.bottom-size;
+                        }
+                        dragged(travel) => {
+                            Shell.bottom-size = clamp(self.start - travel, 100px, 800px);
+                        }
+                        released => {
+                            Shell.dock-resized("bottom", Shell.bottom-size);
+                        }
+                    }
+                    if Shell.bottom-open: BottomDock {
+                        height: Shell.bottom-size;
+                    }
+                }
+                if Shell.right-open: Splitter {
+                    property <length> start;
+                    pressed => {
+                        self.start = Shell.right-size;
+                    }
+                    dragged(travel) => {
+                        Shell.right-size = clamp(self.start - travel, 240px, 900px);
+                    }
+                    released => {
+                        Shell.dock-resized("right", Shell.right-size);
+                    }
+                }
+                if Shell.right-open: RightDock {
+                    width: Shell.right-size;
+                }
+            }
+            StatusBar { }
+        }
+    }
+
+    Notes {
+        y: 40px;
+        height: root.height - 40px - 24px;
+    }
+
+    if Shell.picker-open: Picker {
+        init => {
+            self.focus-field();
+        }
+    }
+
+    Tooltip { }
 }

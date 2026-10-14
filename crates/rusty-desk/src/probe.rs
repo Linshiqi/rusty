@@ -1,6 +1,7 @@
 //! A run that drives itself, for measuring and for looking: with
-//! `RUSTY_PROBE=<dir>` the window types, scrolls and takes pictures of
-//! itself, prints how long each frame took, and quits.
+//! `RUSTY_PROBE=<dir>` the window photographs itself in each of its states,
+//! types and scrolls in the open file, prints how long each frame took, and
+//! quits.
 //!
 //! It is the check a person at the keyboard cannot make: a key's latency is
 //! the time from the event to the frame that shows it, read off the
@@ -9,35 +10,31 @@
 
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
 };
 
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode, platform::WindowEvent};
 
-use crate::AppWindow;
+use crate::{AppWindow, Code, Shell, work};
 
 pub fn start(window: &AppWindow) {
     let Some(dir) = std::env::var_os("RUSTY_PROBE").map(PathBuf::from) else {
         return;
     };
     std::fs::create_dir_all(&dir).expect("the probe's directory");
-    // When each frame finished, and when the event it is waiting on went in.
-    let frames: Rc<RefCell<Vec<Instant>>> = Rc::default();
     let waiting: Rc<Cell<Option<Instant>>> = Rc::default();
     let latencies: Rc<RefCell<Vec<Duration>>> = Rc::default();
     {
-        let (frames, waiting, latencies) = (frames.clone(), waiting.clone(), latencies.clone());
+        let (waiting, latencies) = (waiting.clone(), latencies.clone());
         window
             .window()
             .set_rendering_notifier(move |state, _| {
-                if let RenderingState::AfterRendering = state {
-                    let now = Instant::now();
-                    frames.borrow_mut().push(now);
-                    if let Some(sent) = waiting.take() {
-                        latencies.borrow_mut().push(now - sent);
-                    }
+                if let RenderingState::AfterRendering = state
+                    && let Some(sent) = waiting.take()
+                {
+                    latencies.borrow_mut().push(sent.elapsed());
                 }
             })
             .expect("a renderer that reports its frames");
@@ -50,51 +47,64 @@ pub fn start(window: &AppWindow) {
     timer.start(TimerMode::Repeated, Duration::from_millis(40), move || {
         let _ = &keep;
         let Some(window) = weak.upgrade() else { return };
+        let shell = window.global::<Shell>();
+        let code = window.global::<Code>();
+        let app = work::app();
         let n = step.get();
+        // Wait for the file the command line named before typing into it.
+        if (30..=40).contains(&n) && shell.get_active_kind() != "file" {
+            return;
+        }
         step.set(n + 1);
+        let key = |text: slint::SharedString| {
+            window
+                .window()
+                .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+            window
+                .window()
+                .dispatch_event(WindowEvent::KeyReleased { text });
+        };
         match n {
-            // Let the first frames settle.
-            0..=19 => {}
-            20 => snapshot(&window, &dir.join("open.png")),
-            // The caret after the last character of a line of mixed scripts.
-            21 => {
-                let end: slint::SharedString = slint::platform::Key::End.into();
-                window
-                    .window()
-                    .dispatch_event(WindowEvent::KeyPressed { text: end.clone() });
-                window
-                    .window()
-                    .dispatch_event(WindowEvent::KeyReleased { text: end });
-            }
-            22 => snapshot(&window, &dir.join("end.png")),
-            // Type a word a key at a time.
-            23..=80 => {
+            25 => snapshot(&window, &dir.join("open.png")),
+            41 => key(slint::platform::Key::End.into()),
+            42..=101 => {
                 let text = ["f", "o", "o", "_", "b", "a", "r", " "][(n as usize) % 8];
                 waiting.set(Some(Instant::now()));
-                window
-                    .window()
-                    .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
-                window
-                    .window()
-                    .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+                key(text.into());
             }
-            81 => {
+            102 => {
                 report("typing: key to frame", &latencies.borrow());
                 latencies.borrow_mut().clear();
                 snapshot(&window, &dir.join("typed.png"));
             }
-            // Scroll a screen at a time.
-            82..=181 => {
+            103..=162 => {
                 waiting.set(Some(Instant::now()));
-                let row = window.get_row_height();
-                window.set_scroll_y(-(row * 3.0 * (n - 81) as f32));
+                let row = code.get_row_height();
+                code.set_scroll_y(-(row * 3.0 * (n - 102) as f32));
             }
-            182 => {
+            163 => {
                 report("scrolling: step to frame", &latencies.borrow());
-                snapshot(&window, &dir.join("scrolled.png"));
-                let frames = frames.borrow();
-                eprintln!("{} frames in all", frames.len());
-                slint::quit_event_loop().ok();
+                app.act("dock.bottom");
+                app.act("dock.right");
+            }
+            166 => snapshot(&window, &dir.join("docks.png")),
+            167 => app.act("palette.open"),
+            170 => snapshot(&window, &dir.join("palette.png")),
+            171 => {
+                shell.set_picker_open(false);
+                app.act("settings.open");
+                app.act("theme.light");
+            }
+            174 => snapshot(&window, &dir.join("light.png")),
+            175 => {
+                app.act("theme.system");
+                app.act("dock.bottom");
+                app.act("dock.right");
+                app.act("welcome.open");
+            }
+            178 => snapshot(&window, &dir.join("welcome.png")),
+            179 => {
+                let _ = slint::quit_event_loop();
             }
             _ => {}
         }
@@ -119,7 +129,7 @@ fn report(what: &str, samples: &[Duration]) {
     );
 }
 
-fn snapshot(window: &AppWindow, path: &std::path::Path) {
+fn snapshot(window: &AppWindow, path: &Path) {
     match window.window().take_snapshot() {
         Ok(buffer) => {
             let (width, height) = (buffer.width(), buffer.height());

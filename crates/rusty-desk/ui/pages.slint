@@ -1,0 +1,356 @@
+// The editor area: a strip of tabs, and the document in front — a file or
+// a page. Pages are documents: what is read or edited at length opens here,
+// beside the files, and is moved and closed the way a file is.
+
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { Button, IconButton, RowButton, Caption } from "widgets.slint";
+import { Shell, DocTab } from "shell.slint";
+import { CodeView } from "editor.slint";
+import { NotYet } from "docks.slint";
+
+component TabStrip inherits Rectangle {
+    height: 36px;
+    background: Theme.window;
+    HorizontalLayout {
+        alignment: start;
+        for tab in Shell.tabs: Rectangle {
+            width: min(row.preferred-width, 240px);
+            background: tab.id == Shell.active-tab ? Theme.content : touch.has-hover ? Theme.hover : transparent;
+            row := HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 6px;
+                spacing: 6px;
+                Text {
+                    text: tab.title;
+                    color: tab.id == Shell.active-tab ? Theme.label : Theme.label-2;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                if tab.hint != "": Text {
+                    text: tab.hint;
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    width: 20px;
+                    if tab.dirty && !close-touch.has-hover: Rectangle {
+                        width: 7px;
+                        height: 7px;
+                        border-radius: 3.5px;
+                        background: Theme.label-2;
+                    }
+                    if !tab.dirty || close-touch.has-hover: Icon {
+                        path: Icons.close;
+                        size: 12px;
+                        color: close-touch.has-hover ? Theme.label : touch.has-hover || tab.id == Shell.active-tab ? Theme.label-3 : transparent;
+                    }
+                    close-touch := TouchArea {
+                        clicked => {
+                            Shell.close-tab(tab.id);
+                        }
+                    }
+                }
+            }
+            // The tab in front has the rust line on top, as VS Code's does.
+            if tab.id == Shell.active-tab: Rectangle {
+                y: 0;
+                height: 2px;
+                background: Theme.rust;
+            }
+            touch := TouchArea {
+                z: -1;
+                clicked => {
+                    Shell.pick-tab(tab.id);
+                }
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.middle) {
+                        Shell.close-tab(tab.id);
+                    }
+                }
+            }
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: Theme.line;
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.line;
+    }
+}
+
+// The page a window opens on, and the one with no project: what rusty is,
+// the three ways to have a project, the playgrounds, and the recent ones.
+component Welcome inherits Rectangle {
+    background: Theme.content;
+    VerticalLayout {
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            VerticalLayout {
+                spacing: 18px;
+                width: min(560px, root.width - 48px);
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    Icon {
+                        path: Icons.settings;
+                        size: 34px;
+                        color: Theme.rust;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "rusty";
+                            color: Theme.label;
+                            font-size: 26px;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: @tr("desk.tagline");
+                            color: Theme.label-2;
+                            font-size: Theme.body;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Button {
+                        primary: true;
+                        text: @tr("menu.file.open-project");
+                        clicked => {
+                            Shell.act("project.open");
+                        }
+                    }
+                    Button {
+                        text: @tr("menu.file.new-project");
+                        clicked => {
+                            Shell.act("project.new");
+                        }
+                    }
+                    Button {
+                        text: @tr("menu.file.clone");
+                        clicked => {
+                            Shell.act("project.clone");
+                        }
+                    }
+                }
+                Text {
+                    text: @tr("chrome.no-project-detail");
+                    color: Theme.label-3;
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                }
+                if Shell.recents.length > 0: VerticalLayout {
+                    spacing: 2px;
+                    Caption {
+                        text: @tr("chrome.recent");
+                    }
+                    for recent in Shell.recents: RowButton {
+                        height: 28px;
+                        clicked => {
+                            Shell.open-recent(recent.path);
+                        }
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 10px;
+                            Icon {
+                                y: (parent.height - self.height) / 2;
+                                path: Icons.folder;
+                                size: 14px;
+                                color: Theme.label-3;
+                            }
+                            Text {
+                                text: recent.name;
+                                color: Theme.label;
+                                font-size: Theme.body;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: recent.path;
+                                color: Theme.label-3;
+                                font-size: Theme.small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: @tr("desk.keys-hint");
+                    color: Theme.label-4;
+                    font-size: Theme.small;
+                }
+            }
+        }
+    }
+}
+
+// A choice among a few: the segment chosen is filled.
+component Segments inherits Rectangle {
+    in property <[string]> labels;
+    in property <[string]> values;
+    in property <string> value;
+    callback picked(string);
+    height: 28px;
+    border-radius: 7px;
+    background: Theme.sunken;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for label[i] in root.labels: Rectangle {
+            border-radius: 5px;
+            background: root.values[i] == root.value ? Theme.raised : touch.has-hover ? Theme.hover : transparent;
+            drop-shadow-blur: root.values[i] == root.value ? 2px : 0;
+            drop-shadow-color: #0000002a;
+            min-width: text.preferred-width + 24px;
+            text := Text {
+                text: label;
+                color: root.values[i] == root.value ? Theme.label : Theme.label-2;
+                font-size: Theme.small;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            touch := TouchArea {
+                clicked => {
+                    root.picked(root.values[i]);
+                }
+            }
+        }
+    }
+}
+
+// One setting: its name on the left, its control on the right.
+component Setting inherits Rectangle {
+    in property <string> label;
+    min-height: 44px;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        Text {
+            text: root.label;
+            color: Theme.label;
+            font-size: Theme.body;
+            vertical-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: end;
+            VerticalLayout {
+                alignment: center;
+                @children
+            }
+        }
+    }
+}
+
+// A group of settings: a rounded box of rows divided by hairlines, macOS
+// System Settings' shape.
+component Group inherits Rectangle {
+    in property <string> title;
+    VerticalLayout {
+        spacing: 6px;
+        Caption {
+            text: root.title;
+        }
+        Rectangle {
+            border-radius: 9px;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.line;
+            VerticalLayout {
+                @children
+            }
+        }
+    }
+}
+
+component SettingsPage inherits Rectangle {
+    background: Theme.content;
+    Flickable {
+        VerticalLayout {
+            padding: 32px;
+            spacing: 22px;
+            alignment: start;
+            Text {
+                text: @tr("desk.settings");
+                color: Theme.label;
+                font-size: Theme.title;
+                font-weight: 700;
+            }
+            Group {
+                title: @tr("menu.view.appearance");
+                Setting {
+                    label: @tr("desk.theme");
+                    Segments {
+                        labels: [@tr("desk.theme-system"), @tr("desk.theme-dark"), @tr("desk.theme-light")];
+                        values: ["system", "dark", "light"];
+                        value: Shell.theme-choice;
+                        picked(value) => {
+                            Shell.set-theme(value);
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                Setting {
+                    label: @tr("desk.language");
+                    Segments {
+                        labels: ["English", "简体中文"];
+                        values: ["en", "zh-CN"];
+                        value: Shell.language-choice;
+                        picked(value) => {
+                            Shell.set-language(value);
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                Setting {
+                    label: @tr("desk.zoom");
+                    Segments {
+                        labels: ["90%", "100%", "110%", "125%"];
+                        values: ["0.9", "1", "1.1", "1.25"];
+                        value: Shell.zoom == 0.9 ? "0.9" : Shell.zoom == 1.1 ? "1.1" : Shell.zoom == 1.25 ? "1.25" : "1";
+                        picked(value) => {
+                            Shell.set-zoom(value.to-float());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component EditorArea inherits Rectangle {
+    background: Theme.content;
+
+    public function focus-code() {
+        code.focus-input();
+    }
+
+    VerticalLayout {
+        TabStrip { }
+        Rectangle {
+            code := CodeView {
+                visible: Shell.active-kind == "file";
+            }
+            if Shell.active-kind == "welcome": Welcome { }
+            if Shell.active-kind == "settings": SettingsPage { }
+            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "": NotYet {
+                name: Shell.active-title;
+            }
+            if Shell.active-kind == "": Welcome { }
+        }
+    }
+}

@@ -1,0 +1,124 @@
+// What the window shows and what it can be asked to do, as one global the
+// Rust side fills (`src/shell.rs`). The parts of the window read it directly
+// rather than having every value threaded through every layer between.
+
+export struct PanelTab {
+    id: string,
+    title: string,
+    icon: string,
+}
+
+export struct DocTab {
+    id: string,
+    title: string,
+    // The directories that tell two tabs of one name apart.
+    hint: string,
+    dirty: bool,
+    // `file`, or the page it is: `welcome`, `settings`, …
+    kind: string,
+}
+
+export struct TreeRow {
+    depth: int,
+    name: string,
+    dir: bool,
+    open: bool,
+    selected: bool,
+}
+
+export struct PickRow {
+    title: string,
+    detail: string,
+    chord: string,
+}
+
+export struct Note {
+    id: int,
+    // 0 information, 1 warning, 2 error.
+    level: int,
+    text: string,
+    action: string,
+}
+
+export struct Recent {
+    name: string,
+    path: string,
+}
+
+export global Shell {
+    // The project.
+    in property <bool> has-project;
+    in property <string> project;
+    in property <string> branch;
+
+    // The run loop: where it runs, and what is happening.
+    in property <string> target;
+    in property <string> activity;
+    in property <bool> running;
+
+    // The docks: open, their size, their panels and which is in front.
+    in-out property <bool> left-open: true;
+    in-out property <length> left-size: 260px;
+    in-out property <bool> bottom-open;
+    in-out property <length> bottom-size: 240px;
+    in-out property <bool> right-open;
+    in-out property <length> right-size: 420px;
+    in property <[PanelTab]> left-panels;
+    in property <string> left-front;
+    in property <[PanelTab]> bottom-panels;
+    in property <string> bottom-front;
+    in property <[PanelTab]> right-panels;
+    in property <string> right-front;
+
+    // The documents, files and pages alike.
+    in property <[DocTab]> tabs;
+    in property <string> active-tab;
+    in property <string> active-kind;
+    in property <string> active-title;
+
+    // The status bar.
+    in property <int> errors;
+    in property <int> warnings;
+    in property <string> server;
+    in property <string> caret;
+    in property <string> language;
+    in property <string> chip;
+
+    // The project's files.
+    in property <[TreeRow]> tree;
+
+    // The welcome page.
+    in property <[Recent]> recents;
+
+    // The picker: the command palette and the file finder are one list.
+    in-out property <bool> picker-open;
+    in property <string> picker-hint;
+    in property <[PickRow]> picker-rows;
+    in-out property <int> picker-selected;
+
+    // Notifications, newest last.
+    in property <[Note]> notes;
+
+    // Settings.
+    in property <string> theme-choice;
+    in property <string> language-choice;
+    in property <float> zoom: 1;
+
+    // An action by its id (`src/actions.rs`), from a button, a menu or a key.
+    callback act(string);
+    // A key nothing focused took: the window's bindings get it.
+    callback key(KeyEvent) -> bool;
+    callback show-panel(string /* dock */, string /* panel */);
+    callback dock-resized(string /* dock */, length);
+    callback pick-tab(string);
+    callback close-tab(string);
+    callback tree-click(int);
+    callback open-recent(string);
+    callback picker-query(string);
+    callback picker-pick(int);
+    callback dismiss-note(int);
+    callback note-action(int);
+    callback set-theme(string);
+    callback set-language(string);
+    callback set-zoom(float);
+}

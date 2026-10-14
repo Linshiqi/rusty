@@ -7,19 +7,19 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rusty_edit::{Line, Token};
-use slint::{Color, Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
+use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
-use super::{Document, Metrics};
+use super::{Metrics, Shared};
 use crate::{Piece, Row};
 
 pub struct Rows {
-    doc: Rc<RefCell<Document>>,
+    doc: Shared,
     metrics: Rc<RefCell<Metrics>>,
     notify: ModelNotify,
 }
 
 impl Rows {
-    pub fn new(doc: Rc<RefCell<Document>>, metrics: Rc<RefCell<Metrics>>) -> Rows {
+    pub fn new(doc: Shared, metrics: Rc<RefCell<Metrics>>) -> Rows {
         Rows {
             doc,
             metrics,
@@ -27,8 +27,13 @@ impl Rows {
         }
     }
 
+    /// Another document is on screen: every row is new.
+    pub fn reset(&self) {
+        self.notify.reset();
+    }
+
     pub fn changed(&self, from: usize, to: usize) {
-        let count = self.doc.borrow().lines.len();
+        let count = self.row_count();
         for row in from..to.min(count) {
             self.notify.row_changed(row);
         }
@@ -47,11 +52,15 @@ impl Model for Rows {
     type Data = Row;
 
     fn row_count(&self) -> usize {
-        self.doc.borrow().lines.len()
+        self.doc
+            .borrow()
+            .as_ref()
+            .map_or(0, |doc| doc.borrow().lines.len())
     }
 
     fn row_data(&self, row: usize) -> Option<Row> {
-        let doc = self.doc.borrow();
+        let doc = self.doc.borrow().clone()?;
+        let doc = doc.borrow();
         let text = doc.lines.get(row)?;
         let metrics = self.metrics.borrow();
         let painted = doc.painted.get(row).filter(|line| painted_is(line, text));
@@ -115,29 +124,26 @@ fn place<'t>(metrics: &Metrics, spans: impl Iterator<Item = (&'t str, Token)>) -
 }
 
 fn piece(text: String, x: f32, token: Token) -> Piece {
-    let (color, italic) = ink(token);
     Piece {
         text: SharedString::from(text),
         x,
-        color,
-        italic,
+        kind: kind(token),
     }
 }
 
-/// The dark theme's token colours, as `style/input.css` gives them.
-fn ink(token: Token) -> (Color, bool) {
-    let rgb = |hex: u32| Color::from_rgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
-    let dim = Color::from_argb_u8(163, 240, 235, 229);
+/// A token's kind as `Theme.token` numbers it.
+fn kind(token: Token) -> i32 {
     match token {
-        Token::Plain | Token::Punctuation => (rgb(0xf0ebe5), false),
-        Token::Keyword => (rgb(0xd29ade), false),
-        Token::Str => (rgb(0x92cf7b), false),
-        Token::Number => (rgb(0xe2bb52), false),
-        Token::Comment => (dim, true),
-        Token::Type => (rgb(0x5accbd), false),
-        Token::Function => (rgb(0x7cb2e3), false),
-        Token::Macro => (rgb(0xf5cd6e), false),
-        Token::Variable => (rgb(0x9bc9f2), false),
-        Token::Namespace => (dim, false),
+        Token::Plain => 0,
+        Token::Keyword => 1,
+        Token::Str => 2,
+        Token::Number => 3,
+        Token::Comment => 4,
+        Token::Type => 5,
+        Token::Function => 6,
+        Token::Macro => 7,
+        Token::Punctuation => 8,
+        Token::Variable => 9,
+        Token::Namespace => 10,
     }
 }

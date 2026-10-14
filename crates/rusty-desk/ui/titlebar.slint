@@ -1,0 +1,241 @@
+// The title bar is the run loop: which project, which branch; the run
+// button, where it runs and stop, with what is happening beside them; the
+// palette; the window's own controls. Dragging anywhere empty moves the
+// window, and a double-click maximizes it.
+
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { IconButton } from "widgets.slint";
+import { Shell } from "shell.slint";
+
+// A word with a chevron that opens a list: the project, the branch, the
+// target.
+component Chooser inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> strong;
+    callback clicked;
+    height: 26px;
+    border-radius: Theme.radius;
+    background: touch.has-hover ? Theme.hover : transparent;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 6px;
+        if root.icon != "": Icon {
+            path: root.icon;
+            size: 14px;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            color: root.strong ? Theme.label : Theme.label-2;
+            font-size: Theme.body;
+            font-weight: root.strong ? 600 : 400;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Icon {
+            path: Icons.chevron;
+            size: 12px;
+            color: Theme.label-3;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The run control: the button, where it runs, stop. One verb whose meaning is
+// the target — simulate when the simulator is chosen, flash when a board is.
+component RunControl inherits Rectangle {
+    height: 28px;
+    border-radius: 7px;
+    background: Theme.sunken;
+    border-width: 1px;
+    border-color: Theme.line;
+    HorizontalLayout {
+        padding: 1px;
+        spacing: 0;
+        IconButton {
+            width: 30px;
+            height: 26px;
+            icon: Shell.running ? Icons.stop : Icons.play;
+            tint: Shell.running ? Theme.crimson : Theme.patina;
+            tip: Shell.running ? @tr("toolbar.stop") : @tr("toolbar.run");
+            clicked => {
+                Shell.act(Shell.running ? "run.stop" : "run.run");
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        target := Rectangle {
+            border-radius: 6px;
+            background: target-touch.has-hover ? Theme.hover : transparent;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 8px;
+                spacing: 6px;
+                Icon {
+                    path: Icons.chip;
+                    size: 14px;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: Shell.target;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                Icon {
+                    path: Icons.chevron;
+                    size: 11px;
+                    color: Theme.label-3;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            target-touch := TouchArea {
+                clicked => {
+                    Shell.act("run.choose-target");
+                }
+            }
+        }
+    }
+}
+
+// The window's own buttons: full height, square, the close one red on hover,
+// as every desktop draws them.
+component WindowButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> tip;
+    in property <bool> danger;
+    callback clicked;
+    width: 46px;
+    background: touch.has-hover ? (root.danger ? #c42b1c : Theme.hover) : transparent;
+    Icon {
+        path: root.icon;
+        size: 14px;
+        color: touch.has-hover && root.danger ? #ffffff : Theme.label-2;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component TitleBar inherits Rectangle {
+    in property <bool> maximized;
+    callback minimize();
+    callback toggle-maximize();
+    callback close();
+
+    height: 40px;
+    background: Theme.window;
+
+    WindowMoveArea {
+        TouchArea {
+            double-clicked => {
+                root.toggle-maximize();
+            }
+        }
+    }
+
+    // The middle is the window's middle, whatever the sides hold.
+    HorizontalLayout {
+        alignment: center;
+        spacing: 12px;
+        RunControl {
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: Shell.activity;
+            color: Theme.label-3;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            overflow: elide;
+            max-width: 260px;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        spacing: 2px;
+        alignment: start;
+        Rectangle {
+            width: 22px;
+            Icon {
+                path: Icons.settings;
+                size: 16px;
+                color: Theme.rust;
+            }
+        }
+        Chooser {
+            y: (parent.height - self.height) / 2;
+            text: Shell.has-project ? Shell.project : @tr("chrome.no-project-title");
+            strong: true;
+            clicked => {
+                Shell.act("project.menu");
+            }
+        }
+        if Shell.branch != "": Chooser {
+            y: (parent.height - self.height) / 2;
+            text: Shell.branch;
+            icon: Icons.branch;
+            clicked => {
+                Shell.act("git.branches");
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: end;
+        spacing: 2px;
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: Icons.search;
+            tip: @tr("menu.view.quick-open");
+            clicked => {
+                Shell.act("finder.open");
+            }
+        }
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: Icons.menu;
+            tip: @tr("menu.view.palette");
+            clicked => {
+                Shell.act("app.menu");
+            }
+        }
+        Rectangle {
+            width: 10px;
+        }
+        WindowButton {
+            icon: Icons.minimize;
+            tip: @tr("desk.minimize");
+            clicked => {
+                root.minimize();
+            }
+        }
+        WindowButton {
+            icon: root.maximized ? Icons.restore : Icons.maximize;
+            tip: root.maximized ? @tr("desk.restore") : @tr("desk.maximize");
+            clicked => {
+                root.toggle-maximize();
+            }
+        }
+        WindowButton {
+            icon: Icons.close;
+            tip: @tr("chrome.close");
+            danger: true;
+            clicked => {
+                root.close();
+            }
+        }
+    }
+}

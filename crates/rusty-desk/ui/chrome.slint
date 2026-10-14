@@ -1,0 +1,331 @@
+// The status bar, the picker (the command palette and the file finder are
+// one list), notifications and the tooltip: what sits around the work.
+
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { IconButton, Tip } from "widgets.slint";
+import { Shell, PickRow, Note } from "shell.slint";
+
+// An item of the status bar: what it says, and a door to where it is about.
+component Item inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <brush> tint: Theme.label-2;
+    callback clicked;
+    width: row.preferred-width;
+    background: touch.has-hover ? Theme.hover : transparent;
+    row := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 5px;
+        if root.icon != "": Icon {
+            y: (parent.height - self.height) / 2;
+            path: root.icon;
+            size: 13px;
+            color: root.tint;
+        }
+        if root.text != "": Text {
+            text: root.text;
+            color: root.tint;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component StatusBar inherits Rectangle {
+    height: 24px;
+    background: Theme.window;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.line;
+    }
+    HorizontalLayout {
+        alignment: start;
+        Item {
+            icon: Icons.dock-left;
+            tint: Shell.left-open ? Theme.label : Theme.label-3;
+            clicked => {
+                Shell.act("dock.left");
+            }
+        }
+        Item {
+            icon: Icons.dock-bottom;
+            tint: Shell.bottom-open ? Theme.label : Theme.label-3;
+            clicked => {
+                Shell.act("dock.bottom");
+            }
+        }
+        Item {
+            icon: Icons.dock-right;
+            tint: Shell.right-open ? Theme.label : Theme.label-3;
+            clicked => {
+                Shell.act("dock.right");
+            }
+        }
+        Item {
+            icon: Icons.close;
+            text: Shell.errors;
+            tint: Shell.errors > 0 ? Theme.crimson : Theme.label-3;
+            clicked => {
+                Shell.act("problems.show");
+            }
+        }
+        Item {
+            icon: Icons.warn;
+            text: Shell.warnings;
+            tint: Shell.warnings > 0 ? Theme.amber : Theme.label-3;
+            clicked => {
+                Shell.act("problems.show");
+            }
+        }
+        if Shell.server != "": Item {
+            text: Shell.server;
+            tint: Theme.label-3;
+        }
+    }
+    HorizontalLayout {
+        alignment: end;
+        if Shell.caret != "": Item {
+            text: Shell.caret;
+        }
+        if Shell.language != "": Item {
+            text: Shell.language;
+        }
+        if Shell.chip != "": Item {
+            icon: Icons.chip;
+            text: Shell.chip;
+        }
+        Item {
+            icon: Icons.bell;
+            tint: Shell.notes.length > 0 ? Theme.label : Theme.label-3;
+            clicked => {
+                Shell.act("notes.history");
+            }
+        }
+    }
+}
+
+// The palette and the finder: a field and the rows that match it, keys on
+// the right. Up and Down move, Enter takes, Escape closes.
+export component Picker inherits Rectangle {
+    public function focus-field() {
+        field.focus();
+    }
+
+    background: #00000033;
+    TouchArea {
+        clicked => {
+            Shell.picker-open = false;
+            Shell.picker-pick(-1);
+        }
+    }
+
+    panel := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 52px;
+        width: min(620px, root.width - 40px);
+        height: column.preferred-height;
+        border-radius: 10px;
+        background: Theme.overlay;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000059;
+        drop-shadow-offset-y: 8px;
+        TouchArea { }
+        column := VerticalLayout {
+            padding: 6px;
+            spacing: 4px;
+            Rectangle {
+                height: 34px;
+                border-radius: 7px;
+                background: Theme.sunken;
+                field := TextInput {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    color: Theme.label;
+                    font-size: Theme.body;
+                    single-line: true;
+                    edited => {
+                        Shell.picker-query(self.text);
+                    }
+                    key-pressed(event) => {
+                        if (event.text == Key.Escape) {
+                            Shell.picker-open = false;
+                            Shell.picker-pick(-1);
+                            return accept;
+                        }
+                        if (event.text == Key.DownArrow) {
+                            Shell.picker-selected = Math.min(Shell.picker-selected + 1, Shell.picker-rows.length - 1);
+                            return accept;
+                        }
+                        if (event.text == Key.UpArrow) {
+                            Shell.picker-selected = Math.max(Shell.picker-selected - 1, 0);
+                            return accept;
+                        }
+                        if (event.text == Key.Return) {
+                            Shell.picker-pick(Shell.picker-selected);
+                            return accept;
+                        }
+                        reject
+                    }
+                }
+                if field.text == "": Text {
+                    x: 10px;
+                    height: parent.height;
+                    text: Shell.picker-hint;
+                    color: Theme.label-3;
+                    font-size: Theme.body;
+                    vertical-alignment: center;
+                }
+            }
+            for row[i] in Shell.picker-rows: Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: i == Shell.picker-selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 10px;
+                    Text {
+                        text: row.title;
+                        color: Theme.label;
+                        font-size: Theme.body;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: row.detail;
+                        color: Theme.label-3;
+                        font-size: Theme.small;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: row.chord;
+                        color: Theme.label-3;
+                        font-size: Theme.small;
+                        font-family: Theme.mono;
+                        vertical-alignment: center;
+                    }
+                }
+                touch := TouchArea {
+                    clicked => {
+                        Shell.picker-pick(i);
+                    }
+                }
+            }
+            if Shell.picker-rows.length == 0: Text {
+                height: 30px;
+                text: @tr("desk.no-matches");
+                color: Theme.label-3;
+                font-size: Theme.small;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// Notifications, in the corner above the status bar: their text, their
+// action, a close. The newest is nearest the corner.
+export component Notes inherits Rectangle {
+    VerticalLayout {
+        alignment: end;
+        spacing: 8px;
+        padding: 12px;
+        for note in Shell.notes: Rectangle {
+            width: 360px;
+            x: parent.width - self.width - 12px;
+            height: content.preferred-height;
+            border-radius: 9px;
+            background: Theme.overlay;
+            border-width: 1px;
+            border-color: Theme.line-strong;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000040;
+            drop-shadow-offset-y: 4px;
+            content := HorizontalLayout {
+                padding: 12px;
+                spacing: 10px;
+                Icon {
+                    path: note.level == 2 ? Icons.close : note.level == 1 ? Icons.warn : Icons.check;
+                    size: 15px;
+                    color: note.level == 2 ? Theme.crimson : note.level == 1 ? Theme.amber : Theme.patina;
+                }
+                VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: note.text;
+                        color: Theme.label;
+                        font-size: Theme.small;
+                        wrap: word-wrap;
+                    }
+                    if note.action != "": HorizontalLayout {
+                        alignment: start;
+                        Rectangle {
+                            height: 24px;
+                            width: action.preferred-width + 16px;
+                            border-radius: 5px;
+                            background: action-touch.has-hover ? Theme.rust-fill : transparent;
+                            action := Text {
+                                text: note.action;
+                                color: Theme.rust;
+                                font-size: Theme.small;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            action-touch := TouchArea {
+                                clicked => {
+                                    Shell.note-action(note.id);
+                                }
+                            }
+                        }
+                    }
+                }
+                IconButton {
+                    width: 22px;
+                    height: 22px;
+                    glyph: 12px;
+                    icon: Icons.close;
+                    clicked => {
+                        Shell.dismiss-note(note.id);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The window's one tooltip, placed by whichever control asked for it.
+export component Tooltip inherits Rectangle {
+    visible: Tip.shown;
+    x: Tip.x;
+    y: Tip.y;
+    width: label.preferred-width + 16px;
+    height: 24px;
+    border-radius: 5px;
+    background: Theme.overlay;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 8px;
+    drop-shadow-color: #00000033;
+    label := Text {
+        text: Tip.text;
+        color: Theme.label;
+        font-size: Theme.caption;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

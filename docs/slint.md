@@ -59,6 +59,66 @@ How it is built, because the rest of the editor follows from it:
   and nothing is intercepted. **Not yet tried with a real Chinese IME** —
   that is the first thing a person at the keyboard has to check.
 
+## The window, designed again
+
+Not the WebView's shell ported: what the work is, and what the tools people
+arrive from got right. The work is a loop — edit, build, run it (in the
+simulator or on the board), watch what it does, go back to the code — with
+the project's state (problems, size, toolchain, history) consulted along
+the way. Three references: **Zed** for how little chrome an editor needs
+and docks that hold panels on three sides; **Xcode** for the run loop as
+one control — what to run on, the button, and an activity view saying what
+is happening; **Wokwi** for the board beside the code.
+
+```
+┌ title bar ────────────────────────────────────────────────────────────────┐
+│ rustfly ▾  ⎇ main ▾   [▶ │ ESP32-C3 · Simulator ▾]  ■  ⚙ build ok · 1.2 s  ⌕  ─ □ ✕ │
+├ left dock ┬ editor ──────────────────────────────────────┬ right dock ────┤
+│ Project   │ main.rs   estimator.rs ×                     │ Board          │
+│ Search    │                                              │ Assistant      │
+│ Git       │                                              │                │
+│           ├ bottom dock ─────────────────────────────────┤                │
+│           │ Output  Problems  Terminal  Plot  Debug …    │                │
+├ status bar┴──────────────────────────────────────────────┴────────────────┤
+│ ◧ ⬓ ◨  ⓧ 2 ⚠ 3  rust-analyzer      Ln 12, Col 4  UTF-8  LF  Rust  ESP32-C3 │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+- **The title bar is the run loop.** On the left, which project (its menu
+  is recents, open, new, clone, the playgrounds) and which branch. In the
+  middle, Xcode's shape: the run button, *where* it runs — the simulator, a
+  serial port, a probe or a USB bootloader, one list — and stop; the button
+  means simulate or flash by what is chosen, so there is one verb to learn,
+  not six icons. Beside it the activity: what is running with a clock, then
+  the verdict until the next run. Build and debug are keys, menu rows and
+  the palette, as in Zed. On the right, the palette and the window's own
+  controls. No menu bar row: the project menu and a `≡` app menu hold what
+  menus held, and everything is in the palette.
+- **Three docks, each a set of panels**, Zed's model. Left: the project's
+  tree, search, Git. Bottom: output, problems, the terminal, and what a run
+  brings — plot, waves, signals, flight, draw, debug, registers, calls —
+  which arrive when there is something in them and go when hidden. Right:
+  the board and the assistant, so the board stands beside the code while it
+  runs, Wokwi's layout, for every project. Each dock opens and closes from
+  the status bar's three glyphs and a key, keeps its size, and remembers
+  which panel was in front.
+- **Pages are documents.** What is read or edited at length rather than
+  consulted beside code opens as a tab among the files: the welcome page,
+  settings, the environment, the memory report, dependencies (crates,
+  features, the build directory), the math toolbox, a new project, keyboard
+  shortcuts, the board when it wants the whole width. One way to open, move,
+  split and close anything big. There is no rail: a panel is reached by its
+  dock's tab or its key, a page by the palette or a link.
+- **The status bar says the state, and each item is a door**: the docks,
+  problems by count, the language server, then the caret, the encoding, the
+  line endings, the language and the chip.
+- **Messages are notifications**, a stack in the corner with their actions
+  on them and a history behind a bell in the status bar — not a banner that
+  covers the work.
+- **The keyboard reaches everything**: the palette (Ctrl+Shift+P) lists
+  every action with its key, the finder (Ctrl+P) every file, symbol and
+  line; the keys are VS Code's wherever a VS Code key exists.
+
 ## The shape of it
 
 ```
@@ -106,11 +166,13 @@ tests green, and CLAUDE.md saying how it works.
 
 0. **The editor spike** — done: rendering, typing, scrolling, CJK, tabs,
    measured above.
-1. **The shell**: the window and its title bar, the rail, panels, the dock,
-   the status bar, the theme (dark and light, the tokens of
-   `style/input.css`), the interface languages, settings and
-   `workbench.toml`, the command palette and key bindings, menus, dialogs
-   (`rfd`), the clipboard (`arboard`).
+1. **The shell**, as designed above: the frameless window and its title
+   bar, the three docks and the editor area with its tabs, the status bar,
+   notifications, the theme (dark, light, the system's), the interface
+   languages, `workbench.toml` (the layout and the appearance live there
+   now — there is no WebView storage), the actions, their keys, the
+   palette, the welcome page, settings, dialogs (`rfd`), the clipboard
+   (`arboard`).
 2. **The editor**, to and past what the WebView one did: tabs and two
    groups, painting off the thread, selection, undo, find and replace,
    folding, multiple cursors, Vim, bracket pairs, rust-analyzer and clangd
