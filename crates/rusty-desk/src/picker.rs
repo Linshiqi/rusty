@@ -10,6 +10,12 @@ pub enum Mode {
     Files,
     /// The project chooser: the recent ones, then the ways to have another.
     Projects,
+    /// Places a server named — references, implementations.
+    Places,
+    /// What the server offers to do at the caret.
+    Fixes,
+    /// A new name for the symbol at the caret, typed in the field.
+    Rename,
 }
 
 /// What a row stands for.
@@ -22,6 +28,12 @@ pub enum Pick {
     Line(usize, Option<usize>),
     /// A row that only says something: picking it closes the picker.
     Nothing,
+    /// A place a server named, to jump to.
+    Place(rusty_lsp::Location),
+    /// The fix at this index of the server's answer.
+    Fix(usize),
+    /// The symbol at the caret renamed to this.
+    Rename(String),
 }
 
 /// How many rows are shown. Past this the query is what narrows it.

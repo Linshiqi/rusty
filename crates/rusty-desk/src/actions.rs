@@ -42,6 +42,29 @@ pub const ALL: &[Action] = &[
     ),
     action("editor.go-to-line", "menu.view.go-to-line", Some("Ctrl+G")),
     action("editor.show-hover", "desk.show-hover", None),
+    action(
+        "editor.definition",
+        "context.editor-definition",
+        Some("F12"),
+    ),
+    action(
+        "editor.references",
+        "menu.view.references",
+        Some("Shift+F12"),
+    ),
+    action(
+        "editor.implementations",
+        "menu.view.implementations",
+        Some("Ctrl+F12"),
+    ),
+    action(
+        "editor.quick-fix",
+        "context.editor-quick-fix",
+        Some("Ctrl+."),
+    ),
+    action("editor.rename", "menu.edit.rename", Some("F2")),
+    action("nav.back", "menu.view.back", Some("Alt+ArrowLeft")),
+    action("nav.forward", "menu.view.forward", Some("Alt+ArrowRight")),
     action("problem.next", "desk.problem-next", Some("F8")),
     action(
         "problem.previous",

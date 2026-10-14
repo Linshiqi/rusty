@@ -201,7 +201,10 @@ tests green, and CLAUDE.md saying how it works.
    problems under the pointer and the server's signature and docs;
    completion as you type (the rules moved to `rusty_lsp::complete`, one
    copy for both windows), its imports brought along, and the signature of
-   the call being typed;
+   the call being typed; F12 and Ctrl+click to a definition — a
+   dependency's or a toolchain header's opened read-only — references and
+   implementations in the picker, Alt+Left and Alt+Right through the jumps,
+   Ctrl+. for the server's fixes, F2 to rename across the project;
    clang-format on save — proven on a Cargo project with rust-analyzer and
    a CMake one with clangd.
 4. **The project is a part.** Opening a folder runs detection —
