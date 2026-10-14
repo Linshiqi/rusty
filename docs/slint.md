@@ -402,6 +402,23 @@ tests green, and CLAUDE.md saying how it works.
    that exits says so with a button for another. Proven with PowerShell:
    `echo rusty-term-$((6*7))` answered `rusty-term-42`, the pty took the
    panel's ten rows, and `exit` left the notice.
+   Git, in two places, as VS Code and Fork split it: the left dock's panel
+   is what is checked out with fetch, pull and push (their counts in the
+   tooltips), the commit box with amend, the staged and unstaged lists with
+   their verbs on hover, and the stashes; the History page in the editor
+   area is every ref down the left, the graph (`rusty_git::log`'s lines,
+   each row drawing the half of the lines that reach it from above and the
+   half that leave it, clipped, so a filled row covers nothing), a search
+   that dims and steps, and a commit opened below with its files and their
+   patch, one column or two. A file's diff is a page of its own. Reads run
+   on a thread; writes are dock commands; the stamp is asked every few
+   seconds while either shows. One right-click menu serves the window
+   (`app/menu.rs`), and a name git would refuse is refused as it is typed.
+   The pure halves moved into `rusty-git` (`log`, `plan`) for both windows.
+   Proven on a scratch repository with a merge and a tag: a file staged,
+   committed with a two-line message, the graph read, the merge opened,
+   `bad name` refused for its space, `probe/branch` made from a commit and
+   checked out, and a search stepping to its first match.
 8. **The editor's depth**, now that everything it is for exists: folding,
    sticky scroll, the minimap, indent guides, test lenses, inlay hints,
    semantic colours, Vim, two groups.

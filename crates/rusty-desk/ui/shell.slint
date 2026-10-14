@@ -288,6 +288,105 @@ export struct LabParam {
     text: string,
 }
 
+// A file in one of the Git panel's two lists: its letter and colour (0 grey,
+// 1 green, 2 amber, 3 crimson, 4 slate) and what they mean.
+export struct GitChange {
+    path: string,
+    name: string,
+    dir: string,
+    letter: string,
+    tone: int,
+    tip: string,
+    staged: bool,
+    untracked: bool,
+    nested: bool,
+    selected: bool,
+}
+
+export struct GitStash {
+    index: int,
+    label: string,
+    message: string,
+    when: string,
+}
+
+// A row of the History page's refs: 0 a heading, 1 a local branch, 2 a
+// remote, 3 a remote's branch, 4 a tag.
+export struct GitRef {
+    index: int,
+    kind: int,
+    label: string,
+    detail: string,
+    tip: string,
+    current: bool,
+    gone: bool,
+    filtered: bool,
+}
+
+// One line of the graph between a row's centre and the next row's, in the
+// pixels of a box two rows tall.
+export struct GitLane {
+    commands: string,
+    color: color,
+}
+
+// A ref on a commit: 0 checked out, 1 a branch, 2 a remote's, 3 a tag.
+export struct GitLabel {
+    text: string,
+    color: color,
+    kind: int,
+}
+
+export struct GitCommitRow {
+    index: int,
+    short: string,
+    summary: string,
+    author: string,
+    when: string,
+    lane: int,
+    dot: color,
+    merge: bool,
+    // The lines leaving this row, and those leaving the row above, which
+    // reach into this one.
+    edges: [GitLane],
+    above: [GitLane],
+    labels: [GitLabel],
+    more: int,
+    selected: bool,
+    dim: bool,
+}
+
+// A file of an opened commit.
+export struct GitFile {
+    index: int,
+    path: string,
+    letter: string,
+    tone: int,
+    tip: string,
+    added: string,
+    removed: string,
+    selected: bool,
+}
+
+// A row of a patch: 0 context, 1 added, 2 removed, 3 a hunk's header, 4 a
+// note, 5 nothing on that side. One column uses the left half and both
+// numbers; two columns use both halves.
+export struct DiffRow {
+    kind: int,
+    old: string,
+    new: string,
+    text: string,
+    right-kind: int,
+    right-text: string,
+}
+
+// A row of a right-click menu; an empty id is a divider.
+export struct MenuItem {
+    id: string,
+    label: string,
+    danger: bool,
+}
+
 // A run of a terminal's row in one style: its colours where the program
 // chose them (the theme's otherwise), and how it is drawn.
 export struct TermSpan {
@@ -609,6 +708,84 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // The Git panel.
+    in property <int> git-state;
+    in property <string> git-problem;
+    in property <string> git-head;
+    in property <string> git-upstream;
+    in property <int> git-ahead;
+    in property <int> git-behind;
+    in property <string> git-pull-tip;
+    in property <string> git-push-tip;
+    in property <string> git-operation;
+    in property <string> git-operation-detail;
+    in property <int> git-conflicts;
+    in property <bool> git-identity-needed;
+    in-out property <string> git-message;
+    in-out property <string> git-stash-note;
+    in property <bool> git-amend;
+    in property <bool> git-clean;
+    in property <[GitChange]> git-staged;
+    in property <[GitChange]> git-unstaged;
+    in property <[GitStash]> git-stashes;
+    callback git-file(string, string, bool);
+    callback git-file-menu(string, bool, length, length);
+    callback git-identity-save(string, string, bool);
+    callback git-stash(string, int);
+
+    // The Changes page: a working-tree file's diff.
+    in property <string> git-diff-title;
+    in property <bool> git-diff-staged;
+    in property <[DiffRow]> git-diff-rows;
+    in property <string> git-diff-note;
+    in property <bool> git-split;
+
+    // The History page.
+    in property <[GitRef]> git-refs;
+    in property <string> git-filter;
+    in property <[GitCommitRow]> git-log;
+    in property <int> git-lanes: 1;
+    in property <bool> git-truncated;
+    in property <int> git-selected: -1;
+    in property <int> git-reveal;
+    in property <string> git-search-count;
+    callback git-search(string);
+    callback git-search-step(bool);
+    callback git-ref-filter(string);
+    callback git-ref(int, bool);
+    callback git-ref-menu(int, length, length);
+    callback git-pick(int);
+    callback git-step(int);
+    callback git-commit-menu(int, length, length);
+    in property <bool> git-detail-open;
+    in property <string> git-detail-summary;
+    in property <string> git-detail-body;
+    in property <string> git-detail-meta;
+    in property <[GitFile]> git-detail-files;
+    in property <[DiffRow]> git-detail-rows;
+    in property <string> git-detail-note;
+    callback git-detail-file(int);
+    callback git-detail-file-menu(int, length, length);
+
+    // The name field for a branch, a tag or a remote.
+    in property <bool> git-prompt-open;
+    in property <string> git-prompt-title;
+    in-out property <string> git-prompt-value;
+    in-out property <string> git-prompt-url;
+    in property <bool> git-prompt-has-url;
+    in property <string> git-prompt-problem;
+    in property <bool> git-prompt-ok;
+    callback git-prompt-edited();
+    callback git-prompt-done(bool);
+
+    // A right-click menu, anywhere.
+    in property <bool> menu-open;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    in property <[MenuItem]> menu-items;
+    callback menu-picked(string);
+    callback menu-dismissed();
 
     // The Terminal.
     in property <[TermRow]> term-rows;

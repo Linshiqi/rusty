@@ -2,6 +2,7 @@
 //! or rebase that stopped halfway.
 
 use super::*;
+use rusty_git::plan::{checkout_args, pick_remote};
 
 /// Check a commit or a tag out — a detached HEAD, said so in the dock.
 pub fn checkout_commit(state: AppState, id: String) {
@@ -17,37 +18,6 @@ pub fn cherry_pick(state: AppState, id: String) {
 /// an editor would open on a terminal nobody is watching.
 pub fn revert_commit(state: AppState, id: String) {
     git(state, words(&["revert", "--no-edit", &id]));
-}
-
-/// The remote a push or a new upstream goes to — `None` when the repository
-/// has none, which is the case a push has to stop and ask about.
-///
-/// The current branch's upstream's remote first, then `origin`, then the
-/// first there is. `known` is every remote name there is evidence of: the
-/// config's, and the ones remote-tracking branches name, so a click in the
-/// moment before the remotes have been read does not ask to add a remote
-/// that plainly exists.
-pub(crate) fn pick_remote(upstream: Option<&str>, known: &[String]) -> Option<String> {
-    if let Some(upstream) = upstream {
-        // The longest name that begins the upstream: a remote may be called
-        // `team` and another `team/fw`, and `team/fw/main` is the second's.
-        let owner = known
-            .iter()
-            .filter(|name| {
-                upstream
-                    .strip_prefix(name.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
-            })
-            .max_by_key(|name| name.len());
-        return owner
-            .cloned()
-            .or_else(|| upstream.split('/').next().map(str::to_string));
-    }
-    known
-        .iter()
-        .find(|name| *name == "origin")
-        .or_else(|| known.first())
-        .cloned()
 }
 
 fn default_remote(state: AppState) -> Option<String> {
@@ -74,26 +44,6 @@ fn known_remotes(state: AppState) -> Vec<String> {
         }
     });
     known
-}
-
-/// The arguments that check out `name`. A local branch by name; a remote
-/// one through the local branch of the same name when there is one, and a
-/// new local branch tracking it otherwise — checking a remote branch out by
-/// its own name would detach HEAD, which is never what a double-click on
-/// `origin/feature` means.
-pub(crate) fn checkout_args(
-    name: &str,
-    remote: bool,
-    local: &str,
-    local_exists: bool,
-) -> Vec<String> {
-    if !remote {
-        words(&["checkout", name])
-    } else if local_exists {
-        words(&["checkout", local])
-    } else {
-        words(&["checkout", "--track", name])
-    }
 }
 
 /// Check a branch out. Through the dock, so a checkout refused on a dirty

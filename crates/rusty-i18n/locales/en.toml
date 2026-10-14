@@ -1963,6 +1963,11 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+git-no-diff = "No difference to show."
+git-drop-confirm = "Drop {name}?\nIts changes are gone once it is dropped."
+git-commit-staged = "Commit what is staged"
+git-message = "Message"
+git-amend-on = "Amending the last commit"
 terminal-restart = "Start another shell"
 search-found = "{hits} matches in {files} files"
 search-first = "The first {said}"

@@ -28,8 +28,11 @@ mod drafts;
 mod draw;
 mod environment;
 mod flight;
+mod git;
+mod git_view;
 mod lab;
 mod lab_words;
+mod menu;
 mod navigate;
 mod part;
 mod playground;
@@ -83,6 +86,8 @@ impl Tab {
             Tab::Page("settings") => t!("desk.settings"),
             Tab::Page("environment") => rusty_i18n::lookup("panel.toolchain"),
             Tab::Page("wizard") => t!("wizard.title"),
+            Tab::Page("git") => t!("git.history"),
+            Tab::Page("gitdiff") => t!("git.changes"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -143,6 +148,8 @@ struct State {
     debug: debug::Debug,
     registers: registers::Registers,
     search: search::Search,
+    git: git::Git,
+    menu: Option<&'static str>,
     term: terminal::Term,
 }
 
@@ -370,6 +377,41 @@ impl App {
         on!(on_term_resized, |app, cols, rows| app
             .term_resized(cols, rows));
         on!(on_term_scroll, |app, lines| app.term_scroll(lines));
+        on!(on_git_file, |app, verb, path, staged| app.git_file(
+            &verb,
+            path.to_string(),
+            staged
+        ));
+        on!(on_git_file_menu, |app, path, staged, x, y| app
+            .git_change_menu(&path, staged, x, y));
+        on!(on_git_identity_save, |app, name, email, local| app
+            .git_identity_save(
+                name.to_string(),
+                email.to_string(),
+                local
+            ));
+        on!(on_git_stash, |app, verb, index| app.git_stash(&verb, index));
+        on!(on_git_search, |app, text| app.git_search(&text));
+        on!(on_git_search_step, |app, forward| app
+            .git_search_step(forward));
+        on!(on_git_ref_filter, |app, text| app.git_ref_filter(&text));
+        on!(on_git_ref, |app, index, double| app
+            .git_ref(index.max(0) as usize, double));
+        on!(on_git_ref_menu, |app, index, x, y| app
+            .git_ref_menu(index, x, y));
+        on!(on_git_pick, |app, index| app
+            .git_pick(index.max(0) as usize));
+        on!(on_git_step, |app, step| app.git_step(step));
+        on!(on_git_commit_menu, |app, index, x, y| app
+            .git_commit_menu(index, x, y));
+        on!(on_git_detail_file, |app, index| app
+            .git_detail_file(index.max(0) as usize));
+        on!(on_git_detail_file_menu, |app, index, x, y| app
+            .git_file_menu(index, x, y));
+        on!(on_git_prompt_edited, |app| app.git_prompt_edited());
+        on!(on_git_prompt_done, |app, ok| app.git_prompt_done(ok));
+        on!(on_menu_picked, |app, id| app.menu_picked(&id));
+        on!(on_menu_dismissed, |app| app.menu_dismissed());
         let weak = Rc::downgrade(self);
         shell.on_term_key(move |event| {
             weak.upgrade().is_some_and(|app| {
@@ -580,6 +622,11 @@ impl App {
             "lab.sweep-stop" => self.lab_sweep_stop(),
             "lab.measure-recorded" => self.lab_measure_recorded(),
             "output.clear" => self.runner.clear(),
+            "git.branches" => {
+                self.show_panel("left", "git");
+                self.git_shown();
+            }
+            other if other.starts_with("git.") => self.git_act(&other["git.".len()..]),
             "app.exit" => {
                 self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();

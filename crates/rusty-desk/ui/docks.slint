@@ -16,6 +16,7 @@ import { DebugPanel } from "debug.slint";
 import { RegistersPanel } from "registers.slint";
 import { SearchPanel } from "search.slint";
 import { TerminalPanel } from "terminal.slint";
+import { GitPanel } from "git.slint";
 
 // The row of a dock's panels. A tab is its icon and, in front, its name.
 component DockHeader inherits Rectangle {
@@ -272,9 +273,7 @@ export component LeftDock inherits Rectangle {
         Rectangle {
             if Shell.left-front == "project": ProjectTree { }
             if Shell.left-front == "search": SearchPanel { }
-            if Shell.left-front == "git": NotYet {
-                name: @tr("panel.git");
-            }
+            if Shell.left-front == "git": GitPanel { }
         }
     }
 }

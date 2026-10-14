@@ -84,6 +84,7 @@ pub fn start(window: &AppWindow) {
     let drawing = std::env::var_os("RUSTY_PROBE_DRAW").is_some();
     let debugging = std::env::var_os("RUSTY_PROBE_DEBUG").is_some();
     let terminal = std::env::var_os("RUSTY_PROBE_TERM").is_some();
+    let repository = std::env::var_os("RUSTY_PROBE_GIT").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -193,6 +194,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if terminal {
                     step.set(1000);
+                }
+                if repository {
+                    step.set(1100);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -316,6 +320,160 @@ pub fn start(window: &AppWindow) {
             1040 if terminal => {
                 eprintln!("terminal: after exit {:?}", shell.get_term_exited());
                 snapshot(&window, &dir.join("terminal-exited.png"));
+                app.act("app.exit");
+            }
+            // The Git panel on a repository with a merge, a tag, a change and
+            // a new file: stage, commit, the history, a commit opened, its
+            // menu, a new branch through the name field, and a file's diff.
+            1100 if repository => {
+                shell.invoke_show_panel("left".into(), "git".into());
+            }
+            1101 if repository => {
+                if shell.get_git_state() != 1 || shell.get_git_unstaged().row_count() == 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 500 {
+                        step.set(1101);
+                    }
+                    return;
+                }
+                let names = |model: slint::ModelRc<crate::GitChange>| {
+                    model
+                        .iter()
+                        .map(|c| format!("{} {}", c.letter, c.path))
+                        .collect::<Vec<_>>()
+                };
+                eprintln!(
+                    "git: head {:?} ({}); staged {:?}; unstaged {:?}",
+                    shell.get_git_head(),
+                    shell.get_git_upstream(),
+                    names(shell.get_git_staged()),
+                    names(shell.get_git_unstaged())
+                );
+                snapshot(&window, &dir.join("git-panel.png"));
+                shell.invoke_git_file("stage".into(), "src/lib.rs".into(), false);
+                waited.set(0);
+            }
+            1102 if repository => {
+                if shell.get_git_staged().row_count() == 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 200 {
+                        step.set(1102);
+                    }
+                    return;
+                }
+                eprintln!("git: staged {}", shell.get_git_staged().row_count());
+                shell.invoke_git_file("diff".into(), "src/lib.rs".into(), true);
+            }
+            1110 if repository => {
+                eprintln!(
+                    "git: diff {:?}, {} rows, note {:?}",
+                    shell.get_git_diff_title(),
+                    shell.get_git_diff_rows().row_count(),
+                    shell.get_git_diff_note()
+                );
+                snapshot(&window, &dir.join("git-diff.png"));
+                shell.set_git_message("Probe: a line\n\nand a body".into());
+                app.act("git.commit");
+                waited.set(0);
+            }
+            1111 if repository => {
+                if shell.get_git_staged().row_count() != 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 500 {
+                        step.set(1111);
+                    }
+                    return;
+                }
+                eprintln!("git: committed; message box {:?}", shell.get_git_message());
+                app.act("git.history");
+                waited.set(0);
+            }
+            1112 if repository => {
+                if shell.get_git_log().row_count() < 5 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 500 {
+                        step.set(1112);
+                    }
+                    return;
+                }
+                let log = shell.get_git_log();
+                for row in log.iter() {
+                    eprintln!(
+                        "git: lane {} {} {:?} labels {:?} edges {} above {}",
+                        row.lane,
+                        row.short,
+                        row.summary,
+                        row.labels.iter().map(|l| l.text.to_string()).collect::<Vec<_>>(),
+                        row.edges.row_count(),
+                        row.above.row_count()
+                    );
+                }
+                eprintln!(
+                    "git: refs {:?}",
+                    shell
+                        .get_git_refs()
+                        .iter()
+                        .map(|r| format!("{}:{}", r.kind, r.label))
+                        .collect::<Vec<_>>()
+                );
+                shell.invoke_git_pick(1);
+            }
+            1120 if repository => {
+                eprintln!(
+                    "git: opened {:?} / {:?}; {} files, {} rows",
+                    shell.get_git_detail_summary(),
+                    shell.get_git_detail_meta(),
+                    shell.get_git_detail_files().row_count(),
+                    shell.get_git_detail_rows().row_count()
+                );
+                snapshot(&window, &dir.join("git-history.png"));
+                shell.invoke_git_commit_menu(2, 600.0, 300.0);
+            }
+            1124 if repository => {
+                eprintln!(
+                    "git: menu {:?}",
+                    shell
+                        .get_menu_items()
+                        .iter()
+                        .map(|m| m.label.to_string())
+                        .collect::<Vec<_>>()
+                );
+                snapshot(&window, &dir.join("git-menu.png"));
+                shell.invoke_menu_picked("branch-here".into());
+            }
+            1128 if repository => {
+                shell.set_git_prompt_value("bad name".into());
+                shell.invoke_git_prompt_edited();
+            }
+            1130 if repository => {
+                eprintln!(
+                    "git: prompt {:?} problem {:?} ok {}",
+                    shell.get_git_prompt_title(),
+                    shell.get_git_prompt_problem(),
+                    shell.get_git_prompt_ok()
+                );
+                snapshot(&window, &dir.join("git-prompt.png"));
+                shell.set_git_prompt_value("probe/branch".into());
+                shell.invoke_git_prompt_edited();
+                shell.invoke_git_prompt_done(true);
+                waited.set(0);
+            }
+            1131 if repository => {
+                let made = shell.get_git_refs().iter().any(|r| r.label == "probe/branch");
+                if !made {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 500 {
+                        step.set(1131);
+                    }
+                    return;
+                }
+                eprintln!("git: branch made; head {:?}", shell.get_git_head());
+                shell.invoke_git_search("change".into());
+                shell.invoke_git_search_step(true);
+            }
+            1136 if repository => {
+                eprintln!("git: search {:?}, selected {}", shell.get_git_search_count(), shell.get_git_selected());
+                snapshot(&window, &dir.join("git-branch.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -906,7 +1064,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

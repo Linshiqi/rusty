@@ -1,0 +1,1297 @@
+// The repository: the Git panel in the left dock (what is checked out, the
+// commit box, the staged and unstaged files, the stashes), the History page
+// (every ref, the graph, a commit opened below), the Changes page (one
+// file's diff) and the name field. Filled by `src/app/git.rs` and
+// `src/app/git_view.rs`; the graph's lines are laid out there, and drawn here.
+
+import { ListView, ScrollView, TextEdit, CheckBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { Shell, DiffRow, GitChange, GitCommitRow } from "shell.slint";
+import { IconButton, Button, Caption, Field, Segments } from "widgets.slint";
+
+// A change's letter colour.
+export global GitTone {
+    pure public function of(tone: int) -> color {
+        return tone == 1 ? Theme.patina : tone == 2 ? Theme.amber : tone == 3 ? Theme.crimson : tone == 4 ? Theme.slate : Theme.label-4;
+    }
+}
+
+// A patch, one column or two, in the editor's font.
+export component DiffView inherits Rectangle {
+    in property <[DiffRow]> rows;
+    in property <bool> split;
+    in property <string> note;
+    property <length> row-h: 18px;
+    property <length> number-w: 40px;
+    background: Theme.content;
+
+    pure function fill(kind: int) -> brush {
+        return kind == 1 ? Theme.patina-fill : kind == 2 ? Theme.crimson-fill : kind == 3 ? Theme.sunken : kind == 5 ? Theme.sunken.with-alpha(0.5) : transparent;
+    }
+
+    if root.rows.length == 0: Text {
+        x: 12px;
+        y: 12px;
+        width: parent.width - 24px;
+        text: root.note;
+        color: Theme.label-3;
+        font-size: Theme.small;
+        wrap: word-wrap;
+    }
+    if root.rows.length > 0: VerticalLayout {
+        if root.note != "": Text {
+            height: 22px;
+            text: root.note;
+            color: Theme.amber;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        ListView {
+            for row in root.rows: Rectangle {
+                height: root.row-h;
+                // A hunk's header across the whole width.
+                if row.kind == 3: Rectangle {
+                    background: Theme.sunken;
+                    Text {
+                        x: 8px;
+                        text: row.text;
+                        color: Theme.slate;
+                        font-family: Theme.mono;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                if row.kind != 3 && !root.split: HorizontalLayout {
+                    Rectangle {
+                        width: root.number-w;
+                        background: root.fill(row.kind);
+                        Text {
+                            width: parent.width - 6px;
+                            text: row.old;
+                            color: Theme.label-4;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        width: root.number-w;
+                        background: root.fill(row.kind);
+                        Text {
+                            width: parent.width - 6px;
+                            text: row.new;
+                            color: Theme.label-4;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        background: root.fill(row.kind);
+                        Text {
+                            x: 6px;
+                            text: (row.kind == 1 ? "+ " : row.kind == 2 ? "- " : "  ") + row.text;
+                            color: row.kind == 4 ? Theme.label-3 : Theme.label;
+                            font-italic: row.kind == 4;
+                            font-family: Theme.mono;
+                            font-size: Theme.small;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                if row.kind != 3 && root.split: HorizontalLayout {
+                    Rectangle {
+                        width: root.number-w;
+                        background: root.fill(row.kind);
+                        Text {
+                            width: parent.width - 6px;
+                            text: row.old;
+                            color: Theme.label-4;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        background: root.fill(row.kind);
+                        clip: true;
+                        Text {
+                            x: 6px;
+                            text: row.text;
+                            color: row.kind == 4 ? Theme.label-3 : Theme.label;
+                            font-italic: row.kind == 4;
+                            font-family: Theme.mono;
+                            font-size: Theme.small;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.line;
+                    }
+                    Rectangle {
+                        width: root.number-w;
+                        background: root.fill(row.right-kind);
+                        Text {
+                            width: parent.width - 6px;
+                            text: row.new;
+                            color: Theme.label-4;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        background: root.fill(row.right-kind);
+                        clip: true;
+                        Text {
+                            x: 6px;
+                            text: row.right-text;
+                            color: row.right-kind == 4 ? Theme.label-3 : Theme.label;
+                            font-italic: row.right-kind == 4;
+                            font-family: Theme.mono;
+                            font-size: Theme.small;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A file in one of the panel's lists: its letter, its name and folder, and
+// on hover the verbs for it.
+component ChangeRow inherits Rectangle {
+    in property <GitChange> change;
+    height: 24px;
+    border-radius: 5px;
+    background: root.change.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    touch := TouchArea {
+        clicked => {
+            if (!root.change.nested) {
+                Shell.git-file("diff", root.change.path, root.change.staged);
+            }
+        }
+        double-clicked => {
+            Shell.git-file("open", root.change.path, root.change.staged);
+        }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                Shell.git-file-menu(root.change.path, root.change.staged, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 2px;
+        spacing: 6px;
+        Text {
+            width: 12px;
+            text: root.change.letter;
+            color: GitTone.of(root.change.tone);
+            font-family: Theme.mono;
+            font-size: Theme.small;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.change.name;
+            color: root.change.nested ? Theme.label-3 : Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.change.nested ? @tr("git.nested") : root.change.dir;
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if touch.has-hover && !root.change.nested: IconButton {
+            width: 22px;
+            height: 22px;
+            glyph: 14px;
+            icon: Icons.files;
+            tip: @tr("git.open-file");
+            clicked => {
+                Shell.git-file("open", root.change.path, root.change.staged);
+            }
+        }
+        if touch.has-hover && !root.change.nested: IconButton {
+            width: 22px;
+            height: 22px;
+            glyph: 14px;
+            icon: Icons.undo;
+            tip: root.change.untracked ? @tr("git.delete-untracked") : @tr("git.discard");
+            clicked => {
+                Shell.git-file("discard", root.change.path, root.change.staged);
+            }
+        }
+        if touch.has-hover && !root.change.nested: IconButton {
+            width: 22px;
+            height: 22px;
+            glyph: 14px;
+            icon: root.change.staged ? Icons.minus : Icons.plus;
+            tip: root.change.staged ? @tr("git.unstage") : @tr("git.stage");
+            clicked => {
+                Shell.git-file(root.change.staged ? "unstage" : "stage", root.change.path, root.change.staged);
+            }
+        }
+        if touch.has-hover && root.change.nested: IconButton {
+            width: 22px;
+            height: 22px;
+            glyph: 14px;
+            icon: Icons.plus;
+            tip: @tr("git.include-nested");
+            clicked => {
+                Shell.git-file("include", root.change.path, false);
+            }
+        }
+    }
+}
+
+// A list's heading: its name, how many, and the verb for all of them.
+component ListHead inherits HorizontalLayout {
+    in property <string> title;
+    in property <int> count;
+    in property <string> icon;
+    in property <string> tip;
+    callback clicked;
+    height: 26px;
+    spacing: 4px;
+    Caption {
+        text: root.title + " · " + root.count;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+    }
+    if root.count > 0: IconButton {
+        width: 22px;
+        height: 22px;
+        glyph: 14px;
+        icon: root.icon;
+        tip: root.tip;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The left dock's panel.
+export component GitPanel inherits Rectangle {
+    init => {
+        Shell.act("git.shown");
+    }
+
+    if Shell.git-state == 0: Text {
+        x: 12px;
+        y: 12px;
+        text: @tr("git.loading");
+        color: Theme.label-3;
+        font-size: Theme.small;
+    }
+    if Shell.git-state == 2: VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+        alignment: start;
+        Text {
+            text: @tr("git.unavailable-title");
+            color: Theme.label;
+            font-size: Theme.body;
+            font-weight: 600;
+        }
+        Text {
+            text: @tr("git.init-hint");
+            color: Theme.label-2;
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: @tr("git.init");
+                primary: true;
+                clicked => {
+                    Shell.act("git.init");
+                }
+            }
+        }
+    }
+    if Shell.git-state == 3: VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: @tr("git.unavailable-title");
+            color: Theme.label;
+            font-weight: 600;
+        }
+        Text {
+            text: Shell.git-problem;
+            color: Theme.crimson;
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+    }
+    if Shell.git-state == 1: VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        // What is checked out, and the verbs that move it.
+        HorizontalLayout {
+            spacing: 2px;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: Icons.branch;
+                size: 15px;
+                color: Theme.rust;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: " " + Shell.git-head;
+                color: Theme.label;
+                font-size: Theme.small;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            IconButton {
+                width: 24px;
+                height: 24px;
+                glyph: 15px;
+                icon: Icons.history;
+                tip: @tr("git.history");
+                clicked => {
+                    Shell.act("git.history");
+                }
+            }
+            IconButton {
+                width: 24px;
+                height: 24px;
+                glyph: 15px;
+                icon: Icons.fetch;
+                tip: @tr("git.fetch");
+                clicked => {
+                    Shell.act("git.fetch");
+                }
+            }
+            IconButton {
+                width: 24px;
+                height: 24px;
+                glyph: 15px;
+                icon: Icons.pull;
+                tip: Shell.git-pull-tip;
+                tint: Shell.git-behind > 0 ? Theme.rust : Theme.label-2;
+                clicked => {
+                    Shell.act("git.pull");
+                }
+            }
+            IconButton {
+                width: 24px;
+                height: 24px;
+                glyph: 15px;
+                icon: Icons.push;
+                tip: Shell.git-push-tip;
+                tint: Shell.git-ahead > 0 ? Theme.rust : Theme.label-2;
+                clicked => {
+                    Shell.act("git.push");
+                }
+            }
+            IconButton {
+                width: 24px;
+                height: 24px;
+                glyph: 15px;
+                icon: Icons.refresh;
+                tip: @tr("git.refresh");
+                clicked => {
+                    Shell.act("git.refresh");
+                }
+            }
+        }
+        Text {
+            text: Shell.git-upstream;
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            overflow: elide;
+        }
+        // A merge or a rebase waiting: the two ways out.
+        if Shell.git-operation != "": Rectangle {
+            border-radius: 6px;
+            background: Theme.amber-fill;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
+                Text {
+                    text: Shell.git-operation;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: Shell.git-operation-detail;
+                    color: Theme.label-2;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Button {
+                        text: @tr("git.op-continue");
+                        primary: true;
+                        enabled: Shell.git-conflicts == 0;
+                        clicked => {
+                            Shell.act("git.continue");
+                        }
+                    }
+                    Button {
+                        text: @tr("git.op-abort");
+                        clicked => {
+                            Shell.act("git.abort");
+                        }
+                    }
+                }
+            }
+        }
+        // Who a commit would be signed as, asked before git refuses.
+        if Shell.git-identity-needed: Rectangle {
+            border-radius: 6px;
+            background: Theme.sunken;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
+                Text {
+                    text: @tr("git.identity-title");
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: @tr("git.identity-detail");
+                    color: Theme.label-2;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+                name := Field {
+                    placeholder: @tr("git.identity-name");
+                }
+                email := Field {
+                    placeholder: @tr("git.identity-email");
+                }
+                local := CheckBox {
+                    text: @tr("git.identity-local");
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: @tr("git.identity-save");
+                        primary: true;
+                        enabled: name.text != "" && email.text != "";
+                        clicked => {
+                            Shell.git-identity-save(name.text, email.text, local.checked);
+                        }
+                    }
+                }
+            }
+        }
+        // The commit box.
+        message := TextEdit {
+            height: 64px;
+            text <=> Shell.git-message;
+            placeholder-text: @tr("git.commit-placeholder");
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            IconButton {
+                width: 28px;
+                icon: Icons.undo;
+                tip: Shell.git-amend ? @tr("desk.git-amend-on") : @tr("git.amend");
+                active: Shell.git-amend;
+                clicked => {
+                    Shell.act("git.amend");
+                }
+            }
+            Button {
+                horizontal-stretch: 1;
+                text: Shell.git-amend ? @tr("git.amend-button") : @tr("git.commit");
+                primary: true;
+                enabled: !Shell.git-identity-needed && (Shell.git-amend || (Shell.git-staged.length > 0 && Shell.git-message != ""));
+                clicked => {
+                    Shell.act("git.commit");
+                }
+            }
+        }
+        // The two lists and the stashes.
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                if Shell.git-staged.length > 0: ListHead {
+                    title: @tr("git.staged");
+                    count: Shell.git-staged.length;
+                    icon: Icons.minus;
+                    tip: @tr("git.unstage-all");
+                    clicked => {
+                        Shell.act("git.unstage-all");
+                    }
+                }
+                for change in Shell.git-staged: ChangeRow {
+                    change: change;
+                }
+                ListHead {
+                    title: @tr("git.changes");
+                    count: Shell.git-unstaged.length;
+                    icon: Icons.plus;
+                    tip: @tr("git.stage-all");
+                    clicked => {
+                        Shell.act("git.stage-all");
+                    }
+                }
+                for change in Shell.git-unstaged: ChangeRow {
+                    change: change;
+                }
+                if Shell.git-clean: Text {
+                    height: 26px;
+                    text: @tr("git.clean");
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    height: 30px;
+                    spacing: 4px;
+                    Caption {
+                        text: @tr("git.stashes-tab") + " · " + Shell.git-stashes.length;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    IconButton {
+                        y: 4px;
+                        width: 22px;
+                        height: 22px;
+                        glyph: 14px;
+                        icon: Icons.stash;
+                        tip: @tr("git.stash-save");
+                        enabled: !Shell.git-clean;
+                        clicked => {
+                            Shell.act("git.stash");
+                        }
+                    }
+                }
+                if !Shell.git-clean: Field {
+                    height: 26px;
+                    text <=> Shell.git-stash-note;
+                    placeholder: @tr("git.stash-placeholder");
+                }
+                for stash in Shell.git-stashes: Rectangle {
+                    height: 26px;
+                    border-radius: 5px;
+                    background: stash-touch.has-hover ? Theme.hover : transparent;
+                    stash-touch := TouchArea { }
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        spacing: 4px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: stash.message;
+                            color: Theme.label;
+                            font-size: Theme.small;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: stash.when;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                        if stash-touch.has-hover: IconButton {
+                            width: 22px;
+                            height: 22px;
+                            glyph: 14px;
+                            icon: Icons.check;
+                            tip: @tr("git.apply");
+                            clicked => {
+                                Shell.git-stash("apply", stash.index);
+                            }
+                        }
+                        if stash-touch.has-hover: IconButton {
+                            width: 22px;
+                            height: 22px;
+                            glyph: 14px;
+                            icon: Icons.pull;
+                            tip: @tr("git.pop");
+                            clicked => {
+                                Shell.git-stash("pop", stash.index);
+                            }
+                        }
+                        if stash-touch.has-hover: IconButton {
+                            width: 22px;
+                            height: 22px;
+                            glyph: 14px;
+                            icon: Icons.trash;
+                            tip: @tr("git.drop");
+                            clicked => {
+                                Shell.git-stash("drop", stash.index);
+                            }
+                        }
+                    }
+                }
+                if Shell.git-stashes.length == 0: Text {
+                    height: 22px;
+                    text: @tr("git.no-stashes");
+                    color: Theme.label-4;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// One row of the log: its slice of the graph, its labels, its subject, who
+// and when, and the hash.
+component LogRow inherits Rectangle {
+    in property <GitCommitRow> commit;
+    in property <length> graph-w;
+    height: 26px;
+    background: root.commit.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    opacity: root.commit.dim ? 0.35 : 1;
+    touch := TouchArea {
+        clicked => {
+            Shell.git-pick(root.commit.index);
+        }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                Shell.git-commit-menu(root.commit.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 8px;
+        spacing: 8px;
+        // The lines leaving the row above end in this one, and this row's
+        // leave it: each half drawn here, clipped to the row, so a filled
+        // row below covers nothing.
+        Rectangle {
+            width: root.graph-w;
+            clip: true;
+            for lane in root.commit.above: Path {
+                x: -0.75px;
+                y: -26px - 0.75px;
+                width: root.graph-w + 1.5px;
+                height: 52px + 1.5px;
+                viewbox-width: root.graph-w / 1px;
+                viewbox-height: 52;
+                fit: fill;
+                commands: lane.commands;
+                stroke: lane.color;
+                stroke-width: 1.5px;
+            }
+            for lane in root.commit.edges: Path {
+                x: -0.75px;
+                y: -0.75px;
+                width: root.graph-w + 1.5px;
+                height: 52px + 1.5px;
+                viewbox-width: root.graph-w / 1px;
+                viewbox-height: 52;
+                fit: fill;
+                commands: lane.commands;
+                stroke: lane.color;
+                stroke-width: 1.5px;
+            }
+            Rectangle {
+                x: root.commit.lane * 14px + 7px - 4.5px;
+                y: 13px - 4.5px;
+                width: 9px;
+                height: 9px;
+                border-radius: 4.5px;
+                background: root.commit.merge ? Theme.content : root.commit.dot;
+                border-width: 2px;
+                border-color: root.commit.dot;
+            }
+        }
+        for label in root.commit.labels: Rectangle {
+            y: 4px;
+            height: 18px;
+            width: label-text.preferred-width + 14px;
+            border-radius: 9px;
+            background: label.kind == 3 ? Theme.amber-fill : label.kind == 2 ? label.color.with-alpha(0.2) : label.color;
+            border-width: label.kind == 2 ? 1px : 0;
+            border-color: label.color;
+            label-text := Text {
+                text: label.text;
+                color: label.kind == 3 ? Theme.amber : label.kind == 2 ? Theme.label : #15130f;
+                font-family: Theme.mono;
+                font-size: Theme.caption;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        if root.commit.more > 0: Text {
+            text: "+" + root.commit.more;
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.commit.summary;
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            width: 120px;
+            text: root.commit.author;
+            color: Theme.label-2;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            width: 76px;
+            text: root.commit.when;
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+        Text {
+            width: 56px;
+            text: root.commit.short;
+            color: Theme.label-3;
+            font-family: Theme.mono;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The History page: the refs, the graph, and the commit opened below it.
+export component GitPage inherits Rectangle {
+    background: Theme.content;
+    init => {
+        Shell.act("git.shown");
+        keys.focus();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow) {
+                Shell.git-step(-1);
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                Shell.git-step(1);
+                return accept;
+            }
+            reject
+        }
+    }
+
+    if Shell.git-state != 1: Text {
+        x: 16px;
+        y: 16px;
+        width: parent.width - 32px;
+        text: Shell.git-state == 0 ? @tr("git.loading") : Shell.git-state == 2 ? @tr("git.init-hint") : Shell.git-problem;
+        color: Theme.label-3;
+        font-size: Theme.small;
+        wrap: word-wrap;
+    }
+
+    if Shell.git-state == 1: HorizontalLayout {
+        // Every ref.
+        VerticalLayout {
+            width: 220px;
+            padding: 6px;
+            spacing: 6px;
+            Field {
+                height: 26px;
+                placeholder: @tr("git.filter-refs");
+                edited(text) => {
+                    Shell.git-ref-filter(text);
+                }
+            }
+            ListView {
+                for ref in Shell.git-refs: Rectangle {
+                    height: ref.kind == 0 ? 26px : 22px;
+                    border-radius: 5px;
+                    background: ref.kind != 0 && ref-touch.has-hover ? Theme.hover : transparent;
+                    ref-touch := TouchArea {
+                        enabled: ref.kind != 0;
+                        clicked => {
+                            Shell.git-ref(ref.index, false);
+                        }
+                        double-clicked => {
+                            Shell.git-ref(ref.index, true);
+                        }
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                Shell.git-ref-menu(ref.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            }
+                        }
+                    }
+                    if ref.kind == 0: HorizontalLayout {
+                        padding-left: 4px;
+                        Caption {
+                            text: ref.label;
+                            vertical-alignment: bottom;
+                        }
+                        if ref.label == @tr("git.remotes"): IconButton {
+                            width: 22px;
+                            height: 22px;
+                            glyph: 13px;
+                            icon: Icons.plus;
+                            tip: @tr("git.add-remote");
+                            clicked => {
+                                Shell.act("git.remote");
+                            }
+                        }
+                    }
+                    if ref.kind != 0: HorizontalLayout {
+                        padding-left: ref.kind == 3 ? 22px : 8px;
+                        padding-right: 6px;
+                        spacing: 6px;
+                        Icon {
+                            y: (parent.height - self.height) / 2;
+                            path: ref.kind == 4 ? Icons.check : ref.kind == 2 ? Icons.fetch : Icons.branch;
+                            size: 13px;
+                            color: ref.current ? Theme.rust : ref.filtered ? Theme.slate : Theme.label-3;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: ref.label;
+                            color: ref.gone ? Theme.label-3 : Theme.label;
+                            font-size: Theme.small;
+                            font-weight: ref.current ? 700 : 400;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: ref.detail;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        VerticalLayout {
+            // The verbs, the filter in force and the search.
+            HorizontalLayout {
+                padding: 6px;
+                spacing: 4px;
+                IconButton {
+                    icon: Icons.branch;
+                    tip: @tr("git.head-reveal");
+                    clicked => {
+                        Shell.act("git.head");
+                    }
+                }
+                Text {
+                    text: Shell.git-head;
+                    color: Theme.label;
+                    font-size: Theme.small;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                IconButton {
+                    icon: Icons.fetch;
+                    tip: @tr("git.fetch");
+                    clicked => {
+                        Shell.act("git.fetch");
+                    }
+                }
+                IconButton {
+                    icon: Icons.pull;
+                    tip: Shell.git-pull-tip;
+                    tint: Shell.git-behind > 0 ? Theme.rust : Theme.label-2;
+                    clicked => {
+                        Shell.act("git.pull");
+                    }
+                }
+                IconButton {
+                    icon: Icons.push;
+                    tip: Shell.git-push-tip;
+                    tint: Shell.git-ahead > 0 ? Theme.rust : Theme.label-2;
+                    clicked => {
+                        Shell.act("git.push");
+                    }
+                }
+                IconButton {
+                    icon: Icons.plus;
+                    tip: @tr("git.new-branch");
+                    clicked => {
+                        Shell.act("git.branch");
+                    }
+                }
+                IconButton {
+                    icon: Icons.refresh;
+                    tip: @tr("git.refresh");
+                    clicked => {
+                        Shell.act("git.refresh");
+                    }
+                }
+                if Shell.git-filter != "": Rectangle {
+                    y: 2px;
+                    height: 24px;
+                    width: filter-row.preferred-width;
+                    border-radius: 12px;
+                    background: Theme.slate.with-alpha(0.18);
+                    filter-row := HorizontalLayout {
+                        padding-left: 10px;
+                        spacing: 2px;
+                        Text {
+                            text: Shell.git-filter;
+                            color: Theme.label;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                        IconButton {
+                            width: 24px;
+                            height: 24px;
+                            glyph: 12px;
+                            icon: Icons.close;
+                            tip: @tr("git.filter-clear");
+                            clicked => {
+                                Shell.act("git.filter-clear");
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: Shell.git-search-count;
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    vertical-alignment: center;
+                }
+                Field {
+                    width: 260px;
+                    placeholder: @tr("git.search-placeholder");
+                    edited(text) => {
+                        Shell.git-search(text);
+                    }
+                    accepted => {
+                        Shell.git-search-step(true);
+                    }
+                }
+                IconButton {
+                    icon: Icons.arrow-up;
+                    tip: "↑";
+                    clicked => {
+                        Shell.git-search-step(false);
+                    }
+                }
+                IconButton {
+                    icon: Icons.arrow-down;
+                    tip: "↓";
+                    clicked => {
+                        Shell.git-search-step(true);
+                    }
+                }
+            }
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+            ListView {
+                vertical-stretch: 3;
+                // The commit opened, brought into view when it was picked
+                // from somewhere other than its row.
+                property <int> reveal: Shell.git-reveal;
+                changed reveal => {
+                    if (Shell.git-selected >= 0) {
+                        self.content-y = min(0px, max(-(self.content-height - self.visible-height), -(Shell.git-selected * 26px - self.visible-height / 2 + 13px)));
+                    }
+                }
+                for row in Shell.git-log: LogRow {
+                    commit: row;
+                    graph-w: Shell.git-lanes * 14px;
+                }
+            }
+            if Shell.git-truncated: HorizontalLayout {
+                height: 30px;
+                alignment: center;
+                Button {
+                    y: 2px;
+                    height: 26px;
+                    text: @tr("git.show-more");
+                    clicked => {
+                        Shell.act("git.more");
+                    }
+                }
+            }
+            // The commit opened: its message and files beside the patch.
+            if Shell.git-detail-open: Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+            if Shell.git-detail-open: HorizontalLayout {
+                vertical-stretch: 2;
+                VerticalLayout {
+                    width: 38%;
+                    padding: 8px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        Text {
+                            horizontal-stretch: 1;
+                            text: Shell.git-detail-summary;
+                            color: Theme.label;
+                            font-size: Theme.body;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+                        IconButton {
+                            icon: Icons.close;
+                            tip: @tr("git.detail-hide");
+                            clicked => {
+                                Shell.act("git.detail-close");
+                            }
+                        }
+                    }
+                    Text {
+                        text: Shell.git-detail-meta;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        wrap: word-wrap;
+                    }
+                    if Shell.git-detail-body != "": Text {
+                        max-height: 90px;
+                        text: Shell.git-detail-body;
+                        color: Theme.label-2;
+                        font-size: Theme.small;
+                        wrap: word-wrap;
+                        overflow: elide;
+                    }
+                    ListView {
+                        for file in Shell.git-detail-files: Rectangle {
+                            height: 22px;
+                            border-radius: 5px;
+                            background: file.selected ? Theme.selection : file-touch.has-hover ? Theme.hover : transparent;
+                            file-touch := TouchArea {
+                                clicked => {
+                                    Shell.git-detail-file(file.index);
+                                }
+                                pointer-event(event) => {
+                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                        Shell.git-detail-file-menu(file.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 6px;
+                                Text {
+                                    width: 12px;
+                                    text: file.letter;
+                                    color: GitTone.of(file.tone);
+                                    font-family: Theme.mono;
+                                    font-size: Theme.small;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: file.path;
+                                    color: Theme.label;
+                                    font-size: Theme.small;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: file.added;
+                                    color: Theme.patina;
+                                    font-family: Theme.mono;
+                                    font-size: Theme.caption;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: file.removed;
+                                    color: Theme.crimson;
+                                    font-family: Theme.mono;
+                                    font-size: Theme.caption;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 1px;
+                    background: Theme.line;
+                }
+                VerticalLayout {
+                    HorizontalLayout {
+                        padding: 4px;
+                        alignment: end;
+                        Segments {
+                            labels: [@tr("git.unified"), @tr("git.split")];
+                            values: ["unified", "split"];
+                            value: Shell.git-split ? "split" : "unified";
+                            picked(value) => {
+                                if ((value == "split") != Shell.git-split) {
+                                    Shell.act("git.split");
+                                }
+                            }
+                        }
+                    }
+                    DiffView {
+                        rows: Shell.git-detail-rows;
+                        split: Shell.git-split;
+                        note: Shell.git-detail-note;
+                    }
+                }
+            }
+        }
+    }
+
+}
+
+// The Changes page: one working-tree file's diff.
+export component GitDiffPage inherits Rectangle {
+    background: Theme.content;
+    init => {
+        Shell.act("git.shown");
+    }
+    VerticalLayout {
+        HorizontalLayout {
+            padding: 6px;
+            spacing: 6px;
+            Text {
+                horizontal-stretch: 1;
+                text: Shell.git-diff-title;
+                color: Theme.label;
+                font-size: Theme.small;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Segments {
+                labels: [@tr("git.unified"), @tr("git.split")];
+                values: ["unified", "split"];
+                value: Shell.git-split ? "split" : "unified";
+                picked(value) => {
+                    if ((value == "split") != Shell.git-split) {
+                        Shell.act("git.split");
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        DiffView {
+            rows: Shell.git-diff-rows;
+            split: Shell.git-split;
+            note: Shell.git-diff-note;
+        }
+    }
+}
+
+// The name field: a new branch, a rename, a tag, a remote.
+export component GitPrompt inherits Rectangle {
+    width: 400px;
+    height: column.preferred-height;
+    border-radius: 10px;
+    background: Theme.overlay;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: #00000055;
+    column := VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        Text {
+            text: Shell.git-prompt-title;
+            color: Theme.label;
+            font-size: Theme.body;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+        value := Field {
+            text <=> Shell.git-prompt-value;
+            mono: true;
+            placeholder: Shell.git-prompt-has-url ? @tr("git.remote-name-placeholder") : "";
+            trouble: Shell.git-prompt-problem != "";
+            edited => {
+                Shell.git-prompt-edited();
+            }
+            accepted => {
+                if (Shell.git-prompt-ok) {
+                    Shell.git-prompt-done(true);
+                }
+            }
+            init => {
+                self.focus-all();
+            }
+        }
+        if Shell.git-prompt-has-url: Field {
+            text <=> Shell.git-prompt-url;
+            mono: true;
+            placeholder: @tr("git.remote-url-placeholder");
+            edited => {
+                Shell.git-prompt-edited();
+            }
+            accepted => {
+                if (Shell.git-prompt-ok) {
+                    Shell.git-prompt-done(true);
+                }
+            }
+        }
+        if Shell.git-prompt-problem != "": Text {
+            text: Shell.git-prompt-problem;
+            color: Theme.crimson;
+            font-size: Theme.caption;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button {
+                text: @tr("git.cancel");
+                clicked => {
+                    Shell.git-prompt-done(false);
+                }
+            }
+            Button {
+                text: @tr("git.prompt-ok");
+                primary: true;
+                enabled: Shell.git-prompt-ok;
+                clicked => {
+                    Shell.git-prompt-done(true);
+                }
+            }
+        }
+    }
+}

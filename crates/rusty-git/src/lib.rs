@@ -15,9 +15,11 @@
 
 pub mod diff;
 pub mod graph;
+pub mod log;
 pub mod model;
 #[cfg(feature = "backend")]
 pub(crate) mod parse;
+pub mod plan;
 #[cfg(feature = "backend")]
 pub mod repo;
 pub mod url;
