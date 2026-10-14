@@ -288,6 +288,52 @@ export struct LabParam {
     text: string,
 }
 
+export struct CodeSpan {
+    text: string,
+    kind: int,
+}
+
+export struct CodeLine {
+    spans: [CodeSpan],
+}
+
+export struct MdCell {
+    text: styled-text,
+    header: bool,
+}
+
+export struct MdRow {
+    cells: [MdCell],
+}
+
+// A block: 0 text (a paragraph, or a list item with its marker and depth),
+// 1 a heading of `level`, 2 code (`marker` its language), 3 a rule, 4 a
+// table.
+export struct MdBlock {
+    kind: int,
+    text: styled-text,
+    level: int,
+    quote: int,
+    depth: int,
+    marker: string,
+    lines: [CodeLine],
+    rows: [MdRow],
+}
+
+// A line of the assistant's transcript: 0 a question (with what was
+// attached), 1 an answer's blocks, 2 reasoning (unfolded when `open`), 3 a
+// tool call (state 0 running, 1 done, 2 failed; `attached` its input), 4 a
+// note under the answer.
+export struct AiEntry {
+    kind: int,
+    index: int,
+    text: string,
+    attached: string,
+    blocks: [MdBlock],
+    state: int,
+    open: bool,
+}
+
 // A figure about the workspace.
 export struct CrateVital {
     label: string,
@@ -806,6 +852,36 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // The assistant.
+    in property <bool> ai-ready;
+    in property <string> ai-title;
+    in property <[AiEntry]> ai-entries;
+    in property <bool> ai-running;
+    in property <string> ai-spend;
+    in property <string> ai-spend-tip;
+    in property <string> ai-attach;
+    in property <bool> ai-detached;
+    in property <int> ai-tick;
+    in-out property <string> ai-draft;
+    callback ai-fold(int);
+    // Settings ▸ Assistant.
+    in property <string> ai-current;
+    in property <[string]> ai-presets;
+    in-out property <string> ai-profile;
+    in-out property <int> ai-kind;
+    in-out property <string> ai-base-url;
+    in-out property <string> ai-model;
+    in-out property <string> ai-max-tokens;
+    in-out property <string> ai-key;
+    in property <bool> ai-key-stored;
+    in property <[string]> ai-models;
+    in property <string> ai-check;
+    in property <bool> ai-check-ok;
+    callback ai-preset(int);
+    callback ai-pick-model(string);
+    // A link clicked on a page.
+    callback open-link(string);
 
     // The Crates page.
     in property <int> crates-state;

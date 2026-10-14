@@ -313,7 +313,7 @@ fn piece(text: String, x: f32, token: Token) -> Piece {
 }
 
 /// A token's kind as `Theme.token` numbers it.
-fn kind(token: Token) -> i32 {
+pub(crate) fn kind(token: Token) -> i32 {
     match token {
         Token::Plain => 0,
         Token::Keyword => 1,

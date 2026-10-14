@@ -1,0 +1,473 @@
+// The assistant: the right dock's conversation, and its model in Settings.
+// Filled by `src/app/assistant.rs`.
+
+import { ScrollView, TextEdit, ComboBox, LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { Shell } from "shell.slint";
+import { Button, Caption, Field, IconButton, Segments } from "widgets.slint";
+import { MarkdownView } from "markdown.slint";
+
+export component AssistantPanel inherits Rectangle {
+    init => {
+        Shell.act("ai.shown");
+    }
+
+    if !Shell.ai-ready: VerticalLayout {
+        padding: 16px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: @tr("assistant.no-model-title");
+            color: Theme.label;
+            font-size: Theme.body;
+            font-weight: 600;
+        }
+        Text {
+            text: @tr("assistant.no-model-detail");
+            color: Theme.label-2;
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: @tr("assistant.open-settings");
+                primary: true;
+                clicked => {
+                    Shell.act("ai.settings");
+                }
+            }
+        }
+    }
+
+    if Shell.ai-ready: VerticalLayout {
+        // The model, and the two verbs on the conversation.
+        HorizontalLayout {
+            padding: 6px;
+            padding-left: 10px;
+            spacing: 2px;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: Icons.assistant;
+                size: 14px;
+                color: Theme.rust;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: " " + Shell.ai-title;
+                color: Theme.label-2;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            IconButton {
+                icon: Icons.trash;
+                tip: @tr("assistant.clear");
+                enabled: !Shell.ai-running && Shell.ai-entries.length > 0;
+                clicked => {
+                    Shell.act("ai.clear");
+                }
+            }
+            IconButton {
+                icon: Icons.settings;
+                tip: @tr("assistant.open-settings");
+                clicked => {
+                    Shell.act("ai.settings");
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        transcript := ScrollView {
+            vertical-stretch: 1;
+            // A new word arrived: follow it, unless the reader has scrolled up.
+            property <int> tick: Shell.ai-tick;
+            property <bool> following: true;
+            changed tick => {
+                if (self.following) {
+                    self.content-y = min(0px, self.visible-height - self.content-height);
+                }
+            }
+            scrolled => {
+                self.following = self.content-y <= self.visible-height - self.content-height + 24px;
+            }
+            VerticalLayout {
+                padding: 12px;
+                spacing: 12px;
+                alignment: start;
+                if Shell.ai-entries.length == 0: Text {
+                    text: @tr("assistant.empty");
+                    color: Theme.label-3;
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                }
+                for entry in Shell.ai-entries: VerticalLayout {
+                    // The question.
+                    if entry.kind == 0: Rectangle {
+                        border-radius: 8px;
+                        background: Theme.raised;
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 6px;
+                            Text {
+                                text: entry.text;
+                                color: Theme.label;
+                                font-size: Theme.small;
+                                wrap: word-wrap;
+                            }
+                            if entry.attached != "": Text {
+                                text: entry.attached;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    // The answer.
+                    if entry.kind == 1: MarkdownView {
+                        blocks: entry.blocks;
+                    }
+                    // What the model thought, folded.
+                    if entry.kind == 2: VerticalLayout {
+                        spacing: 4px;
+                        Rectangle {
+                            height: 22px;
+                            TouchArea {
+                                clicked => {
+                                    if (entry.index >= 0) {
+                                        Shell.ai-fold(entry.index);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 4px;
+                                Icon {
+                                    y: (parent.height - self.height) / 2;
+                                    path: entry.open ? Icons.chevron : Icons.chevron-right;
+                                    size: 12px;
+                                    color: Theme.label-3;
+                                }
+                                Text {
+                                    text: @tr("assistant.reasoning");
+                                    color: Theme.label-3;
+                                    font-size: Theme.caption;
+                                    font-italic: true;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        if entry.open: Text {
+                            text: entry.text;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            wrap: word-wrap;
+                        }
+                    }
+                    // A tool the loop called.
+                    if entry.kind == 3: HorizontalLayout {
+                        spacing: 6px;
+                        Icon {
+                            y: 2px;
+                            path: entry.state == 1 ? Icons.check : entry.state == 2 ? Icons.close : Icons.refresh;
+                            size: 12px;
+                            color: entry.state == 1 ? Theme.patina : entry.state == 2 ? Theme.crimson : Theme.amber;
+                        }
+                        Text {
+                            text: entry.text + (entry.state == 2 ? @tr("assistant.tool-failed") : "");
+                            color: Theme.label-2;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: entry.attached;
+                            color: Theme.label-4;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                            overflow: elide;
+                        }
+                    }
+                    // Something said about the answer: cut short, or failed.
+                    if entry.kind == 4: Text {
+                        text: entry.text;
+                        color: entry.state == 2 ? Theme.crimson : Theme.amber;
+                        font-size: Theme.caption;
+                        wrap: word-wrap;
+                    }
+                }
+                if Shell.ai-running: Text {
+                    text: @tr("assistant.thinking") + "…";
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    font-italic: true;
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        // The composer: what goes with the question, the question, the cost.
+        VerticalLayout {
+            padding: 8px;
+            spacing: 6px;
+            if Shell.ai-attach != "": HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                Rectangle {
+                    height: 22px;
+                    width: chip.preferred-width + 8px;
+                    border-radius: 11px;
+                    background: Shell.ai-detached ? transparent : Theme.selection;
+                    border-width: 1px;
+                    border-color: Shell.ai-detached ? Theme.line : Theme.rust;
+                    chip-touch := TouchArea {
+                        clicked => {
+                            Shell.act("ai.attach");
+                        }
+                    }
+                    chip := HorizontalLayout {
+                        padding-left: 8px;
+                        spacing: 4px;
+                        Text {
+                            text: Shell.ai-attach;
+                            color: Shell.ai-detached ? Theme.label-4 : Theme.label;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Icon {
+                            y: (parent.height - self.height) / 2;
+                            path: Shell.ai-detached ? Icons.plus : Icons.close;
+                            size: 11px;
+                            color: Theme.label-3;
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                composer := TextEdit {
+                    height: 72px;
+                    text <=> Shell.ai-draft;
+                    placeholder-text: @tr("assistant.ask-placeholder");
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                    key-pressed(event) => {
+                        if (event.text == Key.Return && !event.modifiers.shift) {
+                            Shell.act("ai.ask");
+                            return accept;
+                        }
+                        reject
+                    }
+                }
+                VerticalLayout {
+                    alignment: end;
+                    IconButton {
+                        icon: Shell.ai-running ? Icons.stop : Icons.play;
+                        tip: Shell.ai-running ? @tr("assistant.stop") : @tr("assistant.ask");
+                        tint: Shell.ai-running ? Theme.crimson : Theme.rust;
+                        clicked => {
+                            Shell.act(Shell.ai-running ? "ai.stop" : "ai.ask");
+                        }
+                    }
+                }
+            }
+            if Shell.ai-spend != "": Text {
+                text: Shell.ai-spend;
+                color: Theme.label-4;
+                font-size: Theme.caption;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+// Settings ▸ Assistant: which endpoint and model, the key, a check.
+export component AssistantSettings inherits VerticalLayout {
+    spacing: 10px;
+    Text {
+        text: Shell.ai-current;
+        color: Theme.label-2;
+        font-size: Theme.small;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            width: 120px;
+            text: @tr("settings.assistant.preset");
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        ComboBox {
+            horizontal-stretch: 1;
+            model: Shell.ai-presets;
+            selected(value) => {
+                Shell.ai-preset(self.current-index);
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            width: 120px;
+            text: @tr("settings.assistant.base-url");
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        Field {
+            horizontal-stretch: 1;
+            mono: true;
+            text <=> Shell.ai-base-url;
+        }
+        Segments {
+            labels: ["OpenAI", "Anthropic"];
+            values: ["0", "1"];
+            value: Shell.ai-kind == 1 ? "1" : "0";
+            picked(value) => {
+                Shell.ai-kind = value == "1" ? 1 : 0;
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            width: 120px;
+            text: @tr("settings.assistant.model-name");
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        Field {
+            horizontal-stretch: 1;
+            mono: true;
+            text <=> Shell.ai-model;
+        }
+        Button {
+            text: @tr("settings.assistant.list-models");
+            clicked => {
+                Shell.act("ai.list-models");
+            }
+        }
+    }
+    if Shell.ai-models.length > 0: HorizontalLayout {
+        padding-left: 130px;
+        spacing: 10px;
+        ComboBox {
+            horizontal-stretch: 1;
+            model: Shell.ai-models;
+            selected(value) => {
+                Shell.ai-pick-model(value);
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            width: 120px;
+            text: @tr("settings.assistant.max-tokens");
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        Field {
+            width: 140px;
+            mono: true;
+            text <=> Shell.ai-max-tokens;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: @tr("settings.assistant.max-tokens-detail");
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            wrap: word-wrap;
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            width: 120px;
+            text: @tr("settings.assistant.profile");
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        Field {
+            horizontal-stretch: 1;
+            text <=> Shell.ai-profile;
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            width: 120px;
+            text: @tr("settings.assistant.key");
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        LineEdit {
+            horizontal-stretch: 1;
+            input-type: password;
+            text <=> Shell.ai-key;
+            placeholder-text: @tr("settings.assistant.key-placeholder");
+        }
+        Button {
+            text: @tr("settings.assistant.save-key");
+            enabled: Shell.ai-key != "";
+            clicked => {
+                Shell.act("ai.save-key");
+            }
+        }
+        Text {
+            text: Shell.ai-key-stored ? @tr("settings.assistant.stored") : @tr("settings.assistant.none-saved");
+            color: Shell.ai-key-stored ? Theme.patina : Theme.label-3;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+        if Shell.ai-key-stored: Button {
+            text: @tr("settings.assistant.remove");
+            clicked => {
+                Shell.act("ai.remove-key");
+            }
+        }
+    }
+    Text {
+        text: @tr("settings.assistant.key-note");
+        color: Theme.label-3;
+        font-size: Theme.caption;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        Button {
+            text: @tr("settings.assistant.save");
+            primary: true;
+            clicked => {
+                Shell.act("ai.save");
+            }
+        }
+        Button {
+            text: @tr("settings.assistant.test");
+            clicked => {
+                Shell.act("ai.check");
+            }
+        }
+        Text {
+            text: Shell.ai-check;
+            color: Shell.ai-check-ok ? Theme.patina : Theme.crimson;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}

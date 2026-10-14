@@ -1963,6 +1963,7 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+ai-too-long = "The assistant did not finish within {minutes} minutes and was stopped."
 crates-members = "Workspace crates"
 crates-resolved = "Dependencies"
 crates-resolved-hint = "{direct} direct, {transitive} pulled in by them"

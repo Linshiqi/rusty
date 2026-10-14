@@ -20,6 +20,7 @@ use rusty_i18n::{Locale, t};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 
 mod activity;
+mod assistant;
 mod board;
 mod build;
 mod crates;
@@ -33,6 +34,7 @@ mod git;
 mod git_view;
 mod lab;
 mod lab_words;
+mod markdown_view;
 mod memory;
 mod menu;
 mod navigate;
@@ -156,11 +158,15 @@ struct State {
     menu: Option<&'static str>,
     memory: memory::Memory,
     crates: crates::Crates,
+    assistant: assistant::Assistant,
     term: terminal::Term,
 }
 
 pub struct App {
     window: slint::Weak<AppWindow>,
+    /// The grammars, which the editor paints with and a page's code blocks
+    /// are painted with too.
+    files: Arc<rusty_edit::Files>,
     editor: Rc<Surface>,
     state: RefCell<State>,
     keeper: Keeper,
@@ -204,12 +210,13 @@ impl App {
         let runner = Runner::new(output);
         let servers = Servers::new();
         let problems = Problems::default();
-        let editor = Surface::new(window, files, servers.clone(), problems.clone());
+        let editor = Surface::new(window, files.clone(), servers.clone(), problems.clone());
         let keeper = Keeper::start(backup::directory(), |reason| {
             work::deliver(reason, |app, reason| app.backup_failed(reason))
         });
         let app = Rc::new(App {
             window: window.as_weak(),
+            files,
             editor,
             keeper,
             backup_timers: RefCell::default(),
@@ -428,6 +435,10 @@ impl App {
         on!(on_disk_idle_set, |app, days| app.disk_idle(days));
         on!(on_disk_auto_set, |app, on| app.disk_auto(on));
         on!(on_copy_text, |_app, text| git::copy_text(&text));
+        on!(on_ai_fold, |app, at| app.ai_fold(at));
+        on!(on_ai_preset, |app, index| app.ai_preset(index));
+        on!(on_ai_pick_model, |app, model| app.ai_pick_model(&model));
+        on!(on_open_link, |_app, link| markdown_view::open_link(&link));
         on!(on_menu_dismissed, |app| app.menu_dismissed());
         let weak = Rc::downgrade(self);
         shell.on_term_key(move |event| {
@@ -646,6 +657,7 @@ impl App {
             other if other.starts_with("git.") => self.git_act(&other["git.".len()..]),
             other if other.starts_with("memory.") => self.memory_act(&other["memory.".len()..]),
             other if other.starts_with("crates.") => self.crates_act(&other["crates.".len()..]),
+            other if other.starts_with("ai.") => self.ai_act(&other["ai.".len()..]),
             "app.exit" => {
                 self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();

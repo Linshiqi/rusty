@@ -29,6 +29,7 @@ mod problems;
 
 pub use problems::is_problem;
 mod rows;
+pub(crate) use rows::kind as token_kind;
 
 use std::{
     cell::{Cell, RefCell},
@@ -422,6 +423,19 @@ impl Surface {
             col as u32,
             self.servers.draft(&d.text),
         ))
+    }
+
+    /// The document on screen as it goes with a question to the assistant:
+    /// its path, its draft — unsaved edits included — and the lines the
+    /// selection covers, counted from zero; the caret's line twice when
+    /// nothing is selected.
+    pub fn attachment(&self) -> Option<(String, String, (usize, usize))> {
+        let doc = self.doc()?;
+        let d = doc.borrow();
+        let cursor = d.primary();
+        let (first, _) = d.lines.position(&d.text, cursor.anchor.min(cursor.head));
+        let (last, _) = d.lines.position(&d.text, cursor.anchor.max(cursor.head));
+        Some((d.path.clone(), d.text.clone(), (first, last)))
     }
 
     /// The word the caret is in, for a rename to start from.

@@ -7631,8 +7631,10 @@ dependencies = [
  "arboard",
  "image",
  "jiff",
+ "pulldown-cmark",
  "regex",
  "rfd",
+ "rusty-ai",
  "rusty-core",
  "rusty-dbg",
  "rusty-edit",
@@ -7645,6 +7647,7 @@ dependencies = [
  "slint-build",
  "sys-locale",
  "tempfile",
+ "tokio",
  "toml 1.1.4+spec-1.1.0",
  "unicode-width",
 ]

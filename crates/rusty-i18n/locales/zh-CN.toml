@@ -1887,6 +1887,7 @@ yaw = "偏航"
 instrument = "机头高于地平线 {nose} · 右翼下沉 {bank} · 航向 {heading}"
 
 [desk]
+ai-too-long = "助手在 {minutes} 分钟内没有答完，已停止。"
 crates-members = "工作区 crate"
 crates-resolved = "依赖"
 crates-resolved-hint = "{direct} 个直接依赖，其余 {transitive} 个由它们引入"
