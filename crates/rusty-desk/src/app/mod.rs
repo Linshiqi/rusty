@@ -28,6 +28,7 @@ mod environment;
 mod navigate;
 mod part;
 mod playground;
+mod plot;
 mod saving;
 mod servers;
 mod sim;
@@ -148,6 +149,8 @@ pub struct App {
     /// The board beside the code; apart from `state`, since the protocol
     /// reader holds `state` while it tells the board the pins moved.
     board: RefCell<board::Board>,
+    /// A Plot redraw is on its way.
+    plot_due: Cell<bool>,
     /// When the window started: the activity view's clock counts from it.
     started: std::time::Instant,
     /// Ticks while something runs, so the view's clock moves.
@@ -181,6 +184,7 @@ impl App {
             noted: RefCell::default(),
             runner,
             board: RefCell::default(),
+            plot_due: Cell::new(false),
             started: std::time::Instant::now(),
             clock: slint::Timer::default(),
             state: RefCell::new(State {
@@ -327,6 +331,8 @@ impl App {
         on!(on_output_click, |app, index| app
             .output_click(index as usize));
         on!(on_output_send, |app, text| app.output_send(&text));
+        on!(on_plot_solo, |app, name| app.plot_solo(&name));
+        on!(on_plot_set, |app, name, value| app.plot_set(&name, value));
         on!(on_board_press, |app, index, down| app
             .board_press(index as usize, down));
         on!(on_wiz_go, |app, step| app.wizard_go(step));
@@ -1126,12 +1132,20 @@ impl App {
                 Glyph::Monitor => icons.get_monitor(),
                 Glyph::Board => icons.get_board(),
                 Glyph::Assistant => icons.get_assistant(),
+                Glyph::Plot => icons.get_plot(),
             }
         };
+        let state = self.state.borrow();
+        let has_content = |id: &str| match id {
+            "plot" => !state.sim.plot.channels.is_empty() || !state.sim.params.is_empty(),
+            _ => true,
+        };
         let panels = |dock: Dock| -> ModelRc<PanelTab> {
+            let front = dock.front(&state.layout);
             let tabs: Vec<PanelTab> = dock
                 .panels()
                 .iter()
+                .filter(|(id, ..)| crate::docks::listed(id, has_content, front))
                 .map(|(id, title, glyph)| PanelTab {
                     id: (*id).into(),
                     title: rusty_i18n::lookup(title).into(),
@@ -1140,7 +1154,6 @@ impl App {
                 .collect();
             ModelRc::new(VecModel::from(tabs))
         };
-        let state = self.state.borrow();
         let layout = &state.layout;
         shell.set_left_open(layout.left.open);
         shell.set_left_size(layout.left.size);

@@ -37,6 +37,7 @@ impl Dock {
                 ("output", "dock.tab.output", Glyph::Output),
                 ("problems", "dock.tab.problems", Glyph::Warn),
                 ("terminal", "dock.tab.terminal", Glyph::Monitor),
+                ("plot", "dock.tab.plot", Glyph::Plot),
             ],
             Dock::Right => &[
                 ("board", "desk.board", Glyph::Board),
@@ -85,6 +86,17 @@ pub enum Glyph {
     Monitor,
     Board,
     Assistant,
+    Plot,
+}
+
+/// Whether a panel is on its dock's strip: the pinned ones always, the
+/// ones a run brings once there is something in them — or while they are
+/// in front, so a panel somebody is reading does not vanish under them.
+pub fn listed(id: &str, has_content: impl Fn(&str) -> bool, front: &str) -> bool {
+    match id {
+        "plot" => has_content(id) || front == id,
+        _ => true,
+    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ import { IconButton, RowButton, Caption, Field } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
 import { Shell, PanelTab, TreeRow, ProblemRow } from "shell.slint";
 import { BoardPanel } from "board.slint";
+import { PlotPanel } from "plot.slint";
 
 // The row of a dock's panels. A tab is its icon and, in front, its name.
 component DockHeader inherits Rectangle {
@@ -317,6 +318,7 @@ export component BottomDock inherits Rectangle {
         Rectangle {
             if Shell.bottom-front == "output": OutputPanel { }
             if Shell.bottom-front == "problems": ProblemsPanel { }
+            if Shell.bottom-front == "plot": PlotPanel { }
             if Shell.bottom-front == "terminal": NotYet {
                 name: @tr("dock.tab.terminal");
             }

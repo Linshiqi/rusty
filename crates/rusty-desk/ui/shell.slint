@@ -148,6 +148,27 @@ export struct BoardSwitch {
     index: int,
 }
 
+// A channel of the Plot panel: its curve in the chart's units, and the
+// legend's row.
+export struct PlotCurve {
+    name: string,
+    ink: color,
+    commands: string,
+    value: string,
+    swing: string,
+    shown: bool,
+}
+
+// A tunable the firmware announced, and the range it gave if it gave one.
+export struct PlotTunable {
+    name: string,
+    value: float,
+    text: string,
+    min: float,
+    max: float,
+    ranged: bool,
+}
+
 export struct Recent {
     name: string,
     path: string,
@@ -267,6 +288,14 @@ export global Shell {
     in property <[BoardSwitch]> board-switches;
     in property <string> board-caption;
     callback board-press(int, bool);
+
+    // The Plot panel.
+    in property <[PlotCurve]> plot-curves;
+    in property <[PlotTunable]> plot-tunables;
+    in property <string> plot-note;
+    in property <bool> plot-writable;
+    callback plot-solo(string);
+    callback plot-set(string, float);
 
     // What the window ran, line by line.
     in property <[OutputLine]> output;

@@ -320,6 +320,15 @@ tests green, and CLAUDE.md saying how it works.
    pointer, a drag pans, a double-click fits again. A press joins two
    GPIOs or drives one, as the sheet says — proven on the C3 playground,
    GPIO4 low while its button was held and high after.
+   Plot, in the bottom dock once a sample or a tunable arrives: the
+   firmware's channels over the last six hundred samples, each against its
+   own range with `rusty_embed::plot`'s floor (the store and `band` moved
+   there, the old window calling them now), a chip per channel under the
+   chart to show it alone; the tunables beside it, a slider only over a
+   range the firmware gave and a typed number where it gave none, and what
+   the firmware says it took shown. Proven on `examples/rate-loop`: ten
+   channels, four tunables, `roll_p` asked for 1.2 and shown as the 0.6 the
+   firmware clamped it to.
 7. **The rest of the workbench**: Git, project search, crates and features,
    disk and memory, the terminal, the assistant and its tools, Markdown
    pages.

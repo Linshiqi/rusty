@@ -3,42 +3,7 @@
 
 use super::*;
 
-/// Whose clock the trace timestamps are on.
-///
-/// Mixing the two silently is how a waveform lies, so the panel shows which
-/// one it got. Firmware means `[rusty:gpio@µs]` stamps from the systimer;
-/// Host means the firmware sent none and arrival time stood in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TraceClock {
-    Firmware,
-    Host,
-}
-
-/// Named numeric channels over time — the analog half of the trace.
-///
-/// Kept per channel rather than as rows of samples because that is how it is
-/// drawn and how it arrives: firmware prints whichever channels it has this
-/// loop, and a channel that starts appearing halfway through a flight is
-/// normal, not a schema change.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Plot {
-    /// Channel name → its samples, `(µs, value)`, oldest first.
-    pub channels: Vec<(String, Vec<(u64, f32)>)>,
-    pub clock: Option<TraceClock>,
-    /// True once the cap started dropping the oldest samples.
-    pub truncated: bool,
-}
-
-impl Plot {
-    /// The samples for a channel, creating it on first sight.
-    pub fn channel(&mut self, name: &str) -> &mut Vec<(u64, f32)> {
-        if let Some(index) = self.channels.iter().position(|(known, _)| known == name) {
-            return &mut self.channels[index].1;
-        }
-        self.channels.push((name.to_string(), Vec::new()));
-        &mut self.channels.last_mut().expect("just pushed").1
-    }
-}
+pub use rusty_embed::plot::{Plot, TraceClock};
 
 /// A captured pin trace: time-ordered `(µs, pin, level)`.
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -184,6 +184,10 @@ impl App {
             Ended::Failed(code) => self.conclude(code.or(Some(1))),
             Ended::Refused => self.conclude(Some(1)),
         }
+        // Read the tree again: cargo makes `target/` before it writes the
+        // `CACHEDIR.TAG` that marks it a build directory, so a watcher that
+        // spoke in between listed it — and nothing inside it is watched.
+        self.reread_project();
         self.sync_problems();
         if ended != Ended::Done {
             then(self, false);

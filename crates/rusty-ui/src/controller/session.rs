@@ -427,39 +427,10 @@ fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
 /// how a plot lies about *when*, which for a control loop is the only thing
 /// it is being read for.
 fn record_plot(state: AppState, sample: rusty_embed::protocol::Telemetry) {
-    /// Samples kept per channel. A 1 kHz loop fills this in twenty seconds,
-    /// which is the window a tuning change is judged in; older than that and
-    /// you re-run rather than scroll back.
-    const CAP: usize = 20_000;
-
-    state.sim.plot.update(|plot| {
-        let clock = *plot.clock.get_or_insert(if sample.at_us.is_some() {
-            TraceClock::Firmware
-        } else {
-            TraceClock::Host
-        });
-        let at = match (clock, sample.at_us) {
-            (TraceClock::Firmware, Some(us)) => us,
-            (TraceClock::Firmware, None) => plot
-                .channels
-                .iter()
-                .filter_map(|(_, points)| points.last().map(|(t, _)| *t))
-                .max()
-                .unwrap_or(0),
-            (TraceClock::Host, _) => host_now_us(),
-        };
-        let mut dropped = false;
-        for (name, value) in sample.channels {
-            let points = plot.channel(&name);
-            points.push((at, value));
-            if points.len() > CAP {
-                let over = points.len() - CAP;
-                points.drain(..over);
-                dropped = true;
-            }
-        }
-        plot.truncated |= dropped;
-    });
+    state
+        .sim
+        .plot
+        .update(|plot| plot.record(sample, host_now_us()));
 }
 
 /// Set a tunable on the running firmware, over the serial line it is already

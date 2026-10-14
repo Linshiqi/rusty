@@ -57,6 +57,9 @@ pub mod buildlog;
 // The board sheet drawn and edited — the parts' art, the geometry, the
 // layout. Pure: both windows draw the same board from it.
 pub mod board;
+// Named channels over time and the range each is drawn against: the Plot
+// panel's arithmetic. Pure.
+pub mod plot;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,

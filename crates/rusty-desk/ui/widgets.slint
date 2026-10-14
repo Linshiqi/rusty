@@ -204,6 +204,7 @@ export component Field inherits Rectangle {
     in property <string> placeholder;
     in property <bool> trouble;
     in property <bool> mono;
+    in property <bool> enabled: true;
     in-out property <string> text;
     callback edited(string);
     callback accepted(string);
@@ -239,6 +240,7 @@ export component Field inherits Rectangle {
         font-family: root.mono ? Theme.mono : "";
         vertical-alignment: center;
         single-line: true;
+        enabled: root.enabled;
         edited => {
             root.edited(self.text);
         }

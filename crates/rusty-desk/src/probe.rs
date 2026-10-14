@@ -61,6 +61,7 @@ pub fn start(window: &AppWindow) {
     let build = std::env::var_os("RUSTY_PROBE_BUILD").is_some();
     let targets = std::env::var_os("RUSTY_PROBE_TARGETS").is_some();
     let sim = std::env::var_os("RUSTY_PROBE_SIM").is_some();
+    let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
     let before: Rc<RefCell<Option<String>>> = Rc::default();
@@ -96,15 +97,16 @@ pub fn start(window: &AppWindow) {
         if (30..=40).contains(&n) && shell.get_active_kind() != "file" {
             return;
         }
-        // The emulator has spoken once the board's wires have levels — or,
-        // on a board with none, once the firmware's own words are in the
-        // dock after the boot.
-        if sim
-            && n == 502
-            && shell.get_notes().row_count() == 0
-            && !shell.get_board_wires().iter().any(|wire| wire.tone != 0)
-        {
-            return;
+        // The firmware is running once it or the emulator has reported a
+        // pin or a sample — a wire on a rail has a level from the start, so
+        // the board's colours prove nothing; a run that failed ends the wait.
+        let app_heard_from_firmware = || work::app().sim_heard();
+        if sim && n == 502 && shell.get_activity_state() != 3 && !app_heard_from_firmware() {
+            // Two minutes at most, then on regardless, to say what is there.
+            waited.set(waited.get() + 1);
+            if waited.get() < 3000 {
+                return;
+            }
         }
         // The list is up once the scan has answered.
         if targets && (n == 402 || n == 412) && !shell.get_picker_open() {
@@ -172,7 +174,39 @@ pub fn start(window: &AppWindow) {
                     shell.invoke_board_press(cap.index, false);
                 }
             }
+            // What the firmware plots and lets be tuned, and one tunable set.
+            574 if sim => {
+                shell.invoke_show_panel("bottom".into(), "plot".into());
+                if let Some(tunable) = shell.get_plot_tunables().iter().next() {
+                    let asked = if tunable.ranged { tunable.max * 2.0 } else { tunable.value + 1.0 };
+                    eprintln!("sim: setting {} to {asked}", tunable.name);
+                    shell.invoke_plot_set(tunable.name, asked);
+                }
+            }
             578 if sim => {
+                let output = shell.get_output();
+                eprintln!(
+                    "sim: waited {} ticks; the dock ends {:#?}",
+                    waited.get(),
+                    output
+                        .iter()
+                        .skip(output.row_count().saturating_sub(6))
+                        .map(|line| line.text.to_string())
+                        .collect::<Vec<_>>()
+                );
+                eprintln!(
+                    "sim: plot {:?}; tunables {:?}",
+                    shell
+                        .get_plot_curves()
+                        .iter()
+                        .map(|c| format!("{} {} {}", c.name, c.value, c.swing))
+                        .collect::<Vec<_>>(),
+                    shell
+                        .get_plot_tunables()
+                        .iter()
+                        .map(|t| format!("{}={} {}..{}", t.name, t.text, t.min, t.max))
+                        .collect::<Vec<_>>()
+                );
                 snapshot(&window, &dir.join("simulating.png"));
                 eprintln!("sim: {:?}; {}", shell.get_activity(), app.sim_report());
                 eprintln!(
@@ -512,7 +546,8 @@ pub fn start(window: &AppWindow) {
             // What the language server found: waited for, up to a minute,
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
-            252..=1750 => {
+            // Only in the ordinary run: a probe of its own owns these numbers.
+            252..=1750 if !(build || targets || sim) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

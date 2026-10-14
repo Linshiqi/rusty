@@ -1,0 +1,178 @@
+// The Plot panel: the firmware's channels drawn over the window a tuning
+// change is judged in, each against its own range; beside them which is
+// which, and the tunables the firmware announced. Filled by
+// `src/app/plot.rs`.
+
+import { ScrollView, Slider } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Caption, Field, RowButton } from "widgets.slint";
+import { Shell } from "shell.slint";
+
+export component PlotPanel inherits Rectangle {
+    HorizontalLayout {
+        // The curves, or what to print to have some.
+        VerticalLayout {
+            horizontal-stretch: 1;
+            padding: 10px;
+            spacing: 6px;
+            if Shell.plot-curves.length == 0: VerticalLayout {
+                alignment: start;
+                spacing: 8px;
+                Text {
+                    text: @tr("plot.empty");
+                    color: Theme.label-2;
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    border-radius: 6px;
+                    background: Theme.sunken;
+                    height: sample.preferred-height + 16px;
+                    sample := Text {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        text: "println!(\"[rusty:tel@{}] gyro_x={},pid_p={}\", now_us, gyro_x, p);\nprintln!(\"[rusty:param] pid_roll_p={} 0..50\", gain);";
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        font-family: Theme.mono;
+                        wrap: word-wrap;
+                    }
+                }
+                Text {
+                    text: @tr("plot.empty-note");
+                    color: Theme.label-3;
+                    font-size: Theme.caption;
+                    wrap: word-wrap;
+                }
+            }
+            if Shell.plot-curves.length > 0: Rectangle {
+                vertical-stretch: 1;
+                border-radius: 6px;
+                background: Theme.sunken;
+                clip: true;
+                for curve in Shell.plot-curves: Path {
+                    width: parent.width;
+                    height: parent.height;
+                    viewbox-width: 1000;
+                    viewbox-height: 220;
+                    fit: fill;
+                    commands: curve.commands;
+                    fill: transparent;
+                    stroke: curve.ink;
+                    stroke-width: 1.5px;
+                    stroke-line-join: round;
+                }
+            }
+            // Which curve is which, what it reads now and how far it swings,
+            // in one row under the chart; a chip shows its curve alone, and
+            // again shows them all.
+            if Shell.plot-curves.length > 0: ScrollView {
+                height: 28px;
+                content-width: chips.preferred-width;
+                content-height: 28px;
+                chips := HorizontalLayout {
+                    spacing: 4px;
+                    for curve in Shell.plot-curves: RowButton {
+                        height: 26px;
+                        clicked => {
+                            Shell.plot-solo(curve.name);
+                        }
+                        HorizontalLayout {
+                            padding-left: 7px;
+                            padding-right: 7px;
+                            spacing: 6px;
+                            opacity: curve.shown ? 1 : 0.4;
+                            Rectangle {
+                                y: (parent.height - self.height) / 2;
+                                width: 10px;
+                                height: 3px;
+                                border-radius: 1.5px;
+                                background: curve.ink;
+                            }
+                            Text {
+                                text: curve.name;
+                                color: Theme.label;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: curve.value + " " + curve.swing;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+            if Shell.plot-note != "": Text {
+                text: Shell.plot-note;
+                color: Theme.label-4;
+                font-size: Theme.caption;
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        // The tunables: a slider over the range the firmware gave, or the
+        // number typed where it gave none; what the firmware took is what
+        // is shown.
+        Rectangle {
+            width: 240px;
+            ScrollView {
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+                    alignment: start;
+                    Caption {
+                        text: @tr("plot.tunables");
+                    }
+                    if Shell.plot-tunables.length == 0: Text {
+                        text: @tr("plot.tunables-empty-lead") + "[rusty:param] kp=2 0..20" + @tr("plot.tunables-empty-tail");
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        wrap: word-wrap;
+                    }
+                    for tunable in Shell.plot-tunables: VerticalLayout {
+                        spacing: 2px;
+                        HorizontalLayout {
+                            Text {
+                                text: tunable.name;
+                                color: Theme.label;
+                                font-size: Theme.small;
+                                font-family: Theme.mono;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: tunable.text;
+                                color: Theme.rust;
+                                font-size: Theme.small;
+                                font-family: Theme.mono;
+                            }
+                        }
+                        if tunable.ranged: Slider {
+                            minimum: tunable.min;
+                            maximum: tunable.max;
+                            value: tunable.value;
+                            enabled: Shell.plot-writable;
+                            released(value) => {
+                                Shell.plot-set(tunable.name, value);
+                            }
+                        }
+                        if !tunable.ranged: Field {
+                            mono: true;
+                            text: tunable.text;
+                            enabled: Shell.plot-writable;
+                            accepted(text) => {
+                                Shell.plot-set(tunable.name, text.to-float());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
