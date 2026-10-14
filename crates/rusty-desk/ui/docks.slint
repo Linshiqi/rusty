@@ -120,6 +120,41 @@ component ProjectTree inherits Rectangle {
     }
 }
 
+// What the window ran, as it printed it: the command first, errors in
+// red and warnings in amber. It follows the end while the end is in
+// view, and stays where it was put while somebody reads back.
+component OutputPanel inherits Rectangle {
+    property <int> count: Shell.output.length;
+    property <bool> follow: true;
+    changed count => {
+        if (self.follow) {
+            list.content-y = min(0px, list.visible-height - list.content-height);
+        }
+    }
+    if Shell.output.length == 0: Text {
+        text: @tr("desk.output-none");
+        color: Theme.label-3;
+        font-size: Theme.small;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    list := ListView {
+        scrolled => {
+            root.follow = self.content-y <= self.visible-height - self.content-height + 4px;
+        }
+        for line in Shell.output: Text {
+            height: 18px;
+            x: 10px;
+            text: line.text;
+            color: line.kind == 2 ? Theme.crimson : line.kind == 3 ? Theme.amber : line.kind == 4 ? Theme.patina : line.kind == 1 ? Theme.label-2 : Theme.label;
+            font-weight: line.kind == 1 ? 600 : 400;
+            font-family: Theme.mono;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+    }
+}
+
 // What the language servers found: each file, then its problems, worst
 // first. A click goes to the problem.
 component ProblemsPanel inherits Rectangle {
@@ -220,6 +255,23 @@ export component BottomDock inherits Rectangle {
                 panels: Shell.bottom-panels;
                 front: Shell.bottom-front;
             }
+            if Shell.bottom-front == "output" && Shell.running: IconButton {
+                y: 3px;
+                icon: Icons.stop;
+                tint: Theme.crimson;
+                tip: @tr("toolbar.stop");
+                clicked => {
+                    Shell.act("run.stop");
+                }
+            }
+            if Shell.bottom-front == "output": IconButton {
+                y: 3px;
+                icon: Icons.minus;
+                tip: @tr("desk.output-clear");
+                clicked => {
+                    Shell.act("output.clear");
+                }
+            }
             IconButton {
                 y: 3px;
                 icon: Icons.close;
@@ -237,9 +289,7 @@ export component BottomDock inherits Rectangle {
             background: Theme.line;
         }
         Rectangle {
-            if Shell.bottom-front == "output": NotYet {
-                name: @tr("dock.tab.output");
-            }
+            if Shell.bottom-front == "output": OutputPanel { }
             if Shell.bottom-front == "problems": ProblemsPanel { }
             if Shell.bottom-front == "terminal": NotYet {
                 name: @tr("dock.tab.terminal");

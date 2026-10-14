@@ -31,6 +31,7 @@ pub const ALL: &[Action] = &[
     action("project.clone", "menu.file.clone", None),
     action("settings.open", "desk.settings", Some("Ctrl+,")),
     action("welcome.open", "desk.welcome", None),
+    action("environment.open", "panel.toolchain", None),
     action("file.save", "desk.save", Some("Ctrl+S")),
     action("find.open", "desk.find-open", Some("Ctrl+F")),
     action("find.replace", "desk.find-replace-open", Some("Ctrl+H")),

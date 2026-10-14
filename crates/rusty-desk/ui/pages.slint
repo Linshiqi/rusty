@@ -7,6 +7,7 @@ import { Icons, Icon } from "icons.slint";
 import { Button, IconButton, RowButton, Caption } from "widgets.slint";
 import { Shell, DocTab } from "shell.slint";
 import { CodeView } from "editor.slint";
+import { EnvironmentPage } from "environment.slint";
 import { NotYet } from "docks.slint";
 
 component TabStrip inherits Rectangle {
@@ -351,7 +352,8 @@ export component EditorArea inherits Rectangle {
             }
             if Shell.active-kind == "welcome": Welcome { }
             if Shell.active-kind == "settings": SettingsPage { }
-            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "": NotYet {
+            if Shell.active-kind == "environment": EnvironmentPage { }
+            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "environment" && Shell.active-kind != "": NotYet {
                 name: Shell.active-title;
             }
             if Shell.active-kind == "": Welcome { }

@@ -201,6 +201,13 @@ impl App {
         let Some(row) = slint::Model::row_data(&rows, index) else {
             return;
         };
+        // The project's own problems have no file: their row says which.
+        if row.path.is_empty() {
+            if row.kind != 0 {
+                self.project_problem(row.line as usize);
+            }
+            return;
+        }
         let at = (row.kind != 0).then_some((row.line as usize, row.col as usize));
         self.open_file_at(row.path.to_string(), at);
     }
@@ -211,6 +218,42 @@ impl App {
         let problems = self.problems.borrow();
         let (mut errors, mut warnings) = (0, 0);
         let mut rows = Vec::new();
+        // What stands between the project and a build, first: no file, so
+        // a row's line is which of the project's problems it is.
+        let state = self.state.borrow();
+        if let Some(project) = state.project.as_ref()
+            && let Ok(found) = &project.embedded
+            && !found.problems.is_empty()
+        {
+            rows.push(ProblemRow {
+                kind: 0,
+                text: SharedString::from(t!("desk.problems-project")),
+                detail: project.name.as_str().into(),
+                path: SharedString::new(),
+                line: 0,
+                col: 0,
+                count: found.problems.len() as i32,
+            });
+            for (index, problem) in found.problems.iter().enumerate() {
+                let kind = super::part::level_of(problem.severity);
+                match kind {
+                    1 => errors += 1,
+                    2 => warnings += 1,
+                    _ => {}
+                }
+                let (title, detail) = super::part::problem_text(problem);
+                rows.push(ProblemRow {
+                    kind,
+                    text: title.into(),
+                    detail: detail.lines().next().unwrap_or_default().into(),
+                    path: SharedString::new(),
+                    line: index as i32,
+                    col: 0,
+                    count: 0,
+                });
+            }
+        }
+        drop(state);
         for (path, items) in problems.iter() {
             let mut shown: Vec<&FileDiagnostic> =
                 items.iter().filter(|d| editor::is_problem(d)).collect();

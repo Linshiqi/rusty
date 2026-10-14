@@ -15,6 +15,7 @@ mod lsp;
 mod picker;
 mod probe;
 mod project;
+mod run;
 mod work;
 mod zoom;
 
@@ -45,8 +46,11 @@ fn main() -> Result<(), slint::PlatformError> {
     zoom::apply(&window, saved.layout.zoom);
     window.invoke_focus_window();
 
-    if let Some(root) = root {
-        app.open_project(root, file.map(|file| file.replace('\\', "/")));
+    match root {
+        Some(root) => app.open_project(root, file.map(|file| file.replace('\\', "/"))),
+        // Without a project the machine is still worth asking about: a
+        // first run with no Rust says so before anybody opens anything.
+        None => app.act("environment.refresh"),
     }
     probe::start(&window);
     slint::run_event_loop()
