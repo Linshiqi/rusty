@@ -1,0 +1,332 @@
+// The Draw tab: what a program drew with `rusty-draw` — on the left the
+// scenes, every mark with its numbers and the angles between arrows that
+// share a tail; on the right the scene in a space turned by dragging,
+// zoomed by the wheel, and looked at from the named views. Filled by
+// `src/app/draw.rs`.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Shell } from "shell.slint";
+import { IconButton, RowButton } from "widgets.slint";
+
+// A word button in the view's corner.
+component Look inherits Rectangle {
+    in property <string> text;
+    in property <string> tip;
+    callback clicked;
+    height: 22px;
+    width: label.preferred-width + 14px;
+    border-radius: 5px;
+    background: touch.has-hover ? Theme.sunken : transparent;
+    label := Text {
+        text: root.text;
+        color: touch.has-hover ? Theme.label : Theme.label-2;
+        font-size: Theme.caption;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component DrawPanel inherits Rectangle {
+    // A drawn piece's colour, by the number the window gives it.
+    pure function ink(code: int, rgb: color) -> color {
+        return code == 3 ? Theme.line : code == 4 ? Theme.label-2 : code == 5 ? Theme.rust : code == 6 ? Theme.label-3 : code == 7 ? Theme.slate : code == 8 ? Theme.amber : code == 9 ? Theme.patina : rgb;
+    }
+
+    if Shell.draw-empty: VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: @tr("draw.empty");
+            color: Theme.label-2;
+            font-size: Theme.small;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            border-radius: 6px;
+            background: Theme.sunken;
+            height: sample.preferred-height + 16px;
+            sample := Text {
+                x: 10px;
+                width: parent.width - 20px;
+                text: "use rusty_draw::Scene;\n\nScene::new(\"cross product\")\n    .vector(\"a\", a)\n    .vector(\"b\", b)\n    .vector(\"a × b\", a.cross(b));";
+                color: Theme.label;
+                font-size: Theme.caption;
+                font-family: Theme.mono;
+            }
+        }
+        Text {
+            text: @tr("draw.dependency");
+            color: Theme.label-3;
+            font-size: Theme.caption;
+        }
+        Rectangle {
+            border-radius: 6px;
+            background: Theme.sunken;
+            height: dependency.preferred-height + 16px;
+            dependency := Text {
+                x: 10px;
+                width: parent.width - 20px;
+                text: "[dev-dependencies]\nrusty-draw = { git = \"https://github.com/Linshiqi/rusty\" }";
+                color: Theme.label;
+                font-size: Theme.caption;
+                font-family: Theme.mono;
+            }
+        }
+    }
+
+    if !Shell.draw-empty: HorizontalLayout {
+        // The list: the scenes, the marks, the angles.
+        Rectangle {
+            width: 300px;
+            ScrollView {
+                VerticalLayout {
+                    padding-top: 4px;
+                    padding-bottom: 6px;
+                    alignment: start;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 6px;
+                        height: 28px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: Shell.draw-heading;
+                            color: Theme.label;
+                            font-size: Theme.small;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        IconButton {
+                            y: (parent.height - self.height) / 2;
+                            icon: Icons.close;
+                            tip: @tr("draw.clear");
+                            glyph: 12px;
+                            clicked => {
+                                Shell.act("draw.clear");
+                            }
+                        }
+                    }
+                    for row in Shell.draw-rows: Rectangle {
+                        height: layout.preferred-height;
+                        background: row.kind == 0 && row.on ? Theme.sunken : row.kind == 2 && hover.has-hover ? Theme.sunken : transparent;
+                        hover := TouchArea {
+                            changed has-hover => {
+                                if (row.kind == 2) {
+                                    Shell.draw-hover(self.has-hover ? row.index : -1);
+                                }
+                            }
+                            clicked => {
+                                if (row.kind == 0) {
+                                    Shell.draw-pick(row.key);
+                                }
+                            }
+                        }
+                        layout := VerticalLayout {
+                            padding-left: 12px;
+                            padding-right: 10px;
+                            padding-top: 3px;
+                            padding-bottom: 3px;
+                            spacing: 1px;
+                            // A scene, a note, a heading, an angle or the hand.
+                            if row.kind != 2: HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: (row.kind == 0 && row.on ? "▸ " : "") + row.text;
+                                    color: row.kind == 1 || (row.kind == 5 && row.on) ? Theme.amber : row.kind == 3 ? Theme.label-3 : row.kind == 0 && !row.on ? Theme.label-2 : Theme.label;
+                                    font-size: Theme.caption;
+                                    font-family: row.kind == 4 ? Theme.mono : "";
+                                    wrap: word-wrap;
+                                }
+                                if row.kind == 4: Text {
+                                    text: row.numbers + (row.on ? " ⟂" : "");
+                                    color: row.on ? Theme.patina : Theme.label;
+                                    font-size: Theme.caption;
+                                    font-family: Theme.mono;
+                                }
+                            }
+                            // A mark: its colour, its name, what it measures,
+                            // its numbers, and what is wrong with it.
+                            if row.kind == 2: HorizontalLayout {
+                                spacing: 8px;
+                                Rectangle {
+                                    y: (parent.height - self.height) / 2;
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: row.colour;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: row.text;
+                                    color: Theme.label;
+                                    font-size: Theme.caption;
+                                    font-family: Theme.mono;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: row.detail;
+                                    color: Theme.label-3;
+                                    font-size: Theme.caption;
+                                }
+                            }
+                            if row.kind == 2: Text {
+                                x: 16px;
+                                text: row.numbers;
+                                color: Theme.label-2;
+                                font-size: Theme.caption;
+                                font-family: Theme.mono;
+                                overflow: elide;
+                            }
+                            if row.kind == 2 && row.flaw != "": Text {
+                                x: 16px;
+                                text: row.flaw;
+                                color: Theme.crimson;
+                                font-size: Theme.caption;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        // The scene in space.
+        view := Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.content;
+            clip: true;
+            changed width => {
+                Shell.draw-resized(self.width / 1px, self.height / 1px);
+            }
+            changed height => {
+                Shell.draw-resized(self.width / 1px, self.height / 1px);
+            }
+            init => {
+                Shell.draw-resized(self.width / 1px, self.height / 1px);
+            }
+            orbit := TouchArea {
+                property <length> last-x;
+                property <length> last-y;
+                mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        self.last-x = self.mouse-x;
+                        self.last-y = self.mouse-y;
+                    }
+                }
+                moved => {
+                    Shell.draw-orbit((self.mouse-x - self.last-x) / 1px, (self.mouse-y - self.last-y) / 1px);
+                    self.last-x = self.mouse-x;
+                    self.last-y = self.mouse-y;
+                }
+                scroll-event(event) => {
+                    Shell.draw-zoom(event.delta-y / 1px * -1);
+                    accept
+                }
+            }
+            for piece in Shell.draw-pieces: Path {
+                visible: piece.kind == 0 || piece.kind == 1;
+                x: -self.stroke-width / 2;
+                y: -self.stroke-width / 2;
+                width: Shell.draw-width * 1px + self.stroke-width;
+                height: Shell.draw-height * 1px + self.stroke-width;
+                viewbox-width: Shell.draw-width;
+                viewbox-height: Shell.draw-height;
+                fit: fill;
+                commands: piece.kind <= 1 ? piece.commands : "";
+                fill: piece.kind == 1 ? root.ink(piece.ink, piece.rgb).with-alpha(piece.fill) : transparent;
+                stroke: root.ink(piece.ink, piece.rgb);
+                stroke-width: (piece.kind == 1 ? 1 : piece.width) * 1px;
+                stroke-line-cap: round;
+                stroke-line-join: round;
+                opacity: piece.opacity;
+            }
+            for piece in Shell.draw-pieces: Rectangle {
+                visible: piece.kind == 3;
+                x: (piece.x - piece.r) * 1px;
+                y: (piece.y - piece.r) * 1px;
+                width: piece.r * 2px;
+                height: piece.r * 2px;
+                border-radius: piece.r * 1px;
+                background: root.ink(piece.ink, piece.rgb);
+                opacity: piece.opacity;
+            }
+            for piece in Shell.draw-pieces: Text {
+                visible: piece.kind == 2;
+                x: piece.x * 1px + 4px;
+                y: piece.y * 1px - 4px - self.preferred-height * 0.8;
+                text: piece.kind == 2 ? piece.text : "";
+                color: root.ink(piece.ink, piece.rgb);
+                font-size: 11px;
+                font-family: Theme.mono;
+                opacity: piece.opacity;
+            }
+            Text {
+                x: 12px;
+                y: 8px;
+                width: min(self.preferred-width, parent.width / 2);
+                text: Shell.draw-title;
+                color: Theme.label-2;
+                font-size: Theme.caption;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Rectangle {
+                x: parent.width - self.width - 8px;
+                y: 6px;
+                width: looks.preferred-width;
+                height: looks.preferred-height;
+                border-radius: 7px;
+                background: Theme.raised;
+                border-width: 1px;
+                border-color: Theme.line;
+                looks := HorizontalLayout {
+                    padding: 2px;
+                    spacing: 1px;
+                    Look {
+                        text: @tr("draw.look-iso");
+                        clicked => {
+                            Shell.act("draw.iso");
+                        }
+                    }
+                    Look {
+                        text: @tr("draw.look-top");
+                        clicked => {
+                            Shell.act("draw.top");
+                        }
+                    }
+                    Look {
+                        text: @tr("draw.look-front");
+                        clicked => {
+                            Shell.act("draw.front");
+                        }
+                    }
+                    Look {
+                        text: @tr("draw.look-side");
+                        clicked => {
+                            Shell.act("draw.side");
+                        }
+                    }
+                    Look {
+                        text: @tr("draw.fit");
+                        clicked => {
+                            Shell.act("draw.fit");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

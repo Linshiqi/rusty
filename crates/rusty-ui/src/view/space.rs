@@ -7,6 +7,8 @@ use leptos::{html, prelude::*};
 
 use crate::scene::{self, Ink, Svg};
 
+pub use rusty_embed::scene::sketch::{PALETTE, nice_step};
+
 /// The size of the element `host` names, kept current: a view of space
 /// draws to its own box, which follows the panel's dividers, the dock
 /// opening under it and the window — so an observer on the element, not the
@@ -52,13 +54,6 @@ pub fn follow_size(host: NodeRef<html::Div>) -> RwSignal<(f64, f64)> {
     });
     size
 }
-
-/// A row's colour, or a drawn mark's: eight that read apart on the dark and
-/// the light theme alike, fixed for the reason the Git lanes are — a vector
-/// that changed colour with the theme would read as another vector.
-pub const PALETTE: [&str; 8] = [
-    "#5b9df0", "#e8a33d", "#3fb68b", "#d9658a", "#9a7bf0", "#4fc1d1", "#c7b14a", "#e06c4f",
-];
 
 /// The `index`th colour, round again past the eighth.
 pub fn palette(index: usize) -> &'static str {
@@ -131,44 +126,5 @@ pub fn svg_of(d: scene::Drawn) -> AnyView {
             <circle cx=x cy=y r=r style=format!("fill: {colour}; opacity: {}", d.opacity) />
         }
         .into_any(),
-    }
-}
-
-/// A grid spacing near `target` that reads: 1, 2 or 5 times a power of ten.
-pub fn nice_step(target: f64) -> f64 {
-    if !(target.is_finite() && target > 0.0) {
-        return 1.0;
-    }
-    let power = 10f64.powf(target.log10().floor());
-    let m = target / power;
-    let nice = if m < 1.5 {
-        1.0
-    } else if m < 3.5 {
-        2.0
-    } else if m < 7.5 {
-        5.0
-    } else {
-        10.0
-    };
-    nice * power
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grid_steps_are_one_two_or_five() {
-        for (target, nice) in [
-            (0.7, 0.5),
-            (1.2, 1.0),
-            (2.6, 2.0),
-            (40.0, 50.0),
-            (0.012, 0.01),
-            (7.9, 10.0),
-        ] {
-            assert!((nice_step(target) - nice).abs() < 1e-12, "{target}");
-        }
-        assert_eq!(nice_step(0.0), 1.0);
     }
 }

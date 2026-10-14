@@ -1,8 +1,8 @@
 //! What the math toolbox draws, in world axes: the axes, a grid, a
 //! quadcopter at an attitude, a body's three axes, and a step's working.
 
-use rusty_embed::spatial::sheet::{Role, Shape};
-use rusty_embed::spatial::{Frame, Quat, Vec3};
+use crate::spatial::sheet::{Role, Shape};
+use crate::spatial::{Frame, Quat, Vec3};
 
 use super::{Ink, Item};
 
@@ -270,7 +270,7 @@ pub fn extent(items: &[Item]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_embed::spatial::Euler;
+    use crate::spatial::Euler;
 
     fn points(items: &[Item]) -> Vec<Vec3> {
         items

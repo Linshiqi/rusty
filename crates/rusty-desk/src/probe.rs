@@ -81,6 +81,7 @@ pub fn start(window: &AppWindow) {
     let targets = std::env::var_os("RUSTY_PROBE_TARGETS").is_some();
     let sim = std::env::var_os("RUSTY_PROBE_SIM").is_some();
     let edits = std::env::var_os("RUSTY_PROBE_EDIT").is_some();
+    let drawing = std::env::var_os("RUSTY_PROBE_DRAW").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -182,8 +183,43 @@ pub fn start(window: &AppWindow) {
                 if edits {
                     step.set(700);
                 }
+                if drawing {
+                    step.set(800);
+                }
             }
             500 if sim => app.act("run.run"),
+            // An example that draws, run as its lens runs it.
+            800 if drawing => {
+                let plan = rusty_embed::CommandPlan::new(
+                    "cargo",
+                    vec!["run".into(), "--example".into(), "cross".into()],
+                    "the example that draws",
+                );
+                app.run(&plan, app.root_path(), |_, _| {});
+            }
+            801 if drawing => {
+                if shell.get_running() {
+                    step.set(801);
+                    return;
+                }
+                eprintln!(
+                    "draw: {:?}: {:?}",
+                    shell.get_draw_heading(),
+                    shell
+                        .get_draw_rows()
+                        .iter()
+                        .map(|r| format!("{} {} {}", r.kind, r.text, r.numbers))
+                        .collect::<Vec<_>>()
+                );
+                eprintln!("draw: {} pieces", shell.get_draw_pieces().row_count());
+                snapshot(&window, &dir.join("drawn.png"));
+            }
+            804 if drawing => {
+                shell.invoke_draw_orbit(60.0, -20.0);
+                app.act("draw.top");
+                snapshot(&window, &dir.join("drawn-top.png"));
+                app.act("app.exit");
+            }
             // The board drawn, then edited as a hand would.
             700 if edits => {
                 if !shell.get_right_open() || shell.get_right_front() != "board" {
@@ -686,7 +722,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits) => {
+            252..=1750 if !(build || targets || sim || edits || drawing) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

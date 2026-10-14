@@ -231,6 +231,38 @@ export struct BoardControl {
     live: bool,
 }
 
+// A row of the Draw tab's list: 0 a scene, 1 a note, 2 a mark, 3 the
+// angles' heading, 4 an angle, 5 the hand three arrows make.
+export struct DrawRow {
+    kind: int,
+    text: string,
+    detail: string,
+    numbers: string,
+    flaw: string,
+    colour: color,
+    // A mark's place in its scene, a scene's title.
+    index: int,
+    key: string,
+    // The scene on the page, a right angle, a left hand.
+    on: bool,
+}
+
+// A piece of the Draw tab's view, in its pixels: 0 a path, 1 a polygon,
+// 2 a name, 3 a dot. Its colour is the theme's by number, or `rgb`.
+export struct DrawPiece {
+    kind: int,
+    commands: string,
+    x: float,
+    y: float,
+    r: float,
+    text: string,
+    ink: int,
+    rgb: color,
+    width: float,
+    opacity: float,
+    fill: float,
+}
+
 // A lane of the Waves panel: the pin's name and its steps, a thousand
 // units across the window in time.
 export struct WaveLane {
@@ -425,6 +457,20 @@ export global Shell {
     // A part pressed or let go, and which key of it; a slider moved.
     callback board-press(int, int, bool);
     callback board-control(int, string, float);
+
+    // The Draw tab.
+    in property <bool> draw-empty: true;
+    in property <string> draw-heading;
+    in property <string> draw-title;
+    in property <[DrawRow]> draw-rows;
+    in property <[DrawPiece]> draw-pieces;
+    in property <float> draw-width;
+    in property <float> draw-height;
+    callback draw-resized(float, float);
+    callback draw-orbit(float, float);
+    callback draw-zoom(float);
+    callback draw-pick(string);
+    callback draw-hover(int);
 
     // The Waves panel.
     in property <[WaveLane]> waves-lanes;

@@ -33,31 +33,7 @@ pub struct Drawing {
     pub fronted: StoredValue<bool>,
 }
 
-/// The scene a camera was framed for and the view it was framed in: a new
-/// scene, this one grown or shrunk past a factor of two, or a view that
-/// changed shape by a third is framed again; anything less keeps the zoom
-/// somebody chose.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Framed {
-    pub title: String,
-    /// How far the scene reached.
-    pub reach: f64,
-    /// The view, across and down, in pixels.
-    pub size: (f64, f64),
-}
-
-impl Framed {
-    /// Whether a scene and a view this far from what was framed want
-    /// framing again.
-    pub fn stale(&self, title: &str, reach: f64, size: (f64, f64)) -> bool {
-        let moved = |now: f64, then: f64| (now - then).abs() > then * 0.33;
-        self.title != title
-            || reach > self.reach * 2.0
-            || reach < self.reach / 2.0
-            || moved(size.0, self.size.0)
-            || moved(size.1, self.size.1)
-    }
-}
+pub use rusty_embed::scene::sketch::Framed;
 
 impl Drawing {
     pub fn fresh() -> Self {

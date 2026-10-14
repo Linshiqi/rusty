@@ -24,6 +24,7 @@ mod board;
 mod build;
 mod device;
 mod drafts;
+mod draw;
 mod environment;
 mod navigate;
 mod part;
@@ -129,6 +130,7 @@ struct State {
     build_log: build::BuildLog,
     devices: device::Devices,
     sim: sim::Sim,
+    draw: draw::Drawings,
 }
 
 pub struct App {
@@ -260,6 +262,7 @@ impl App {
 
     /// How a run ended, said in the dock.
     fn said_end(self: &Rc<Self>, began: std::time::Instant, ended: Ended) {
+        self.drawing_ends();
         let seconds = format!("{:.1}", began.elapsed().as_secs_f32());
         match ended {
             Ended::Done => self.runner.say(
@@ -338,6 +341,11 @@ impl App {
         on!(on_output_send, |app, text| app.output_send(&text));
         on!(on_plot_solo, |app, name| app.plot_solo(&name));
         on!(on_waves_resized, |app, width| app.waves_resized(width));
+        on!(on_draw_resized, |app, w, h| app.draw_resized(w, h));
+        on!(on_draw_orbit, |app, dx, dy| app.draw_orbit(dx, dy));
+        on!(on_draw_zoom, |app, delta| app.draw_zoom(delta));
+        on!(on_draw_pick, |app, title| app.draw_pick(&title));
+        on!(on_draw_hover, |app, index| app.draw_hover(index));
         on!(on_waves_grab, |app| app.waves_grab());
         on!(on_waves_drag, |app, by| app.waves_drag(by));
         on!(on_waves_zoom, |app, at, factor| app.waves_zoom(at, factor));
@@ -492,6 +500,12 @@ impl App {
             "waves.follow" => self.waves_follow(),
             "waves.fit" => self.waves_fit(),
             "waves.export" => self.waves_export(),
+            "draw.clear" => self.draw_clear(),
+            "draw.iso" => self.draw_look(Some(rusty_embed::scene::Look::Iso)),
+            "draw.top" => self.draw_look(Some(rusty_embed::scene::Look::Top)),
+            "draw.front" => self.draw_look(Some(rusty_embed::scene::Look::Front)),
+            "draw.side" => self.draw_look(Some(rusty_embed::scene::Look::Side)),
+            "draw.fit" => self.draw_look(None),
             "output.clear" => self.runner.clear(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
@@ -1185,12 +1199,14 @@ impl App {
                 Glyph::Assistant => icons.get_assistant(),
                 Glyph::Plot => icons.get_plot(),
                 Glyph::Waves => icons.get_waves(),
+                Glyph::Draw => icons.get_draw(),
             }
         };
         let state = self.state.borrow();
         let has_content = |id: &str| match id {
             "plot" => !state.sim.plot.channels.is_empty() || !state.sim.params.is_empty(),
             "waves" => !state.sim.trace.events.is_empty(),
+            "draw" => !state.draw.is_empty(),
             _ => true,
         };
         let panels = |dock: Dock| -> ModelRc<PanelTab> {
