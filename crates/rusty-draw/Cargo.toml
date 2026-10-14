@@ -5,7 +5,7 @@ description = "Draw vectors, points and frames into rusty's 3-D view, and trace 
 # depend on, and it changes when its lines change, not when the app ships.
 version = "0.1.1"
 edition = "2021"
-license-file.workspace = true
+license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"

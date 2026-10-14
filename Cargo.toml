@@ -18,10 +18,9 @@ edition = "2024"
 # 1.89 for `File::lock`: rusty windows are separate processes sharing one
 # workbench.toml, and a lock the OS holds is what serialises their writes.
 rust-version = "1.89"
-# Not MIT/Apache: this is source you may read, run and change, but not sell.
-# `license-file` rather than `license` because PolyForm is not one of the SPDX
-# identifiers cargo validates, and a wrong identifier is worse than none.
-license-file = "LICENSE.md"
+# GPLv3: the window is drawn with Slint, used under its GPLv3 option, and the
+# program that links it is offered on the same terms.
+license = "GPL-3.0-only"
 repository = "https://github.com/Linshiqi/rusty"
 authors = ["rusty contributors"]
 

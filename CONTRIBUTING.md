@@ -71,8 +71,8 @@ of those entries cost a day each to learn.
 
 ## Licence
 
-The source is published under [PolyForm Noncommercial 1.0.0](LICENSE.md).
-Read it, run it, change it, share your changes — but not commercially. If you
-want a commercial arrangement, open an issue.
+The source is published under the [GNU General Public License v3.0](LICENSE).
+Read it, run it, change it, share it — and what you share on from it, share
+on the same terms.
 
 By contributing you agree your contribution is licensed on the same terms.
