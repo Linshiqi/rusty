@@ -31,6 +31,7 @@ mod playground;
 mod plot;
 mod saving;
 mod servers;
+mod sheet;
 mod sim;
 mod wizard;
 
@@ -149,6 +150,8 @@ pub struct App {
     /// The board beside the code; apart from `state`, since the protocol
     /// reader holds `state` while it tells the board the pins moved.
     board: RefCell<board::Board>,
+    /// The board's live layer, changed row by row.
+    board_models: board::Models,
     /// A Plot redraw is on its way.
     plot_due: Cell<bool>,
     /// When the window started: the activity view's clock counts from it.
@@ -184,6 +187,7 @@ impl App {
             noted: RefCell::default(),
             runner,
             board: RefCell::default(),
+            board_models: board::Models::new(window),
             plot_due: Cell::new(false),
             started: std::time::Instant::now(),
             clock: slint::Timer::default(),
@@ -333,8 +337,13 @@ impl App {
         on!(on_output_send, |app, text| app.output_send(&text));
         on!(on_plot_solo, |app, name| app.plot_solo(&name));
         on!(on_plot_set, |app, name, value| app.plot_set(&name, value));
-        on!(on_board_press, |app, index, down| app
-            .board_press(index as usize, down));
+        on!(on_board_press, |app, index, key, down| app.board_press(
+            index as usize,
+            key,
+            down
+        ));
+        on!(on_board_control, |app, index, key, value| app
+            .board_control(index as usize, &key, value));
         on!(on_wiz_go, |app, step| app.wizard_go(step));
         on!(on_wiz_filter, |app, query| app.wizard_filter(&query));
         on!(on_wiz_pick, |app, id| app.wizard_pick(&id));
@@ -344,6 +353,27 @@ impl App {
         on!(on_set_theme, |app, theme| app.set_theme(&theme));
         on!(on_set_language, |app, tag| app.set_language(&tag));
         on!(on_set_zoom, |app, zoom| app.set_zoom(zoom));
+        let weak = Rc::downgrade(self);
+        shell.on_board_key(move |event| {
+            weak.upgrade().is_some_and(|app| {
+                app.board_key(&event.text, event.modifiers.control, event.modifiers.shift)
+            })
+        });
+        let weak = Rc::downgrade(self);
+        shell.on_board_down(move |x, y, shift| {
+            weak.upgrade()
+                .is_some_and(|app| app.board_down(x, y, shift))
+        });
+        on!(on_board_drag, |app, x, y| app.board_drag(x, y));
+        on!(on_board_up, |app, x, y| app.board_up(x, y));
+        on!(on_board_hover, |app, x, y| app.board_hover(x, y));
+        on!(on_board_rename, |app, name| app.board_rename(&name));
+        on!(on_board_revalue, |app, value| app.board_revalue(&value));
+        on!(on_board_reprop, |app, key, value| app
+            .board_reprop(&key, &value));
+        on!(on_board_library_query, |app, query| app
+            .board_library_query(&query));
+        on!(on_board_add, |app, id| app.board_add(&id));
         let weak = Rc::downgrade(self);
         shell.on_key(move |event| {
             let Some(app) = weak.upgrade() else {
@@ -446,6 +476,7 @@ impl App {
                 self.choose_target(pending);
             }
             "output.show" => self.show_panel("bottom", "output"),
+            id if id.starts_with("board.") => self.board_act(id),
             "output.clear" => self.runner.clear(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
@@ -618,6 +649,11 @@ impl App {
 
     fn root(&self) -> Option<PathBuf> {
         self.state.borrow().project.as_ref().map(|p| p.root.clone())
+    }
+
+    /// The open project's directory, for the probe.
+    pub fn root_path(&self) -> Option<PathBuf> {
+        self.root()
     }
 
     // ---- tabs ------------------------------------------------------------

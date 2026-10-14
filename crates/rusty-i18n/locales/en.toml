@@ -1963,6 +1963,21 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+board-library = "Add a part"
+board-library-search = "Search parts"
+board-undo = "Undo"
+board-redo = "Redo"
+board-reference = "Reference"
+board-value = "Value"
+board-rotate = "Rotate (R)"
+board-mirror = "Mirror (M)"
+board-duplicate = "Duplicate (Ctrl+D)"
+board-delete = "Delete (Del)"
+board-straighten = "Route again"
+board-reference-taken = "{name} is taken, or is not a name a part can wear."
+board-not-saved = "The board was not saved: {reason}"
+sim-no-bus = "Nothing running puts sensors on a bus — only rusty's emulator does."
+sim-no-reading = "{part} is not a sensor on this run's bus with a reading called {key}."
 # The Slint window (crates/rusty-desk). Keys of the WebView's window that say
 # the same thing are used as they are; these are what is new.
 app-menu = "Menu"

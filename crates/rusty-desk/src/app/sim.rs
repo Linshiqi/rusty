@@ -13,7 +13,7 @@
 //! run again.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     path::PathBuf,
     rc::Rc,
 };
@@ -49,6 +49,19 @@ pub(super) struct Sim {
     pub(super) display: Option<String>,
     pub(super) params: Vec<Param>,
     pub(super) sensors: Vec<SensorDef>,
+    /// The bytes a strip's wire last carried, by GPIO.
+    pub(super) rmt: HashMap<u8, Vec<u8>>,
+    /// What the firmware's converter last took off each pin — kept apart
+    /// from `analog`, what the host drives, because the two agreeing is
+    /// the interesting fact.
+    pub(super) adc: HashMap<u8, u16>,
+    pub(super) analog: HashMap<u8, u16>,
+    /// Where each knob was turned, by part.
+    pub(super) turns: HashMap<String, u8>,
+    /// A register sensor's readings as slid, by part and reading.
+    pub(super) readings: HashMap<(String, String), f64>,
+    /// A declared sensor's last sample, whole, by channel.
+    pub(super) sensor_values: HashMap<String, Vec<f32>>,
     /// The firmware's named channels over time.
     pub(super) plot: rusty_embed::plot::Plot,
     /// The channels the Plot panel draws; none named is all of them.
@@ -67,6 +80,17 @@ impl Sim {
         self.params.clear();
         self.sensors.clear();
         self.plot = Default::default();
+        self.rmt.clear();
+        self.adc.clear();
+        self.analog.clear();
+        self.turns.clear();
+        self.readings.clear();
+        self.sensor_values.clear();
+    }
+
+    /// Whether the emulator's pins are connected.
+    pub(super) fn has_pins(&self) -> bool {
+        self.pins.is_some()
     }
 }
 
@@ -179,10 +203,30 @@ impl App {
             self.board_moved();
             return true;
         }
-        if rusty_embed::parse_adc_report(text).is_some()
-            || rusty_embed::parse_i2c_report(text).is_some()
-            || rusty_embed::parse_spi_report(text).is_some()
-            || rusty_embed::parse_rmt_report(text).is_some()
+        if let Some(report) = rusty_embed::parse_rmt_report(text) {
+            // One transmission sets every pixel of a strip, so it is kept
+            // whole.
+            sim.rmt.insert(report.pin, report.bytes);
+            drop(state);
+            self.board_moved();
+            return true;
+        }
+        if let Some(report) = rusty_embed::parse_adc_report(text) {
+            let moved = sim.adc.insert(report.pin, report.counts) != Some(report.counts);
+            drop(state);
+            if moved {
+                self.board_moved();
+            }
+            return true;
+        }
+        if let Some(report) = rusty_embed::parse_i2c_report(text) {
+            drop(state);
+            if self.screen_heard(&report) {
+                self.board_moved();
+            }
+            return true;
+        }
+        if rusty_embed::parse_spi_report(text).is_some()
             || rusty_embed::wave::parse_wave_report(text).is_some()
         {
             // What crossed a bus or a converter: the board's instruments
@@ -224,6 +268,40 @@ impl App {
             }
             (None, None) => {}
         }
+    }
+
+    /// A line for the simulation, on its console and — for the two console
+    /// messages that are also about a pin, a press and a converter's counts
+    /// — on the pin as well. Nothing while no simulation runs.
+    pub(super) fn sim_send(&self, line: &str) {
+        if !self.sim_live() {
+            return;
+        }
+        self.runner.send(line);
+        if let Some(pins) = self.state.borrow().sim.pins.as_ref() {
+            pins.follow(line);
+        }
+    }
+
+    /// A line for the firmware's console alone: rusty's text protocol,
+    /// which no pin carries.
+    pub(super) fn sim_send_console(&self, line: &str) {
+        if self.sim_live() {
+            self.runner.send(line);
+        }
+    }
+
+    /// One reading of a sensor rusty answers for, written into its
+    /// registers on the running bus; what refused it, when something did —
+    /// a slider that silently did nothing would read as firmware ignoring
+    /// the part.
+    pub(super) fn sim_sensor_set(&self, part: &str, key: &str, value: f64) -> Option<String> {
+        let state = self.state.borrow();
+        let Some(pins) = state.sim.pins.as_ref() else {
+            return Some(t!("desk.sim-no-bus"));
+        };
+        (!pins.set_sensor(part, key, value))
+            .then(|| t!("desk.sim-no-reading", part = part, key = key))
     }
 
     /// Whether the firmware or the emulator has reported a pin or a sample
@@ -413,6 +491,8 @@ impl App {
             Ended::Failed(code) => self.conclude(code.or(Some(1))),
             Ended::Refused => self.conclude(Some(1)),
         }
+        // The sheet is a drawing again, and its controls reach nothing.
+        self.sync_board_live();
         if restart {
             self.simulate();
         }

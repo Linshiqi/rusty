@@ -26,7 +26,10 @@
 //! the simulator from it — opening no port and writing nothing. With
 //! `RUSTY_PROBE_SIM` it runs the project in the simulator, lets it run for
 //! three seconds once the firmware has spoken, and says what the pin
-//! channel reported before stopping it.
+//! channel reported before stopping it. With `RUSTY_PROBE_EDIT` it edits
+//! the board as a hand would — drags the first part, turns it, adds an LED
+//! from the library, wires it to the devkit, undoes and redoes the wire,
+//! deletes the LED — and prints the sheet file after each save.
 
 use std::{
     cell::{Cell, RefCell},
@@ -41,6 +44,22 @@ use slint::{
 };
 
 use crate::{AppWindow, Code, Find, Shell, work};
+
+/// The sheet file as the editor last wrote it.
+fn sheet_file(app: &crate::app::App) -> String {
+    let Some(root) = app.root_path() else {
+        return "no project".to_string();
+    };
+    let firmware = rusty_embed::project::firmware_root(&root);
+    std::fs::read_to_string(firmware.join(".rusty").join("sim.toml"))
+        .map(|text| {
+            text.lines()
+                .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_else(|e| e.to_string())
+}
 
 /// Refuse to probe in the data directory somebody works in.
 pub fn ready() -> Result<(), &'static str> {
@@ -61,6 +80,7 @@ pub fn start(window: &AppWindow) {
     let build = std::env::var_os("RUSTY_PROBE_BUILD").is_some();
     let targets = std::env::var_os("RUSTY_PROBE_TARGETS").is_some();
     let sim = std::env::var_os("RUSTY_PROBE_SIM").is_some();
+    let edits = std::env::var_os("RUSTY_PROBE_EDIT").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -159,19 +179,91 @@ pub fn start(window: &AppWindow) {
                 if sim {
                     step.set(500);
                 }
+                if edits {
+                    step.set(700);
+                }
             }
             500 if sim => app.act("run.run"),
+            // The board drawn, then edited as a hand would.
+            700 if edits => {
+                if !shell.get_right_open() || shell.get_right_front() != "board" {
+                    shell.invoke_show_panel("right".into(), "board".into());
+                }
+                if !shell.get_board_shown() {
+                    step.set(700);
+                    return;
+                }
+                snapshot(&window, &dir.join("board.png"));
+                eprintln!("edit: {}", app.board_report());
+            }
+            702 if edits => {
+                let (x, y) = app.board_centre(1).expect("a part beside the devkit");
+                let took = shell.invoke_board_down(x, y, false);
+                shell.invoke_board_drag(x + 20.0, y + 12.0);
+                shell.invoke_board_drag(x + 40.0, y + 24.0);
+                shell.invoke_board_up(x + 40.0, y + 24.0);
+                eprintln!("edit: dragged part 1 (taken {took}): {}", app.board_report());
+            }
+            716 if edits => {
+                eprintln!("edit: saved {}", sheet_file(&work::app()));
+                app.act("board.rotate");
+                eprintln!("edit: turned: {}", app.board_report());
+            }
+            720 if edits => {
+                shell.invoke_board_library_query("LED".into());
+                let found: Vec<String> = shell.get_board_library().iter().map(|r| r.id.to_string()).collect();
+                eprintln!("edit: the library has {} for LED: {:?}", found.len(), found.iter().take(6).collect::<Vec<_>>());
+                shell.invoke_board_add("Device:LED".into());
+                eprintln!("edit: added: {}", app.board_report());
+            }
+            724 if edits => {
+                let added = app.board_last_reference();
+                let from = app.board_pin_point(&added, "A");
+                let to = app.board_pin_point("U1", "GPIO2");
+                eprintln!("edit: wiring {added}.A {from:?} to U1.GPIO2 {to:?}");
+                if let (Some(from), Some(to)) = (from, to) {
+                    shell.invoke_board_down(from.0, from.1, false);
+                    shell.invoke_board_drag((from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0);
+                    shell.invoke_board_drag(to.0, to.1);
+                    shell.invoke_board_up(to.0, to.1);
+                }
+                eprintln!("edit: wired: {}", app.board_report());
+                snapshot(&window, &dir.join("wired.png"));
+            }
+            728 if edits => {
+                app.act("board.undo");
+                eprintln!("edit: undone: {}", app.board_report());
+                app.act("board.redo");
+                eprintln!("edit: redone: {}", app.board_report());
+            }
+            732 if edits => {
+                let last = app.board_parts() - 1;
+                let (x, y) = app.board_centre(last).expect("the LED");
+                shell.invoke_board_down(x, y, false);
+                shell.invoke_board_up(x, y);
+            }
+            734 if edits => {
+                eprintln!("edit: inspecting {:?} {:?}", shell.get_board_inspect(), shell.get_board_ref());
+                snapshot(&window, &dir.join("inspecting.png"));
+                app.act("board.delete");
+                eprintln!("edit: deleted: {}", app.board_report());
+            }
+            750 if edits => {
+                eprintln!("edit: saved {}", sheet_file(&work::app()));
+                snapshot(&window, &dir.join("edited.png"));
+                app.act("app.exit");
+            }
             // The first switch on the board held down, as a hand would.
             560 if sim => {
                 if let Some(cap) = shell.get_board_switches().iter().next() {
-                    shell.invoke_board_press(cap.index, true);
+                    shell.invoke_board_press(cap.index, cap.key, true);
                 }
             }
             570 if sim => {
                 if let Some(cap) = shell.get_board_switches().iter().next() {
                     snapshot(&window, &dir.join("pressed.png"));
                     eprintln!("sim: held {}: {}", cap.index, app.sim_report());
-                    shell.invoke_board_press(cap.index, false);
+                    shell.invoke_board_press(cap.index, cap.key, false);
                 }
             }
             // What the firmware plots and lets be tuned, and one tunable set.
@@ -183,7 +275,45 @@ pub fn start(window: &AppWindow) {
                     shell.invoke_plot_set(tunable.name, asked);
                 }
             }
+            // The first slider under a part moved a quarter of its way, as a
+            // hand would.
+            575 if sim => {
+                let controls: Vec<_> = shell.get_board_controls().iter().collect();
+                eprintln!(
+                    "sim: controls {:?}",
+                    controls
+                        .iter()
+                        .map(|c| format!("{}:{} {:?} {:?} live={}", c.index, c.key, c.label, c.text, c.live))
+                        .collect::<Vec<_>>()
+                );
+                if let Some(control) = controls.iter().find(|c| c.slider) {
+                    let to = control.min + (control.max - control.min) * 0.25;
+                    eprintln!("sim: sliding {}:{} to {to}", control.index, control.key);
+                    shell.invoke_board_control(control.index, control.key.clone(), to);
+                }
+            }
             578 if sim => {
+                eprintln!(
+                    "sim: controls now {:?}; texts {:?}; screens {:?}; shapes {}; lamps {}; rotors {}",
+                    shell
+                        .get_board_controls()
+                        .iter()
+                        .map(|c| format!("{}:{} {:?}", c.index, c.key, c.text))
+                        .collect::<Vec<_>>(),
+                    shell
+                        .get_board_texts()
+                        .iter()
+                        .map(|w| w.text.to_string())
+                        .collect::<Vec<_>>(),
+                    shell
+                        .get_board_screens()
+                        .iter()
+                        .map(|s| format!("{}x{} on={} runs={}", s.columns, s.rows, s.on, s.commands.matches('M').count()))
+                        .collect::<Vec<_>>(),
+                    shell.get_board_shapes().row_count(),
+                    shell.get_board_lamps().row_count(),
+                    shell.get_board_rotors().row_count(),
+                );
                 let output = shell.get_output();
                 eprintln!(
                     "sim: waited {} ticks; the dock ends {:#?}",
@@ -547,7 +677,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim) => {
+            252..=1750 if !(build || targets || sim || edits) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
