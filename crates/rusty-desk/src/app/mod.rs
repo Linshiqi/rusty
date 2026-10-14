@@ -35,6 +35,8 @@ mod git_view;
 mod lab;
 mod lab_words;
 mod markdown_view;
+mod math;
+mod math_words;
 mod memory;
 mod menu;
 mod navigate;
@@ -94,6 +96,7 @@ impl Tab {
             Tab::Page("gitdiff") => t!("git.changes"),
             Tab::Page("memory") => t!("panel.memory"),
             Tab::Page("crates") => t!("panel.crates"),
+            Tab::Page("math") => t!("panel.math"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -159,6 +162,7 @@ struct State {
     memory: memory::Memory,
     crates: crates::Crates,
     assistant: assistant::Assistant,
+    math: math::Math,
     /// Markdown files shown as their source rather than as a page.
     markdown_source: HashSet<String>,
     term: terminal::Term,
@@ -441,6 +445,23 @@ impl App {
         on!(on_ai_preset, |app, index| app.ai_preset(index));
         on!(on_ai_pick_model, |app, model| app.ai_pick_model(&model));
         on!(on_open_link, |_app, link| markdown_view::open_link(&link));
+        on!(on_math_select, |app, index| app.math_select(index));
+        on!(on_math_toggle, |app, index| app.math_toggle(index));
+        on!(on_math_row, |app, index, text| app.math_row(index, &text));
+        on!(on_math_remove, |app, index| app.math_remove(index));
+        on!(on_math_example, |app, index| app.math_example(index));
+        on!(on_math_slider, |app, index, value| app
+            .math_slider(index, value));
+        on!(on_math_step, |app, index| app.math_step(index));
+        on!(on_math_scrub, |app, at| app.math_scrub(at));
+        on!(on_math_resized, |app, w, h| app.math_resized(w, h));
+        on!(on_math_orbit, |app, dx, dy| app.math_orbit(dx, dy));
+        on!(on_math_zoom, |app, delta| app.math_zoom(delta));
+        let weak = Rc::downgrade(self);
+        shell.on_math_row_key(move |index, key| {
+            weak.upgrade()
+                .is_some_and(|app| app.math_row_key(index, &key))
+        });
         on!(on_menu_dismissed, |app| app.menu_dismissed());
         let weak = Rc::downgrade(self);
         shell.on_term_key(move |event| {
@@ -662,6 +683,7 @@ impl App {
             other if other.starts_with("crates.") => self.crates_act(&other["crates.".len()..]),
             other if other.starts_with("ai.") => self.ai_act(&other["ai.".len()..]),
             "markdown.toggle" => self.markdown_toggle(),
+            other if other.starts_with("math.") => self.math_act(&other["math.".len()..]),
             "app.exit" => {
                 self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();

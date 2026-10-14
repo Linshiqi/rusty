@@ -204,8 +204,19 @@ impl App {
         self.sync_assistant();
         let root = self.root();
         let workspace = self.crates_workspace();
+        // What a running simulation says, frozen for the answer: a sheet
+        // the Math page shows live is worked out with the same numbers.
+        let live = Some(self.live_now()).filter(|l| !l.channels.is_empty() || l.truth.is_some());
         std::thread::spawn(move || {
-            let answer = run_question(config, history, budget, root, workspace, stop, ticket);
+            let question = Question {
+                config,
+                history,
+                budget,
+                root,
+                workspace,
+                live,
+            };
+            let answer = run_question(question, stop, ticket);
             work::deliver(answer, move |app, answer| app.ai_done(ticket, answer));
         });
     }
@@ -820,15 +831,27 @@ struct Answer {
 }
 
 /// One question, start to finish, off the window's thread.
-fn run_question(
+/// What a question goes with: the model, the conversation so far, the
+/// output budget, the project and what is known of it, and what a running
+/// simulation said.
+struct Question {
     config: ProviderConfig,
-    mut history: Vec<Message>,
+    history: Vec<Message>,
     budget: u32,
     root: Option<std::path::PathBuf>,
     workspace: Option<Arc<rusty_core::Workspace>>,
-    stop: Arc<tokio::sync::Notify>,
-    ticket: u64,
-) -> Answer {
+    live: Option<rusty_embed::spatial::sheet::Live>,
+}
+
+fn run_question(question: Question, stop: Arc<tokio::sync::Notify>, ticket: u64) -> Answer {
+    let Question {
+        config,
+        mut history,
+        budget,
+        root,
+        workspace,
+        live,
+    } = question;
     let key = cap_key(&config);
     block_on(async move {
         let catalog = rusty_embed::catalog::Catalog::load(root.as_deref());
@@ -846,7 +869,7 @@ fn run_question(
             root: root.as_deref(),
             firmware,
             catalog: Some(&catalog),
-            live: None,
+            live: live.as_ref(),
         };
         let provider = secrets::load(&config.profile)
             .map_err(|e| e.to_string())

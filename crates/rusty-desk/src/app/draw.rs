@@ -156,6 +156,47 @@ fn flaw_text(flaw: Flaw) -> String {
 
 /// An ink as the panel names it: a theme's colour by number, or the colour
 /// itself.
+/// Drawn pieces as the rows a view of space draws — the Draw tab's and the
+/// math toolbox's.
+pub(super) fn pieces_of(drawn: Vec<scene::Drawn>) -> Vec<DrawPiece> {
+    let mut pieces = Vec::new();
+    for drawn in drawn {
+        let (ink, rgb) = ink_of(drawn.ink);
+        let mut piece = DrawPiece {
+            ink,
+            rgb,
+            width: drawn.width as f32,
+            opacity: drawn.opacity as f32,
+            fill: drawn.fill as f32,
+            ..DrawPiece::default()
+        };
+        match drawn.svg {
+            Svg::Path(path) => {
+                piece.kind = 0;
+                piece.commands = path.into();
+            }
+            Svg::Polygon(points) => {
+                piece.kind = 1;
+                piece.commands = polygon(&points).into();
+            }
+            Svg::Text { x, y, text } => {
+                piece.kind = 2;
+                piece.x = x as f32;
+                piece.y = y as f32;
+                piece.text = text.into();
+            }
+            Svg::Dot { x, y, r } => {
+                piece.kind = 3;
+                piece.x = x as f32;
+                piece.y = y as f32;
+                piece.r = r as f32;
+            }
+        }
+        pieces.push(piece);
+    }
+    pieces
+}
+
 pub(super) fn ink_of(ink: Ink) -> (i32, slint::Color) {
     let rgb = |hex: &str| {
         let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
@@ -400,40 +441,10 @@ impl App {
             }
             let (w, h) = draw.size;
             let items = compose(sketch, &angles, draw.hovered);
-            for drawn in scene::render(&items, &Projector::new(&draw.camera, Frame::ZUp, w, h)) {
-                let (ink, rgb) = ink_of(drawn.ink);
-                let mut piece = DrawPiece {
-                    ink,
-                    rgb,
-                    width: drawn.width as f32,
-                    opacity: drawn.opacity as f32,
-                    fill: drawn.fill as f32,
-                    ..DrawPiece::default()
-                };
-                match drawn.svg {
-                    Svg::Path(path) => {
-                        piece.kind = 0;
-                        piece.commands = path.into();
-                    }
-                    Svg::Polygon(points) => {
-                        piece.kind = 1;
-                        piece.commands = polygon(&points).into();
-                    }
-                    Svg::Text { x, y, text } => {
-                        piece.kind = 2;
-                        piece.x = x as f32;
-                        piece.y = y as f32;
-                        piece.text = text.into();
-                    }
-                    Svg::Dot { x, y, r } => {
-                        piece.kind = 3;
-                        piece.x = x as f32;
-                        piece.y = y as f32;
-                        piece.r = r as f32;
-                    }
-                }
-                pieces.push(piece);
-            }
+            pieces = pieces_of(scene::render(
+                &items,
+                &Projector::new(&draw.camera, Frame::ZUp, w, h),
+            ));
         }
         let heading = match draw.sketches.as_slice() {
             [] => String::new(),

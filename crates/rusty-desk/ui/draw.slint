@@ -7,7 +7,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { Shell } from "shell.slint";
+import { Shell, DrawPiece } from "shell.slint";
 import { IconButton, RowButton } from "widgets.slint";
 
 // A word button in the view's corner.
@@ -30,6 +30,55 @@ component Look inherits Rectangle {
         clicked => {
             root.clicked();
         }
+    }
+}
+
+// What a view of space drew, piece by piece: lines and arrowheads as paths,
+// names, dots — the Draw tab's and the math toolbox's alike.
+export component SpacePieces inherits Rectangle {
+    in property <[DrawPiece]> pieces;
+    in property <float> view-w;
+    in property <float> view-h;
+    // A drawn piece's colour, by the number the window gives it.
+    pure function ink(code: int, rgb: color) -> color {
+        return code == 3 ? Theme.line : code == 4 ? Theme.label-2 : code == 5 ? Theme.rust : code == 6 ? Theme.label-3 : code == 7 ? Theme.slate : code == 8 ? Theme.amber : code == 9 ? Theme.patina : rgb;
+    }
+    for piece in root.pieces: Path {
+        visible: piece.kind == 0 || piece.kind == 1;
+        x: -self.stroke-width / 2;
+        y: -self.stroke-width / 2;
+        width: root.view-w * 1px + self.stroke-width;
+        height: root.view-h * 1px + self.stroke-width;
+        viewbox-width: root.view-w;
+        viewbox-height: root.view-h;
+        fit: fill;
+        commands: piece.kind <= 1 ? piece.commands : "";
+        fill: piece.kind == 1 ? root.ink(piece.ink, piece.rgb).with-alpha(piece.fill) : transparent;
+        stroke: root.ink(piece.ink, piece.rgb);
+        stroke-width: (piece.kind == 1 ? 1 : piece.width) * 1px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        opacity: piece.opacity;
+    }
+    for piece in root.pieces: Rectangle {
+        visible: piece.kind == 3;
+        x: (piece.x - piece.r) * 1px;
+        y: (piece.y - piece.r) * 1px;
+        width: piece.r * 2px;
+        height: piece.r * 2px;
+        border-radius: piece.r * 1px;
+        background: root.ink(piece.ink, piece.rgb);
+        opacity: piece.opacity;
+    }
+    for piece in root.pieces: Text {
+        visible: piece.kind == 2;
+        x: piece.x * 1px + 4px;
+        y: piece.y * 1px - 4px - self.preferred-height * 0.8;
+        text: piece.kind == 2 ? piece.text : "";
+        color: root.ink(piece.ink, piece.rgb);
+        font-size: 11px;
+        font-family: Theme.mono;
+        opacity: piece.opacity;
     }
 }
 
@@ -236,42 +285,10 @@ export component DrawPanel inherits Rectangle {
                     accept
                 }
             }
-            for piece in Shell.draw-pieces: Path {
-                visible: piece.kind == 0 || piece.kind == 1;
-                x: -self.stroke-width / 2;
-                y: -self.stroke-width / 2;
-                width: Shell.draw-width * 1px + self.stroke-width;
-                height: Shell.draw-height * 1px + self.stroke-width;
-                viewbox-width: Shell.draw-width;
-                viewbox-height: Shell.draw-height;
-                fit: fill;
-                commands: piece.kind <= 1 ? piece.commands : "";
-                fill: piece.kind == 1 ? root.ink(piece.ink, piece.rgb).with-alpha(piece.fill) : transparent;
-                stroke: root.ink(piece.ink, piece.rgb);
-                stroke-width: (piece.kind == 1 ? 1 : piece.width) * 1px;
-                stroke-line-cap: round;
-                stroke-line-join: round;
-                opacity: piece.opacity;
-            }
-            for piece in Shell.draw-pieces: Rectangle {
-                visible: piece.kind == 3;
-                x: (piece.x - piece.r) * 1px;
-                y: (piece.y - piece.r) * 1px;
-                width: piece.r * 2px;
-                height: piece.r * 2px;
-                border-radius: piece.r * 1px;
-                background: root.ink(piece.ink, piece.rgb);
-                opacity: piece.opacity;
-            }
-            for piece in Shell.draw-pieces: Text {
-                visible: piece.kind == 2;
-                x: piece.x * 1px + 4px;
-                y: piece.y * 1px - 4px - self.preferred-height * 0.8;
-                text: piece.kind == 2 ? piece.text : "";
-                color: root.ink(piece.ink, piece.rgb);
-                font-size: 11px;
-                font-family: Theme.mono;
-                opacity: piece.opacity;
+            SpacePieces {
+                pieces: Shell.draw-pieces;
+                view-w: Shell.draw-width;
+                view-h: Shell.draw-height;
             }
             Text {
                 x: 12px;

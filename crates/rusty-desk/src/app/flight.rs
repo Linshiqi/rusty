@@ -49,6 +49,27 @@ pub(super) struct Flight {
     pub(super) closed: bool,
 }
 
+impl Flight {
+    /// The plant's attitude and rates while the loop is closed — what a
+    /// math sheet's `truth()` and `truth_rate()` read.
+    pub(super) fn truth(&self) -> Option<(rusty_embed::spatial::Quat, rusty_embed::spatial::Vec3)> {
+        if !self.closed {
+            return None;
+        }
+        let q = self.plant.orientation();
+        let r = self.plant.rate();
+        Some((
+            rusty_embed::spatial::Quat::new(
+                f64::from(q.w),
+                f64::from(q.x),
+                f64::from(q.y),
+                f64::from(q.z),
+            ),
+            rusty_embed::spatial::Vec3::new(f64::from(r[0]), f64::from(r[1]), f64::from(r[2])),
+        ))
+    }
+}
+
 /// What the plant has to offer a sensor.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Feed {

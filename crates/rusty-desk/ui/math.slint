@@ -1,0 +1,725 @@
+// The math toolbox: the rows on the left, the view of space over the
+// working and the value on the right. Filled by `src/app/math.rs`.
+
+import { ScrollView, ComboBox, Slider } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { Shell, MathRow } from "shell.slint";
+import { Button, Caption, IconButton, Segments } from "widgets.slint";
+import { SpacePieces } from "draw.slint";
+
+// A word button in the view's corner.
+component Look inherits Rectangle {
+    in property <string> text;
+    callback clicked;
+    height: 22px;
+    width: label.preferred-width + 14px;
+    border-radius: 5px;
+    background: touch.has-hover ? Theme.sunken : transparent;
+    label := Text {
+        text: root.text;
+        color: touch.has-hover ? Theme.label : Theme.label-2;
+        font-size: Theme.caption;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One row: its colour (a click hides it from the view), its field, and what
+// it came to underneath.
+component RowView inherits Rectangle {
+    in property <MathRow> line;
+    in property <int> index;
+    border-radius: 7px;
+    background: root.line.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    height: column.preferred-height;
+    touch := TouchArea {
+        clicked => {
+            Shell.math-select(root.index);
+        }
+    }
+    // Brought into the caret when the page asks for this row.
+    property <int> asked: Shell.math-focus == root.index ? Shell.math-focus-tick : -1;
+    changed asked => {
+        if (self.asked >= 0) {
+            field.focus();
+        }
+    }
+    init => {
+        if (Shell.math-focus == root.index && Shell.math-focus-tick > 0) {
+            field.focus();
+        }
+    }
+    column := VerticalLayout {
+        padding: 4px;
+        padding-left: 6px;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 18px;
+                Rectangle {
+                    x: 4px;
+                    y: (parent.height - 10px) / 2;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: root.line.hidden ? transparent : root.line.colour;
+                    border-width: 1.5px;
+                    border-color: root.line.colour;
+                }
+                TouchArea {
+                    clicked => {
+                        Shell.math-toggle(root.index);
+                    }
+                }
+            }
+            Rectangle {
+                height: 24px;
+                horizontal-stretch: 1;
+                border-radius: 5px;
+                background: field.has-focus ? Theme.content : transparent;
+                border-width: field.has-focus ? 1px : 0;
+                border-color: Theme.line;
+                field := TextInput {
+                    x: 4px;
+                    width: parent.width - 8px;
+                    text: root.line.text;
+                    color: Theme.label;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                    single-line: true;
+                    edited => {
+                        Shell.math-row(root.index, self.text);
+                    }
+                    changed has-focus => {
+                        if (self.has-focus) {
+                            Shell.math-select(root.index);
+                        }
+                    }
+                    key-pressed(event) => {
+                        if (event.text == Key.Return) {
+                            return Shell.math-row-key(root.index, "enter") ? accept : reject;
+                        }
+                        if (event.text == Key.Backspace && self.text == "") {
+                            return Shell.math-row-key(root.index, "backspace") ? accept : reject;
+                        }
+                        if (event.text == Key.UpArrow) {
+                            return Shell.math-row-key(root.index, "up") ? accept : reject;
+                        }
+                        if (event.text == Key.DownArrow) {
+                            return Shell.math-row-key(root.index, "down") ? accept : reject;
+                        }
+                        reject
+                    }
+                }
+                if root.line.text == "" && !field.has-focus: Text {
+                    x: 6px;
+                    text: @tr("math.row-placeholder");
+                    color: Theme.label-4;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+            }
+            if touch.has-hover: IconButton {
+                width: 22px;
+                height: 22px;
+                glyph: 12px;
+                icon: Icons.close;
+                tip: @tr("math.remove-row");
+                clicked => {
+                    Shell.math-remove(root.index);
+                }
+            }
+        }
+        if root.line.value != "": HorizontalLayout {
+            padding-left: 24px;
+            spacing: 6px;
+            Text {
+                horizontal-stretch: 1;
+                text: root.line.value;
+                color: Theme.label-2;
+                font-family: Theme.mono;
+                font-size: Theme.caption;
+                overflow: elide;
+            }
+            if root.line.live: Rectangle {
+                width: live-text.preferred-width + 8px;
+                border-radius: 4px;
+                background: Theme.patina-fill;
+                live-text := Text {
+                    text: @tr("math.live");
+                    color: Theme.patina;
+                    font-size: Theme.caption;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        if root.line.problem != "": HorizontalLayout {
+            padding-left: 24px;
+            Text {
+                text: root.line.problem;
+                color: Theme.crimson;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+        }
+        if root.line.notes != "": HorizontalLayout {
+            padding-left: 24px;
+            Text {
+                text: root.line.notes;
+                color: Theme.amber;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+        }
+        if root.line.slider: HorizontalLayout {
+            padding-left: 24px;
+            spacing: 6px;
+            Slider {
+                horizontal-stretch: 1;
+                minimum: root.line.min;
+                maximum: root.line.max;
+                value: root.line.at;
+                changed(value) => {
+                    Shell.math-slider(root.index, value);
+                }
+            }
+            Text {
+                width: 64px;
+                text: root.line.shown;
+                color: Theme.label-2;
+                font-family: Theme.mono;
+                font-size: Theme.caption;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// An attitude indicator: sky over ground, the horizon turned against the
+// bank and moved by the nose, a ladder every ten degrees, the aircraft
+// fixed in the middle. An instrument's colours, the same in every theme.
+component Horizon inherits Rectangle {
+    in property <float> nose;
+    in property <float> bank;
+    property <length> size: 108px;
+    property <length> per-degree: 1.6px;
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    clip: true;
+    border-width: 1.5px;
+    border-color: Theme.line-strong;
+    Rectangle {
+        x: -root.size;
+        y: -root.size;
+        width: root.size * 3;
+        height: root.size * 3;
+        transform-rotation: -root.bank * 1deg;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        Rectangle {
+            y: 0;
+            height: parent.height / 2 + root.nose * root.per-degree;
+            background: #3b6ea5;
+        }
+        Rectangle {
+            y: parent.height / 2 + root.nose * root.per-degree;
+            height: parent.height / 2 - root.nose * root.per-degree;
+            background: #7a5530;
+        }
+        Rectangle {
+            y: parent.height / 2 + root.nose * root.per-degree - 0.75px;
+            height: 1.5px;
+            background: white;
+        }
+        for d in [-30, -20, -10, 10, 20, 30]: Rectangle {
+            x: parent.width / 2 - self.width / 2;
+            y: parent.height / 2 + root.nose * root.per-degree - d * root.per-degree;
+            width: Math.mod(d, 20) == 0 ? 32px : 20px;
+            height: 1px;
+            background: #ffffffb3;
+        }
+    }
+    Path {
+        x: root.size / 2 - 22px;
+        y: root.size / 2 - 2px;
+        width: 44px;
+        height: 10px;
+        viewbox-width: 44;
+        viewbox-height: 10;
+        commands: "M 0 2 H 16 L 22 9 L 28 2 H 44";
+        stroke: #f5a623;
+        stroke-width: 3px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+export component MathPage inherits Rectangle {
+    background: Theme.content;
+    init => {
+        Shell.act("math.shown");
+    }
+    VerticalLayout {
+        // The panel's name, the examples, which way up, the reference.
+        HorizontalLayout {
+            height: 38px;
+            padding-left: 14px;
+            padding-right: 8px;
+            spacing: 10px;
+            Text {
+                text: @tr("panel.math");
+                color: Theme.label;
+                font-size: Theme.body;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: Shell.math-saved;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            ComboBox {
+                y: 5px;
+                height: 28px;
+                width: 200px;
+                model: Shell.math-examples;
+                current-index: 0;
+                selected(value) => {
+                    if (self.current-index > 0) {
+                        Shell.math-example(self.current-index);
+                        self.current-index = 0;
+                    }
+                }
+            }
+            Segments {
+                y: 5px;
+                labels: [@tr("math.frame-z-up"), @tr("math.frame-z-down")];
+                values: ["z-up", "z-down"];
+                value: Shell.math-frame-up ? "z-up" : "z-down";
+                picked(value) => {
+                    Shell.act("math." + value);
+                }
+            }
+            IconButton {
+                y: 5px;
+                icon: Icons.math;
+                tip: @tr("math.help-hint");
+                active: Shell.math-help;
+                clicked => {
+                    Shell.act("math.help");
+                }
+            }
+        }
+        if Shell.math-unreadable != "": Rectangle {
+            height: unreadable.preferred-height + 12px;
+            background: Theme.crimson-fill;
+            unreadable := Text {
+                x: 14px;
+                width: parent.width - 28px;
+                text: Shell.math-unreadable;
+                color: Theme.crimson;
+                font-size: Theme.caption;
+                wrap: word-wrap;
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+        HorizontalLayout {
+            // The rows, or the reference over them.
+            Rectangle {
+                width: 340px;
+                if !Shell.math-help: ScrollView {
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        alignment: start;
+                        for row[index] in Shell.math-rows: RowView {
+                            line: row;
+                            index: index;
+                        }
+                        HorizontalLayout {
+                            height: 28px;
+                            alignment: start;
+                            Look {
+                                y: 3px;
+                                text: "+ " + @tr("math.add-row");
+                                clicked => {
+                                    Shell.act("math.add");
+                                }
+                            }
+                        }
+                        if Shell.math-rows.length == 0: Text {
+                            text: @tr("math.empty-rows");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                if Shell.math-help: ScrollView {
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 4px;
+                        alignment: start;
+                        for line in Shell.math-help-rows: VerticalLayout {
+                            if line.value == "": Caption {
+                                text: line.label;
+                            }
+                            if line.value != "": VerticalLayout {
+                                Text {
+                                    text: line.label;
+                                    color: Theme.label;
+                                    font-family: Theme.mono;
+                                    font-size: Theme.caption;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: line.value;
+                                    color: Theme.label-3;
+                                    font-size: Theme.caption;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.line;
+            }
+            VerticalLayout {
+                // The view of space, or of the plane.
+                view := Rectangle {
+                    vertical-stretch: 3;
+                    clip: true;
+                    changed width => {
+                        Shell.math-resized(self.width / 1px, self.height / 1px);
+                    }
+                    changed height => {
+                        Shell.math-resized(self.width / 1px, self.height / 1px);
+                    }
+                    init => {
+                        Shell.math-resized(self.width / 1px, self.height / 1px);
+                    }
+                    TouchArea {
+                        property <length> last-x;
+                        property <length> last-y;
+                        mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                self.last-x = self.mouse-x;
+                                self.last-y = self.mouse-y;
+                            }
+                        }
+                        moved => {
+                            Shell.math-orbit((self.mouse-x - self.last-x) / 1px, (self.mouse-y - self.last-y) / 1px);
+                            self.last-x = self.mouse-x;
+                            self.last-y = self.mouse-y;
+                        }
+                        scroll-event(event) => {
+                            Shell.math-zoom(event.delta-y / 1px);
+                            accept
+                        }
+                    }
+                    SpacePieces {
+                        pieces: Shell.math-pieces;
+                        view-w: Shell.math-view-w;
+                        view-h: Shell.math-view-h;
+                    }
+                    Rectangle {
+                        x: parent.width - self.width - 8px;
+                        y: 6px;
+                        width: looks.preferred-width;
+                        height: looks.preferred-height;
+                        border-radius: 7px;
+                        background: Theme.raised;
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        looks := HorizontalLayout {
+                            padding: 2px;
+                            spacing: 1px;
+                            Look {
+                                text: Shell.math-flat ? @tr("math.view-3d") : @tr("math.view-2d");
+                                clicked => {
+                                    Shell.act("math.flat");
+                                }
+                            }
+                            if !Shell.math-flat: Look {
+                                text: @tr("math.view-chase");
+                                clicked => {
+                                    Shell.act("math.chase");
+                                }
+                            }
+                            if !Shell.math-flat: Look {
+                                text: @tr("math.view-top");
+                                clicked => {
+                                    Shell.act("math.top");
+                                }
+                            }
+                            if !Shell.math-flat: Look {
+                                text: @tr("math.view-front");
+                                clicked => {
+                                    Shell.act("math.front");
+                                }
+                            }
+                            if !Shell.math-flat: Look {
+                                text: @tr("math.view-side");
+                                clicked => {
+                                    Shell.act("math.side");
+                                }
+                            }
+                            Look {
+                                text: @tr("math.view-fit");
+                                clicked => {
+                                    Shell.act("math.fit");
+                                }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        x: 12px;
+                        y: parent.height - 24px;
+                        height: 18px;
+                        spacing: 8px;
+                        Text {
+                            text: "X";
+                            color: #e5484d;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                        }
+                        Text {
+                            text: "Y";
+                            color: #30a46c;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                        }
+                        Text {
+                            text: "Z";
+                            color: #3e63dd;
+                            font-family: Theme.mono;
+                            font-size: Theme.caption;
+                        }
+                        Text {
+                            text: Shell.math-frame-up ? @tr("math.frame-z-up") : @tr("math.frame-z-down");
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                HorizontalLayout {
+                    vertical-stretch: 2;
+                    // The working, a step at a time.
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        HorizontalLayout {
+                            height: 32px;
+                            padding-left: 12px;
+                            padding-right: 8px;
+                            spacing: 6px;
+                            Caption {
+                                text: @tr("math.steps");
+                                vertical-alignment: center;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                            if Shell.math-turns > 0: IconButton {
+                                y: 2px;
+                                icon: Shell.math-playing ? Icons.pause : Icons.play;
+                                tip: Shell.math-playing ? @tr("math.pause") : @tr("math.play");
+                                tint: Theme.rust;
+                                clicked => {
+                                    Shell.act("math.play");
+                                }
+                            }
+                            if Shell.math-turns > 0: Slider {
+                                width: 150px;
+                                minimum: 0;
+                                maximum: 1;
+                                value: Shell.math-progress;
+                                changed(value) => {
+                                    Shell.math-scrub(value);
+                                }
+                            }
+                        }
+                        ScrollView {
+                            VerticalLayout {
+                                padding: 8px;
+                                spacing: 6px;
+                                alignment: start;
+                                if Shell.math-steps-note != "": Text {
+                                    text: Shell.math-steps-note;
+                                    color: Theme.label-3;
+                                    font-size: Theme.caption;
+                                }
+                                for step in Shell.math-steps: Rectangle {
+                                    border-radius: 7px;
+                                    background: step.chosen ? Theme.selection : step-touch.has-hover ? Theme.sunken : Theme.sunken.with-alpha(0.5);
+                                    border-width: step.chosen ? 1px : 0;
+                                    border-color: Theme.rust.with-alpha(0.4);
+                                    step-touch := TouchArea {
+                                        clicked => {
+                                            Shell.math-step(step.index);
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        padding: 8px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: step.title;
+                                            color: Theme.label;
+                                            font-size: Theme.caption;
+                                            font-weight: 600;
+                                        }
+                                        // A face with the operators: the working's ⊗
+                                        // and ∠ are not in every monospace face.
+                                        if step.lines != "": Text {
+                                            text: step.lines;
+                                            color: Theme.label-2;
+                                            font-family: Shell.symbols-font;
+                                            font-size: Theme.caption;
+                                            wrap: word-wrap;
+                                        }
+                                        if step.remarks != "": Text {
+                                            text: step.remarks;
+                                            color: Theme.label-3;
+                                            font-size: Theme.caption;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.line;
+                    }
+                    // The value in full.
+                    VerticalLayout {
+                        width: 340px;
+                        HorizontalLayout {
+                            height: 32px;
+                            padding-left: 12px;
+                            padding-right: 8px;
+                            Caption {
+                                horizontal-stretch: 1;
+                                text: @tr("math.value");
+                                vertical-alignment: center;
+                            }
+                            if Shell.math-copyable: IconButton {
+                                y: 2px;
+                                icon: Icons.copy;
+                                tip: @tr("math.copy-hint");
+                                clicked => {
+                                    Shell.act("math.copy");
+                                }
+                            }
+                        }
+                        ScrollView {
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+                                alignment: start;
+                                if Shell.math-value-kind == 0: Text {
+                                    text: @tr("math.no-value");
+                                    color: Theme.label-3;
+                                    font-size: Theme.caption;
+                                }
+                                if Shell.math-value-kind == 1: HorizontalLayout {
+                                    spacing: 10px;
+                                    Horizon {
+                                        nose: Shell.math-nose;
+                                        bank: Shell.math-bank;
+                                    }
+                                    VerticalLayout {
+                                        alignment: start;
+                                        for line in Shell.math-value-lines: HorizontalLayout {
+                                            spacing: 6px;
+                                            Text {
+                                                width: 60px;
+                                                text: line.label;
+                                                color: Theme.label-3;
+                                                font-size: Theme.caption;
+                                            }
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: line.value;
+                                                color: Theme.label;
+                                                font-family: Theme.mono;
+                                                font-size: Theme.caption;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                                if Shell.math-value-kind >= 3: VerticalLayout {
+                                    for line in Shell.math-value-lines: VerticalLayout {
+                                        if line.label != "": Text {
+                                            text: line.label;
+                                            color: Theme.label;
+                                            font-size: Theme.small;
+                                            font-weight: 600;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: line.value;
+                                            color: Theme.label;
+                                            font-family: Theme.mono;
+                                            font-size: Theme.caption;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                                if Shell.math-matrix.length == 9: Rectangle {
+                                    border-radius: 6px;
+                                    background: Theme.sunken;
+                                    width: 210px;
+                                    height: 66px;
+                                    for cell[i] in Shell.math-matrix: Text {
+                                        x: 8px + Math.mod(i, 3) * 66px;
+                                        y: 4px + floor(i / 3) * 20px;
+                                        width: 60px;
+                                        text: cell;
+                                        color: Theme.label-2;
+                                        font-family: Theme.mono;
+                                        font-size: Theme.caption;
+                                        horizontal-alignment: right;
+                                    }
+                                }
+                                if Shell.math-value-extra != "": Text {
+                                    text: Shell.math-value-extra;
+                                    color: Theme.label-3;
+                                    font-family: Theme.mono;
+                                    font-size: Theme.caption;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

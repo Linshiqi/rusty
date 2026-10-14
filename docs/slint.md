@@ -452,6 +452,18 @@ tests green, and CLAUDE.md saying how it works.
    code blocks take the editor's own colours. Proven against a loopback
    model in the OpenAI dialect: `list_files` called, the answer's heading,
    nested list, Rust block and table drawn, 4.2k in with 1.7k cached.
+   A Markdown file opens as its page — the toggle over it shows the source
+   — with the pictures in the project drawn and one elsewhere named.
+   The math toolbox, a page: the rows typed and worked out as they are
+   typed (Enter makes the next, Backspace in an empty one takes it away), a
+   slider for a row that is one number, the selected row's working with
+   its turns played on the aircraft, the value in full beside an attitude
+   indicator, and the view of space or of the plane drawn by the Draw tab's
+   pieces (`SpacePieces`). What composes the view moved into
+   `rusty_embed::scene::math` for both windows. Formula lines take a face
+   with the operators (`symbols-font`): `⊗` was a box in the monospace
+   face and the fallback alike. The assistant now gets the live values a
+   run says, as the old window sent them.
 8. **The editor's depth**, now that everything it is for exists: folding,
    sticky scroll, the minimap, indent guides, test lenses, inlay hints,
    semantic colours, Vim, two groups.

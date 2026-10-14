@@ -89,6 +89,7 @@ pub fn start(window: &AppWindow) {
     let dependencies = std::env::var_os("RUSTY_PROBE_CRATES").is_some();
     let asking = std::env::var_os("RUSTY_PROBE_AI").is_some();
     let reading = std::env::var_os("RUSTY_PROBE_MD").is_some();
+    let sums = std::env::var_os("RUSTY_PROBE_MATH").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -213,6 +214,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if reading {
                     step.set(1500);
+                }
+                if sums {
+                    step.set(1600);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -652,6 +656,49 @@ pub fn start(window: &AppWindow) {
             1503 if reading => {
                 eprintln!("md: after the toggle page {}", shell.get_md_page());
                 snapshot(&window, &dir.join("markdown-source.png"));
+                app.act("app.exit");
+            }
+            // The math toolbox: the Euler example's rows, the attitude row's
+            // working played, a row retyped, and the reference.
+            1600 if sums => app.act("math.open"),
+            1603 if sums => {
+                for row in shell.get_math_rows().iter() {
+                    eprintln!("math: {:?} -> {:?} {:?} slider {}", row.text, row.value, row.problem, row.slider);
+                }
+                shell.invoke_math_select(3);
+            }
+            1605 if sums => {
+                eprintln!(
+                    "math: steps {:?}; turns {}; value kind {} lines {:?}; nose {:.1} bank {:.1}; {} pieces",
+                    shell.get_math_steps().iter().map(|s| s.title.to_string()).collect::<Vec<_>>(),
+                    shell.get_math_turns(),
+                    shell.get_math_value_kind(),
+                    shell.get_math_value_lines().iter().map(|l| format!("{} {}", l.label, l.value)).collect::<Vec<_>>(),
+                    shell.get_math_nose(),
+                    shell.get_math_bank(),
+                    shell.get_math_pieces().row_count()
+                );
+                app.act("math.play");
+            }
+            1630 if sums => {
+                eprintln!("math: playing {} at {:.2}", shell.get_math_playing(), shell.get_math_progress());
+                snapshot(&window, &dir.join("math-playing.png"));
+            }
+            1700 if sums => {
+                eprintln!("math: played {} at {:.2}", shell.get_math_playing(), shell.get_math_progress());
+                shell.invoke_math_row(0, "roll = 45°".into());
+                shell.invoke_math_row(1, "pitch = 1.2.3".into());
+            }
+            1702 if sums => {
+                for row in shell.get_math_rows().iter().take(4) {
+                    eprintln!("math: after {:?} -> {:?} {:?}", row.text, row.value, row.problem);
+                }
+                snapshot(&window, &dir.join("math.png"));
+                app.act("math.help");
+            }
+            1704 if sums => {
+                eprintln!("math: reference {} lines", shell.get_math_help_rows().row_count());
+                snapshot(&window, &dir.join("math-help.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1242,7 +1289,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
