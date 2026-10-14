@@ -60,6 +60,9 @@ pub mod board;
 // Named channels over time and the range each is drawn against: the Plot
 // panel's arithmetic. Pure.
 pub mod plot;
+// Pin waveforms: the trace a run's gpio reports make, and the arithmetic
+// of drawing it. Pure.
+pub mod waves;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,

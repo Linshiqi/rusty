@@ -14,6 +14,8 @@ use leptos::{ev, prelude::*};
 
 use rusty_i18n::t;
 
+use rusty_embed::waves::{format_us, tick_step, ticks_between};
+
 use crate::{
     controller,
     state::{AppState, TraceClock},
@@ -197,12 +199,7 @@ pub fn WavesTab() -> impl IntoView {
 
                     // Lanes, in first-seen order — the order the firmware
                     // introduced them, which is the order the reader knows.
-                    let mut pins: Vec<u8> = Vec::new();
-                    for (_, pin, _) in &trace.events {
-                        if !pins.contains(pin) {
-                            pins.push(*pin);
-                        }
-                    }
+                    let pins = trace.pins();
 
                     let height = AXIS_H + pins.len() as f64 * (LANE_H + LANE_GAP);
                     let end = start + width * per_px;
@@ -222,37 +219,7 @@ pub fn WavesTab() -> impl IntoView {
 
                             // The level entering the window, then every edge
                             // inside it, as one step path.
-                            let mut level = trace
-                                .events
-                                .iter()
-                                .rev()
-                                .find(|(t, p, _)| p == pin && (*t as f64) < start)
-                                .map(|(_, _, l)| *l)
-                                .unwrap_or(false);
-                            let mut d = format!(
-                                "M 0 {}",
-                                if level { y_hi } else { y_lo },
-                            );
-                            for (t, p, l) in trace
-                                .events
-                                .iter()
-                                .filter(|(t, p, _)| {
-                                    p == pin
-                                        && (*t as f64) >= start
-                                        && (*t as f64) <= end
-                                })
-                            {
-                                let x = ((*t as f64) - start) / per_px;
-                                let _ = p;
-                                if *l != level {
-                                    d.push_str(&format!(
-                                        " H {x:.1} V {}",
-                                        if *l { y_hi } else { y_lo },
-                                    ));
-                                    level = *l;
-                                }
-                            }
-                            d.push_str(&format!(" H {width:.1}"));
+                            let d = trace.lane(*pin, start, end, width, y_hi, y_lo);
 
                             view! {
                                 <text
@@ -400,85 +367,5 @@ pub fn WavesTab() -> impl IntoView {
                 )
             }}
         </div>
-    }
-}
-
-/// A round tick spacing, in microseconds, for a scale of `per_px` µs per
-/// pixel: the smallest of 1, 2, 5 × 10ⁿ that keeps ticks at least a hundred
-/// pixels apart.
-fn tick_step(per_px: f64) -> f64 {
-    let raw = per_px * 100.0;
-    let decade = 10f64.powf(raw.log10().floor());
-    [decade, decade * 2.0, decade * 5.0, decade * 10.0]
-        .into_iter()
-        .find(|s| *s >= raw)
-        .unwrap_or(decade)
-}
-
-/// Every multiple of `step` inside `start..=end`, capped so a runaway scale
-/// cannot draw thousands of labels.
-fn ticks_between(start: f64, end: f64, step: f64) -> Vec<f64> {
-    let first = (start / step).ceil() * step;
-    (0..)
-        .map(|i| first + i as f64 * step)
-        .take_while(|t| *t <= end)
-        .take(40)
-        .collect()
-}
-
-/// A tick label in the unit the scale calls for: seconds once ticks are a
-/// second apart (or the time is past ten), milliseconds from a millisecond
-/// step, microseconds below that.
-fn format_us(step: f64, us: f64) -> String {
-    if step >= 1_000_000.0 || us.abs() >= 10_000_000.0 {
-        format!("{:.2}s", us / 1_000_000.0)
-    } else if step >= 1_000.0 {
-        format!("{:.1}ms", us / 1_000.0)
-    } else {
-        format!("{us:.0}µs")
-    }
-}
-
-#[cfg(test)]
-mod axis_tests {
-    use super::{format_us, tick_step, ticks_between};
-
-    /// Ticks land on 1, 2, 5 × 10ⁿ and never closer than a hundred pixels:
-    /// a scale of 3 µs/px wants a step of at least 300 µs, and the nearest
-    /// round step above that is 500.
-    #[test]
-    fn ticks_are_round_and_at_least_a_hundred_pixels_apart() {
-        assert_eq!(tick_step(3.0), 500.0);
-        assert_eq!(tick_step(1.0), 100.0);
-        assert_eq!(tick_step(0.15), 20.0);
-        assert_eq!(tick_step(12.0), 2000.0);
-    }
-
-    /// The first tick is the first multiple at or after the window's start,
-    /// and none lands past its end.
-    #[test]
-    fn ticks_start_on_a_multiple_inside_the_window() {
-        assert_eq!(
-            ticks_between(130.0, 700.0, 100.0),
-            vec![200.0, 300.0, 400.0, 500.0, 600.0, 700.0]
-        );
-        assert_eq!(ticks_between(0.0, 250.0, 100.0), vec![0.0, 100.0, 200.0]);
-    }
-
-    /// A window many steps wide is capped rather than labelled to death.
-    #[test]
-    fn a_runaway_window_is_capped() {
-        assert_eq!(ticks_between(0.0, 1.0e9, 1.0).len(), 40);
-    }
-
-    /// The unit follows the step, so a millisecond axis does not read
-    /// "1000µs, 2000µs".
-    #[test]
-    fn labels_take_the_unit_of_the_step() {
-        assert_eq!(format_us(100.0, 300.0), "300µs");
-        assert_eq!(format_us(1_000.0, 2_500.0), "2.5ms");
-        assert_eq!(format_us(1_000_000.0, 1_500_000.0), "1.50s");
-        // A late time reads in seconds whatever the step.
-        assert_eq!(format_us(1_000.0, 12_000_000.0), "12.00s");
     }
 }

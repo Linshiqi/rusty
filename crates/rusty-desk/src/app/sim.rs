@@ -64,6 +64,11 @@ pub(super) struct Sim {
     pub(super) sensor_values: HashMap<String, Vec<f32>>,
     /// The firmware's named channels over time.
     pub(super) plot: rusty_embed::plot::Plot,
+    /// Every pin's edges, for the Waves panel, and where it looks.
+    pub(super) trace: rusty_embed::waves::Trace,
+    pub(super) waves: super::waves::View,
+    /// How the part names its pins, for the lanes.
+    pub(super) ports: Option<rusty_embed::Ports>,
     /// The channels the Plot panel draws; none named is all of them.
     pub(super) shown: Vec<String>,
     /// Run again once this run has stopped.
@@ -80,6 +85,8 @@ impl Sim {
         self.params.clear();
         self.sensors.clear();
         self.plot = Default::default();
+        self.trace = Default::default();
+        self.waves.follow = true;
         self.rmt.clear();
         self.adc.clear();
         self.analog.clear();
@@ -100,6 +107,7 @@ struct Prepared {
     plan: SimPlan,
     start: Start,
     firmware: PathBuf,
+    ports: Option<rusty_embed::Ports>,
 }
 
 fn prepare(root: PathBuf) -> Result<Prepared, String> {
@@ -123,10 +131,16 @@ fn prepare(root: PathBuf) -> Result<Prepared, String> {
         }
         simulate::prepare(&firmware).map_err(|e| e.to_string())?;
     }
+    let ports = detected.chip.as_deref().and_then(|chip| {
+        rusty_embed::catalog::Catalog::load(Some(&root))
+            .chip(chip)
+            .and_then(|part| part.ports)
+    });
     Ok(Prepared {
         plan,
         start,
         firmware,
+        ports,
     })
 }
 
@@ -180,12 +194,20 @@ impl App {
             return false;
         }
         if let Some(report) = rusty_embed::parse_gpio_report(text) {
-            for (pin, level) in report.pins {
-                sim.duties.remove(&pin);
-                sim.levels.insert(pin, level);
+            for (pin, level) in &report.pins {
+                sim.duties.remove(pin);
+                sim.levels.insert(*pin, *level);
             }
+            // The Waves tab arrives with the first edge.
+            let first = sim.trace.events.is_empty();
+            let host_us = self.started.elapsed().as_micros() as u64;
+            sim.trace.record(report, host_us);
             drop(state);
+            if first {
+                self.sync_docks();
+            }
             self.board_moved();
+            self.waves_moved();
             return true;
         }
         if let Some(report) = rusty_embed::parse_pwm_report(text) {
@@ -357,6 +379,7 @@ impl App {
             plan,
             start,
             firmware,
+            ports,
         } = prepared;
         if !plan.supported {
             let reason = plan.reason.clone().unwrap_or_default();
@@ -380,7 +403,11 @@ impl App {
             let mut state = self.state.borrow_mut();
             state.sim.reset();
             state.sim.plan = Some(plan);
+            state.sim.ports = ports;
         }
+        // Nothing of the last run's left drawn.
+        self.sync_plot();
+        self.sync_waves();
         self.board_moved();
         self.runner.clear();
         self.begin(Kind::Simulate, None);
