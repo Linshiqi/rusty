@@ -88,6 +88,7 @@ pub fn start(window: &AppWindow) {
     let measuring = std::env::var_os("RUSTY_PROBE_MEMORY").is_some();
     let dependencies = std::env::var_os("RUSTY_PROBE_CRATES").is_some();
     let asking = std::env::var_os("RUSTY_PROBE_AI").is_some();
+    let reading = std::env::var_os("RUSTY_PROBE_MD").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -209,6 +210,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if asking {
                     step.set(1400);
+                }
+                if reading {
+                    step.set(1500);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -626,6 +630,28 @@ pub fn start(window: &AppWindow) {
             1440 if asking => {
                 eprintln!("ai: check {:?} ok {}", shell.get_ai_check(), shell.get_ai_check_ok());
                 snapshot(&window, &dir.join("assistant-settings.png"));
+                app.act("app.exit");
+            }
+            // A Markdown file opened on the command line: the page, then its
+            // source and back.
+            1500 if reading => {
+                eprintln!(
+                    "md: file {} page {}; {} blocks {:?}",
+                    shell.get_md_file(),
+                    shell.get_md_page(),
+                    shell.get_md_blocks().row_count(),
+                    shell
+                        .get_md_blocks()
+                        .iter()
+                        .map(|b| format!("{}{}", b.kind, if b.kind == 5 { format!(" shown {} {:?}", b.shown, b.marker) } else { String::new() }))
+                        .collect::<Vec<_>>()
+                );
+                snapshot(&window, &dir.join("markdown.png"));
+                app.act("markdown.toggle");
+            }
+            1503 if reading => {
+                eprintln!("md: after the toggle page {}", shell.get_md_page());
+                snapshot(&window, &dir.join("markdown-source.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1216,7 +1242,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

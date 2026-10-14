@@ -36,6 +36,11 @@ pub enum Block {
     Table {
         rows: Vec<Vec<String>>,
     },
+    /// A picture: where it is, and the words that stand in for it.
+    Image {
+        src: String,
+        alt: String,
+    },
 }
 
 /// A list item's marker and depth (0 for a top-level list).
@@ -77,7 +82,8 @@ struct Reader {
     /// Inside a link: where it goes, written when it closes.
     links: Vec<String>,
     table: Option<Vec<Vec<String>>>,
-    image: bool,
+    /// Inside an image: its address and the alt text gathered so far.
+    image: Option<(String, String)>,
 }
 
 impl Reader {
@@ -100,11 +106,10 @@ impl Reader {
         match event {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
-            Event::Text(text) => {
-                if !self.image {
-                    self.inline.push_str(&escape(&text));
-                }
-            }
+            Event::Text(text) => match self.image.as_mut() {
+                Some((_, alt)) => alt.push_str(&text),
+                None => self.inline.push_str(&escape(&text)),
+            },
             Event::Code(code) => self.inline.push_str(&code_span(&code)),
             Event::InlineMath(math) | Event::DisplayMath(math) => {
                 self.inline.push_str(&code_span(&math))
@@ -187,7 +192,12 @@ impl Reader {
                 self.inline.push('[');
                 self.links.push(dest_url.to_string());
             }
-            Tag::Image { .. } => self.image = true,
+            Tag::Image { dest_url, .. } => {
+                // A picture is a block of its own: the text before it is a
+                // paragraph, and the text after it another.
+                self.flush();
+                self.image = Some((dest_url.to_string(), String::new()));
+            }
             Tag::Table(_) => {
                 self.flush();
                 self.table = Some(Vec::new());
@@ -233,7 +243,11 @@ impl Reader {
                     url.replace(' ', "%20").replace(')', "%29")
                 ));
             }
-            TagEnd::Image => self.image = false,
+            TagEnd::Image => {
+                if let Some((src, alt)) = self.image.take() {
+                    self.out.push(Block::Image { src, alt });
+                }
+            }
             TagEnd::TableCell => {
                 let cell = std::mem::take(&mut self.inline);
                 if let Some(row) = self.table.as_mut().and_then(|t| t.last_mut()) {
@@ -368,6 +382,14 @@ mod tests {
             lines: vec!["fn main() {}".into()]
         }));
         assert!(blocks.contains(&Block::Rule));
+        let pictured = super::blocks("before ![a board](img/board.png) after\n");
+        assert_eq!(
+            pictured[1],
+            Block::Image {
+                src: "img/board.png".into(),
+                alt: "a board".into()
+            }
+        );
         assert!(blocks.contains(&Block::Table {
             rows: vec![vec!["a".into(), "b".into()], vec!["1".into(), "2".into()]]
         }));

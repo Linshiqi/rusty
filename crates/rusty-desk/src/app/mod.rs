@@ -159,6 +159,8 @@ struct State {
     memory: memory::Memory,
     crates: crates::Crates,
     assistant: assistant::Assistant,
+    /// Markdown files shown as their source rather than as a page.
+    markdown_source: HashSet<String>,
     term: terminal::Term,
 }
 
@@ -544,6 +546,7 @@ impl App {
         self.editor.on_edit(move |path| {
             if let Some(app) = weak.upgrade() {
                 app.sync_tabs();
+                app.sync_markdown();
                 app.back_up_soon(path);
             }
         });
@@ -658,6 +661,7 @@ impl App {
             other if other.starts_with("memory.") => self.memory_act(&other["memory.".len()..]),
             other if other.starts_with("crates.") => self.crates_act(&other["crates.".len()..]),
             other if other.starts_with("ai.") => self.ai_act(&other["ai.".len()..]),
+            "markdown.toggle" => self.markdown_toggle(),
             "app.exit" => {
                 self.keep_drafts_and_wait();
                 let _ = slint::quit_event_loop();
@@ -925,6 +929,7 @@ impl App {
         self.sync_tabs();
         self.sync_tree();
         self.sync_status();
+        self.sync_markdown();
         if let Some(window) = self.window()
             && !matches!(self.active_tab(), Some(Tab::File(_)))
         {

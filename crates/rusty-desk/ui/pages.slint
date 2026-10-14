@@ -6,6 +6,7 @@ import { GitPage, GitDiffPage } from "git.slint";
 import { MemoryPage } from "memory.slint";
 import { CratesPage } from "crates.slint";
 import { AssistantSettings } from "assistant.slint";
+import { MarkdownView } from "markdown.slint";
 import { Transport } from "debug.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
@@ -436,6 +437,33 @@ export component EditorArea inherits Rectangle {
         Rectangle {
             code := CodeView {
                 visible: Shell.active-kind == "file";
+            }
+            // A Markdown file read as a page, over its source.
+            if Shell.active-kind == "file" && Shell.md-page: md-area := Rectangle {
+                background: Theme.content;
+                ScrollView {
+                    // A reading column, centred: margins from the page's own
+                    // width, never the column's, which is what it decides.
+                    VerticalLayout {
+                        padding-top: 28px;
+                        padding-bottom: 28px;
+                        padding-left: max(32px, (md-area.width - 820px) / 2);
+                        padding-right: max(32px, (md-area.width - 820px) / 2);
+                        MarkdownView {
+                            blocks: Shell.md-blocks;
+                            font-size: Theme.body;
+                        }
+                    }
+                }
+            }
+            if Shell.active-kind == "file" && Shell.md-file: IconButton {
+                x: parent.width - self.width - 22px;
+                y: 8px;
+                icon: Shell.md-page ? Icons.code : Icons.files;
+                tip: Shell.md-page ? @tr("markdown.show-source") : @tr("markdown.show-preview");
+                clicked => {
+                    Shell.act("markdown.toggle");
+                }
             }
             if Shell.active-kind == "welcome": Welcome { }
             if Shell.active-kind == "settings": SettingsPage { }

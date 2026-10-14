@@ -684,7 +684,7 @@ impl App {
                                 });
                             }
                             Content::Text { text } => entries.push(AiEntry {
-                                blocks: markdown_view::blocks(&self.files, text),
+                                blocks: markdown_view::blocks(&self.files, text, None),
                                 ..entry(1)
                             }),
                             Content::ToolUse { id, name, input } => {
@@ -730,7 +730,7 @@ impl App {
             }
             if !streaming.text.is_empty() {
                 entries.push(AiEntry {
-                    blocks: markdown_view::blocks(&self.files, &streaming.text),
+                    blocks: markdown_view::blocks(&self.files, &streaming.text, None),
                     ..entry(1)
                 });
             }
