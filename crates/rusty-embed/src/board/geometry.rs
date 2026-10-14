@@ -14,59 +14,59 @@
 //! [`local`] and [`orient`]; a second copy of the arithmetic is how a pin
 //! circle and the wire that leaves it come to disagree.
 
-use rusty_embed::nets::Row;
+use crate::nets::Row;
 
 use super::art;
-use rusty_embed::{Fill, Graphic, Instance, KIT_REFERENCE, Pin, PinRef, Sheet, Symbol, Wire};
+use crate::{Fill, Graphic, Instance, KIT_REFERENCE, Pin, PinRef, Sheet, Symbol, Wire};
 
-pub(super) const SNAP: f64 = 8.0;
+pub const SNAP: f64 = 8.0;
 /// The pulse widths a hobby servo's two ends answer to, in microseconds,
 /// when the sheet has not said otherwise. The commonest pair, and the part
 /// carries `min` and `max` for the other one — the difference between them
 /// is forty degrees at each end, which is a horn against its stop rather
 /// than where the firmware asked.
-pub(super) const SERVO_MIN_US: f32 = 500.0;
-pub(super) const SERVO_MAX_US: f32 = 2500.0;
-pub(super) const KIT_W: f64 = 150.0;
+pub const SERVO_MIN_US: f32 = 500.0;
+pub const SERVO_MAX_US: f32 = 2500.0;
+pub const KIT_W: f64 = 150.0;
 /// Pin-row pitch on the kit. A multiple of the base grid on purpose —
 /// KiCad's oldest rule is that pins live on the grid, because a snapped
 /// segment can only ever meet an anchor that is itself snapped.
-pub(super) const ROW_PITCH: f64 = 16.0;
+pub const ROW_PITCH: f64 = 16.0;
 /// One KiCad millimetre in sheet pixels: 2.54 mm is one row pitch.
 ///
 /// The model's, not a second copy: the KiCad writer converts back with it,
 /// and two spellings of one scale is how an imported part comes in at a
 /// different size from the one beside it. `ROW_PITCH / 2.54` is what it is,
 /// and the assertion below is what keeps that true.
-pub(super) use rusty_embed::MM_PX;
+pub use crate::MM_PX;
 const _: () = assert!(MM_PX == ROW_PITCH / 2.54);
 /// The devkit's symbol id. Generated from the chip's rows rather than read
 /// from a library, and never written to a file — `U1` is drawn by the chip.
-pub(super) const KIT_SYMBOL: &str = "rusty:kit";
+pub const KIT_SYMBOL: &str = "rusty:kit";
 /// What an unknown symbol is drawn as: a box this big, with the id in it.
-pub(super) const UNKNOWN_BOX: (f64, f64) = (64.0, 32.0);
+pub const UNKNOWN_BOX: (f64, f64) = (64.0, 32.0);
 
 /// One thing on the sheet: a placed symbol, with the symbol beside it so
 /// the view never looks one up. `symbol` is `None` for a part whose symbol
 /// no library has — it is kept, drawn as a labelled box, and its wires
 /// cannot land anywhere, which is the honest picture.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct EditPart {
-    pub(super) inst: Instance,
-    pub(super) symbol: Option<Symbol>,
+pub struct EditPart {
+    pub inst: Instance,
+    pub symbol: Option<Symbol>,
 }
 
 impl EditPart {
-    pub(super) fn is_kit(&self) -> bool {
+    pub fn is_kit(&self) -> bool {
         self.inst.reference == KIT_REFERENCE
     }
 
     /// A pin by number or name, as a wire names it.
-    pub(super) fn pin(&self, key: &str) -> Option<&Pin> {
+    pub fn pin(&self, key: &str) -> Option<&Pin> {
         self.symbol.as_ref()?.pin(key)
     }
 
-    pub(super) fn pins(&self) -> &[Pin] {
+    pub fn pins(&self) -> &[Pin] {
         self.symbol
             .as_ref()
             .map(|s| s.pins.as_slice())
@@ -77,24 +77,24 @@ impl EditPart {
 /// What undo restores: the parts, the wires, and the pins the author has
 /// said reach nothing on purpose — everything the sheet holds that a
 /// gesture can change.
-pub(super) type Snapshot = (Vec<EditPart>, Vec<Wire>, Vec<PinRef>);
+pub type Snapshot = (Vec<EditPart>, Vec<Wire>, Vec<PinRef>);
 
 /// Where another marked part stood when a group drag began.
-pub(super) type GroupStart = (usize, (f64, f64));
+pub type GroupStart = (usize, (f64, f64));
 
 /// A wire touching a moving part, with the axis of the leg at each of its
 /// ends — judged once when the drag starts, so it cannot flip as the part
 /// crosses its own bend. `None` where the end is not on the moving part
 /// or the wire has no planted bend.
-pub(super) type WireStart = (usize, Option<bool>, Option<bool>);
+pub type WireStart = (usize, Option<bool>, Option<bool>);
 
 /// Both ends of a wire on the sheet: the connection point and the direction
 /// a wire leaves it, for the `from` end and the `to` end.
-pub(super) type WireEnds = [((f64, f64), (f64, f64)); 2];
+pub type WireEnds = [((f64, f64), (f64, f64)); 2];
 
 /// How far a press may travel before its release and still be a click, in
 /// sheet units: a hand that tapped a pin and moved a pixel meant to tap it.
-pub(super) const CLICK_SLOP: f64 = 4.0;
+pub const CLICK_SLOP: f64 = 4.0;
 
 /// A wire being drawn click by click, the way every schematic editor draws
 /// one: a click on a pin starts it, each click on the sheet fixes a corner,
@@ -113,7 +113,7 @@ pub(super) const CLICK_SLOP: f64 = 4.0;
 /// corners begin, so Backspace takes back one click, not one corner.
 /// `flip` turns the live leg the other way round — Space, KiCad's posture.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Drawing {
+pub struct Drawing {
     pub from: (usize, String),
     pub placed: Vec<(f64, f64)>,
     pub marks: Vec<usize>,
@@ -121,7 +121,7 @@ pub(super) struct Drawing {
 }
 
 impl Drawing {
-    pub(super) fn new(from: (usize, String)) -> Self {
+    pub fn new(from: (usize, String)) -> Self {
         Drawing {
             from,
             placed: Vec::new(),
@@ -132,7 +132,7 @@ impl Drawing {
 
     /// Lay the corners that take the wire to `to`: out of the pin first if
     /// nothing is laid yet, and on from the last corner otherwise.
-    pub(super) fn place(&mut self, pin: (f64, f64), out: (f64, f64), to: (f64, f64)) {
+    pub fn place(&mut self, pin: (f64, f64), out: (f64, f64), to: (f64, f64)) {
         let leg = self.leg_to(pin, out, to);
         self.marks.push(self.placed.len());
         for point in leg {
@@ -148,7 +148,7 @@ impl Drawing {
     /// Take back the last click. `false` when there was none to take back,
     /// which is the caller's cue that the drawing itself is what Backspace
     /// is undoing.
-    pub(super) fn unplace(&mut self) -> bool {
+    pub fn unplace(&mut self) -> bool {
         match self.marks.pop() {
             Some(at) => {
                 self.placed.truncate(at);
@@ -163,12 +163,7 @@ impl Drawing {
     /// direction, the way a pin is drawn; every later one runs the way the
     /// hand moved furthest before it turns — both unless `flip` says
     /// otherwise.
-    pub(super) fn leg_to(
-        &self,
-        pin: (f64, f64),
-        out: (f64, f64),
-        to: (f64, f64),
-    ) -> Vec<(f64, f64)> {
+    pub fn leg_to(&self, pin: (f64, f64), out: (f64, f64), to: (f64, f64)) -> Vec<(f64, f64)> {
         match self.placed.last() {
             None => first_leg(pin, out, to, self.flip),
             Some(&last) => drawn_leg(last, to, self.flip),
@@ -176,12 +171,7 @@ impl Drawing {
     }
 
     /// The whole route as it stands, pin to `to`, for the preview.
-    pub(super) fn route_to(
-        &self,
-        pin: (f64, f64),
-        out: (f64, f64),
-        to: (f64, f64),
-    ) -> Vec<(f64, f64)> {
+    pub fn route_to(&self, pin: (f64, f64), out: (f64, f64), to: (f64, f64)) -> Vec<(f64, f64)> {
         let mut points = vec![pin];
         points.extend(self.placed.iter().copied());
         points.extend(self.leg_to(pin, out, to));
@@ -191,7 +181,7 @@ impl Drawing {
     /// The whole route ending on a pin at `end`, which it meets along that
     /// pin's own direction (`end_out`) — from outside the part, as a wire
     /// on a schematic meets a pin — for the preview and for the wire made.
-    pub(super) fn route_into(
+    pub fn route_into(
         &self,
         pin: (f64, f64),
         out: (f64, f64),
@@ -217,7 +207,7 @@ impl Drawing {
 /// after `from`, `to` last. It runs first along the axis the pointer moved
 /// furthest, so the wire grows the way the hand is going; `flip` runs it the
 /// other way round.
-pub(super) fn drawn_leg(from: (f64, f64), to: (f64, f64), flip: bool) -> Vec<(f64, f64)> {
+pub fn drawn_leg(from: (f64, f64), to: (f64, f64), flip: bool) -> Vec<(f64, f64)> {
     let (dx, dy) = ((to.0 - from.0).abs(), (to.1 - from.1).abs());
     if dx < 0.01 || dy < 0.01 {
         return vec![to];
@@ -234,12 +224,7 @@ pub(super) fn drawn_leg(from: (f64, f64), to: (f64, f64), flip: bool) -> Vec<(f6
 /// The first leg, out of the start pin: a row pitch along the pin's own
 /// direction, so the wire leaves the body the way the pin does, then on
 /// along that axis before turning towards `to` — unless `flip`.
-pub(super) fn first_leg(
-    pin: (f64, f64),
-    out: (f64, f64),
-    to: (f64, f64),
-    flip: bool,
-) -> Vec<(f64, f64)> {
+pub fn first_leg(pin: (f64, f64), out: (f64, f64), to: (f64, f64), flip: bool) -> Vec<(f64, f64)> {
     let stub = (pin.0 + out.0 * ROW_PITCH, pin.1 + out.1 * ROW_PITCH);
     let along_x = out.0.abs() > out.1.abs();
     let corner = if along_x != flip {
@@ -262,7 +247,7 @@ pub(super) fn first_leg(
 /// The last leg, into a pin at `end` whose wire leaves along `end_out`:
 /// across to the column (or row) of the pin's stub, over to the stub, and in
 /// along the pin — the corners after `from`, the pin last.
-pub(super) fn last_leg(from: (f64, f64), end: (f64, f64), end_out: (f64, f64)) -> Vec<(f64, f64)> {
+pub fn last_leg(from: (f64, f64), end: (f64, f64), end_out: (f64, f64)) -> Vec<(f64, f64)> {
     let stub = (end.0 + end_out.0 * ROW_PITCH, end.1 + end_out.1 * ROW_PITCH);
     let along_x = end_out.0.abs() > end_out.1.abs();
     // Reach the stub moving *across* the pin's axis, so the final turn into
@@ -277,7 +262,7 @@ pub(super) fn last_leg(from: (f64, f64), end: (f64, f64), end_out: (f64, f64)) -
 
 /// What the pointer is doing between a press and its release.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum Drag {
+pub enum Drag {
     Pan {
         start_tx: f64,
         start_ty: f64,
@@ -315,7 +300,7 @@ pub(super) enum Drag {
 /// What a right-click landed on. The menu is about this and nothing else —
 /// that is the entire point of a context menu.
 #[derive(Clone, Copy, PartialEq)]
-pub(super) enum MenuTarget {
+pub enum MenuTarget {
     Wire(usize),
     Part(usize),
     /// One pin of one part, by the part's index and the pin's place in its
@@ -329,7 +314,7 @@ pub(super) enum MenuTarget {
 /// The same rounding on a user-chosen grid — the sheet's corner control
 /// offers 1/4/8/16px, because "the grid is too coarse to align" deserved a
 /// dial, even after the real cause (off-grid anchors) was fixed.
-pub(super) fn snap_to(value: f64, grid: f64) -> f64 {
+pub fn snap_to(value: f64, grid: f64) -> f64 {
     if grid <= 1.0 {
         return value.round();
     }
@@ -338,12 +323,12 @@ pub(super) fn snap_to(value: f64, grid: f64) -> f64 {
 
 /// The kit's header height for a row count — the rails and pins decide it,
 /// rather than a constant that only ever suited one module.
-pub(super) fn kit_height(rows: usize) -> f64 {
+pub fn kit_height(rows: usize) -> f64 {
     32.0 + rows.div_ceil(2) as f64 * ROW_PITCH
 }
 
 /// Where a kit row's pin circle sits, relative to the kit's top-left.
-pub(super) fn row_offset(rows: usize, row: usize) -> (f64, f64) {
+pub fn row_offset(rows: usize, row: usize) -> (f64, f64) {
     let left = rows.div_ceil(2);
     if row < left {
         (10.0, 16.0 + row as f64 * ROW_PITCH)
@@ -356,7 +341,7 @@ pub(super) fn row_offset(rows: usize, row: usize) -> (f64, f64) {
 /// and named by the row (`GPIO2`, `GND`), so a wire to `U1.GPIO2` resolves
 /// the way a wire to `D1.K` does. The body is a rectangle the size of the
 /// drawing, for bounds and the rubber band; the art itself is `kit_art`.
-pub(super) fn kit_symbol(chip: &str, rows: &[Row]) -> Symbol {
+pub fn kit_symbol(chip: &str, rows: &[Row]) -> Symbol {
     let height = kit_height(rows.len());
     let left = rows.len().div_ceil(2);
     let pins = rows
@@ -368,11 +353,11 @@ pub(super) fn kit_symbol(chip: &str, rows: &[Row]) -> Symbol {
                 number: (row + 1).to_string(),
                 name: spec.name.clone(),
                 kind: if spec.rail.is_some() {
-                    rusty_embed::PinKind::PowerIn
+                    crate::PinKind::PowerIn
                 } else if spec.gpio.is_some() {
-                    rusty_embed::PinKind::Bidirectional
+                    crate::PinKind::Bidirectional
                 } else {
-                    rusty_embed::PinKind::Input
+                    crate::PinKind::Input
                 },
                 at: (px / MM_PX, -py / MM_PX),
                 length: 0.0,
@@ -399,7 +384,7 @@ pub(super) fn kit_symbol(chip: &str, rows: &[Row]) -> Symbol {
 
 /// The editor's parts from the wire model: the devkit first, always, then
 /// every placed symbol with its symbol found among the resolved ones.
-pub(super) fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
+pub fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
     let mut out = Vec::with_capacity(sheet.parts.len() + 1);
     out.push(EditPart {
         inst: Instance {
@@ -429,12 +414,7 @@ pub(super) fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
 
 /// Back to the wire model, for saving. The symbols are not sent: the
 /// backend resolves them on load, and the file never carries them.
-pub(super) fn sheet_of(
-    chip: &str,
-    parts: &[EditPart],
-    wires: &[Wire],
-    no_connect: &[PinRef],
-) -> Sheet {
+pub fn sheet_of(chip: &str, parts: &[EditPart], wires: &[Wire], no_connect: &[PinRef]) -> Sheet {
     let mut sheet = Sheet::empty(chip);
     for part in parts {
         if part.is_kit() {
@@ -452,19 +432,19 @@ pub(super) fn sheet_of(
 }
 
 /// An empty sheet for the project's chip.
-pub(super) fn empty_sheet(chip: &str) -> Sheet {
+pub fn empty_sheet(chip: &str) -> Sheet {
     Sheet::empty(chip)
 }
 
 /// A symbol-local point (millimetres, y up) as a sheet offset (pixels, y
 /// down) before the part's own turn and mirror.
-pub(super) fn local(point: (f64, f64)) -> (f64, f64) {
+pub fn local(point: (f64, f64)) -> (f64, f64) {
     (point.0 * MM_PX, -point.1 * MM_PX)
 }
 
 /// A sheet offset turned and mirrored the way a part is: the mirror first,
 /// then quarter turns clockwise on the screen.
-pub(super) fn orient(offset: (f64, f64), rot: u16, mirror: bool) -> (f64, f64) {
+pub fn orient(offset: (f64, f64), rot: u16, mirror: bool) -> (f64, f64) {
     let (x, y) = if mirror {
         (-offset.0, offset.1)
     } else {
@@ -480,7 +460,7 @@ pub(super) fn orient(offset: (f64, f64), rot: u16, mirror: bool) -> (f64, f64) {
 
 /// A point turned about a centre, in quarter turns.
 #[cfg(test)]
-pub(super) fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (f64, f64) {
+pub fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (f64, f64) {
     let (dx, dy) = (point.0 - centre.0, point.1 - centre.1);
     let (rx, ry) = orient((dx, dy), rot, false);
     (centre.0 + rx, centre.1 + ry)
@@ -488,7 +468,7 @@ pub(super) fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (
 
 /// The connector a devkit carries at its bottom edge.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Usb {
+pub enum Usb {
     /// A bare chip, drawn as one: no board around it.
     None,
     MicroB,
@@ -502,7 +482,7 @@ pub(super) enum Usb {
 /// whose name is printed on the can. Drawn from the catalogue's `kit` — the
 /// pin rows are data too; this is the board around them.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(super) struct KitStyle {
+pub struct KitStyle {
     /// The module's printed name, or `None` for a part rusty knows only as
     /// a die, which is drawn as a chip rather than as somebody's devkit.
     pub module: Option<String>,
@@ -517,14 +497,14 @@ pub(super) struct KitStyle {
 
 /// The devkit the catalogue says a part is drawn on, made by `maker` —
 /// or a bare chip when it says none.
-pub(super) fn kit_style(kit: Option<&rusty_embed::Kit>, maker: &str) -> KitStyle {
+pub fn kit_style(kit: Option<&crate::Kit>, maker: &str) -> KitStyle {
     match kit {
         Some(kit) => KitStyle {
             module: Some(kit.module.clone()),
             usb: match kit.usb {
-                rusty_embed::KitUsb::MicroB => Usb::MicroB,
-                rusty_embed::KitUsb::TypeC => Usb::TypeC,
-                rusty_embed::KitUsb::DualTypeC => Usb::DualTypeC,
+                crate::KitUsb::MicroB => Usb::MicroB,
+                crate::KitUsb::TypeC => Usb::TypeC,
+                crate::KitUsb::DualTypeC => Usb::DualTypeC,
             },
             buttons: (kit.reset.clone(), kit.boot.clone()),
             rgb: kit.rgb,
@@ -546,7 +526,7 @@ pub(super) fn kit_style(kit: Option<&rusty_embed::Kit>, maker: &str) -> KitStyle
 /// the RGB LED where the devkit has one, and the connector — everything a
 /// hand reaching for the board on the desk uses to orient itself. Pure text,
 /// so a test can say which board it is; `height` follows the pin rows.
-pub(super) fn kit_art(style: &KitStyle, height: f64, label: &str) -> String {
+pub fn kit_art(style: &KitStyle, height: f64, label: &str) -> String {
     let w = KIT_W;
     let h = height;
     let mut svg = String::new();
@@ -683,7 +663,7 @@ pub(super) fn kit_art(style: &KitStyle, height: f64, label: &str) -> String {
 
 /// The part's drawing, in its own frame — `None` for a part whose symbol
 /// no library has, which is drawn as a labelled box instead.
-pub(super) fn part_layout(part: &EditPart) -> Option<art::Layout> {
+pub fn part_layout(part: &EditPart) -> Option<art::Layout> {
     // The value as well as the symbol: a strip's shape is how many LEDs
     // are on it, and that is what is written beside the part.
     part.symbol
@@ -695,19 +675,19 @@ pub(super) fn part_layout(part: &EditPart) -> Option<art::Layout> {
 /// the direction it runs away from the body, after the part's turn and
 /// mirror. Takes the layout, so a caller looking at every pin builds it
 /// once — this is the inner loop of a drag.
-pub(super) fn spot_on_sheet(part: &EditPart, spot: &art::Spot) -> ((f64, f64), (f64, f64)) {
+pub fn spot_on_sheet(part: &EditPart, spot: &art::Spot) -> ((f64, f64), (f64, f64)) {
     let (dx, dy) = orient(spot.at, part.inst.rot, part.inst.mirror);
     let (ox, oy) = orient(spot.out, part.inst.rot, part.inst.mirror);
     ((part.inst.x + dx, part.inst.y + dy), (ox, oy))
 }
 
 /// Where a pin's wire lands on the sheet — the end of its lead.
-pub(super) fn pin_point(part: &EditPart, pin: &Pin) -> (f64, f64) {
+pub fn pin_point(part: &EditPart, pin: &Pin) -> (f64, f64) {
     lead_of(part, pin).map_or((part.inst.x, part.inst.y), |(at, _)| at)
 }
 
 /// The unit vector a wire leaves a pin along: away from the body.
-pub(super) fn pin_out(part: &EditPart, pin: &Pin) -> (f64, f64) {
+pub fn pin_out(part: &EditPart, pin: &Pin) -> (f64, f64) {
     lead_of(part, pin).map_or((0.0, 0.0), |(_, out)| out)
 }
 
@@ -724,9 +704,9 @@ fn lead_of(part: &EditPart, pin: &Pin) -> Option<((f64, f64), (f64, f64))> {
 /// address there is no traffic to read; without the panel the same bytes
 /// mean two pictures two columns apart, so a screen is drawn only where
 /// both are there.
-pub(super) fn display_address(part: &EditPart) -> Option<u8> {
-    rusty_embed::screen::Panel::from_id(part.inst.props.get("panel")?)?;
-    rusty_embed::nets::hex_address(part.inst.props.get("addr")?)
+pub fn display_address(part: &EditPart) -> Option<u8> {
+    crate::screen::Panel::from_id(part.inst.props.get("panel")?)?;
+    crate::nets::hex_address(part.inst.props.get("addr")?)
 }
 
 /// A screen's lit pixels as one path, in the screen's own pixel units.
@@ -736,7 +716,7 @@ pub(super) fn display_address(part: &EditPart) -> Option<u8> {
 /// one attribute of one element where the obvious drawing is an element
 /// per dot. Each run is a horizontal line down the middle of its row,
 /// stroked one unit wide, which fills the row exactly.
-pub(super) fn pixel_path(screen: &rusty_embed::screen::Screen) -> String {
+pub fn pixel_path(screen: &crate::screen::Screen) -> String {
     let mut path = String::new();
     for (x, y, len) in screen.runs() {
         use std::fmt::Write;
@@ -748,7 +728,7 @@ pub(super) fn pixel_path(screen: &rusty_embed::screen::Screen) -> String {
 
 /// The box a part occupies on the sheet, `(x0, y0, x1, y1)`: the drawing's
 /// box, turned and mirrored, or the unknown-symbol box.
-pub(super) fn part_box(part: &EditPart) -> (f64, f64, f64, f64) {
+pub fn part_box(part: &EditPart) -> (f64, f64, f64, f64) {
     let (x, y) = (part.inst.x, part.inst.y);
     let Some(plan) = part_layout(part) else {
         let (w, h) = UNKNOWN_BOX;
@@ -769,7 +749,7 @@ pub(super) fn part_box(part: &EditPart) -> (f64, f64, f64, f64) {
 /// every part instead would change where a turned lamp lands in files
 /// people have already saved, for no gain: their anchors are already
 /// centred.
-pub(super) fn turned_anchor(part: &EditPart, rot: u16, mirror: bool) -> (f64, f64) {
+pub fn turned_anchor(part: &EditPart, rot: u16, mirror: bool) -> (f64, f64) {
     let here = (part.inst.x, part.inst.y);
     if !part.is_kit() {
         return here;
@@ -787,7 +767,7 @@ pub(super) fn turned_anchor(part: &EditPart, rot: u16, mirror: bool) -> (f64, f6
 }
 
 /// A box in the drawing's frame, turned and mirrored onto the sheet.
-pub(super) fn box_on_sheet(part: &EditPart, rect: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+pub fn box_on_sheet(part: &EditPart, rect: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
     let (x0, y0, x1, y1) = rect;
     let mut acc: Option<(f64, f64, f64, f64)> = None;
     for corner in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
@@ -805,11 +785,7 @@ pub(super) fn box_on_sheet(part: &EditPart, rect: (f64, f64, f64, f64)) -> (f64,
 /// Nothing when nothing is in reach, rather than the nearest: a wire that
 /// landed on a pin forty pixels from the pointer would be a connection
 /// nobody made. Hidden pins take no wires.
-pub(super) fn pin_under(
-    parts: &[EditPart],
-    point: (f64, f64),
-    radius: f64,
-) -> Option<(usize, String)> {
+pub fn pin_under(parts: &[EditPart], point: (f64, f64), radius: f64) -> Option<(usize, String)> {
     let mut best: Option<((usize, String), f64)> = None;
     for (index, part) in parts.iter().enumerate() {
         let Some(plan) = part_layout(part) else {
@@ -830,7 +806,7 @@ pub(super) fn pin_under(
 /// sheet order — the rubber-band selection. Touching rather than enclosed:
 /// the parts are small and the intent of a band that clips a corner is
 /// never "not that one". The corners may come in either order.
-pub(super) fn parts_in_box(parts: &[EditPart], a: (f64, f64), b: (f64, f64)) -> Vec<usize> {
+pub fn parts_in_box(parts: &[EditPart], a: (f64, f64), b: (f64, f64)) -> Vec<usize> {
     let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
     let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
     parts
@@ -845,7 +821,7 @@ pub(super) fn parts_in_box(parts: &[EditPart], a: (f64, f64), b: (f64, f64)) -> 
 }
 
 /// The box around everything on the sheet — what fit-to-view frames.
-pub(super) fn bounds(parts: &[EditPart]) -> ((f64, f64), (f64, f64)) {
+pub fn bounds(parts: &[EditPart]) -> ((f64, f64), (f64, f64)) {
     let mut min = (f64::MAX, f64::MAX);
     let mut max = (f64::MIN, f64::MIN);
     for part in parts {
@@ -862,7 +838,7 @@ pub(super) fn bounds(parts: &[EditPart]) -> ((f64, f64), (f64, f64)) {
 /// The two ends of a wire on the sheet, each with the direction a wire
 /// leaves its pin: `None` when either end names a part or a pin the sheet
 /// does not have.
-pub(super) fn wire_ends(parts: &[EditPart], wire: &Wire) -> Option<WireEnds> {
+pub fn wire_ends(parts: &[EditPart], wire: &Wire) -> Option<WireEnds> {
     let end = |at: &PinRef| {
         let part = parts.iter().find(|p| p.inst.reference == at.part)?;
         let pin = part.pin(&at.pin)?;
@@ -875,7 +851,7 @@ pub(super) fn wire_ends(parts: &[EditPart], wire: &Wire) -> Option<WireEnds> {
 /// author placed, orthogonal by construction as every schematic wire is. An
 /// untouched wire steps out of each pin along the pin's own direction and
 /// meets itself with one elbow.
-pub(super) fn wire_path(ends: &WireEnds, bends: &[(f64, f64)]) -> Vec<(f64, f64)> {
+pub fn wire_path(ends: &WireEnds, bends: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let [(a, out_a), (b, out_b)] = *ends;
     let mut points = vec![a];
     if bends.is_empty() {
@@ -910,7 +886,7 @@ fn point_to_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
 /// reach rather than the nearest, because a branch attached to a wire forty
 /// pixels from the pointer is a connection nobody made. A pin beats a wire,
 /// so the caller asks this only after `pin_under` has answered nothing.
-pub(super) fn wire_under(
+pub fn wire_under(
     parts: &[EditPart],
     wires: &[Wire],
     point: (f64, f64),
@@ -950,7 +926,7 @@ pub(super) fn wire_under(
 /// to any hand-bent wire whose neighbour moves, and the same repair: drag
 /// the segment back. A junction node in the file would be a second way to
 /// say what a shared net already says.
-pub(super) fn branch_route(
+pub fn branch_route(
     parts: &[EditPart],
     trunk: &Wire,
     at: (f64, f64),
@@ -997,7 +973,7 @@ pub(super) fn branch_route(
 /// Re-tidy one wire after its ends moved: the pins are put back on the
 /// route, collinear bends fold away, and what is stored is again only the
 /// bends between them.
-pub(super) fn retidy(wire: &mut Wire, ends: &WireEnds) {
+pub fn retidy(wire: &mut Wire, ends: &WireEnds) {
     if wire.bends.is_empty() {
         return;
     }
@@ -1012,7 +988,7 @@ pub(super) fn retidy(wire: &mut Wire, ends: &WireEnds) {
 /// bend whose neighbours run straight through it. This is what merges two
 /// segments the user has dragged into line — the KiCad behaviour: aligned
 /// segments become one segment, and the next grab moves them as one.
-pub(super) fn simplify_route(full: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+pub fn simplify_route(full: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     let mut out: Vec<(f64, f64)> = Vec::with_capacity(full.len());
     for point in full {
         if let Some(last) = out.last()
@@ -1040,7 +1016,7 @@ pub(super) fn simplify_route(full: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
 
 /// Insert elbows so every segment runs purely horizontally or vertically.
 /// Idempotent, so a path that came back from a drag survives a round trip.
-pub(super) fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+pub fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     let mut out: Vec<(f64, f64)> = Vec::with_capacity(points.len() + 2);
     out.push(points[0]);
     for pair in points.windows(2) {
@@ -1056,7 +1032,7 @@ pub(super) fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
 /// Which way a route's leg runs — pin against the planted bend beside it.
 /// `Some(true)` is horizontal. Judged once, when the drag starts: judging
 /// it live would flip as the part crosses the bend.
-pub(super) fn leg_axis(pin: (f64, f64), bend: (f64, f64)) -> Option<bool> {
+pub fn leg_axis(pin: (f64, f64), bend: (f64, f64)) -> Option<bool> {
     if (pin.1 - bend.1).abs() < 0.01 {
         Some(true)
     } else if (pin.0 - bend.0).abs() < 0.01 {
@@ -1071,7 +1047,7 @@ pub(super) fn leg_axis(pin: (f64, f64), bend: (f64, f64)) -> Option<bool> {
 /// only changes length. Without this, a planted bend at the old pin height
 /// makes the route run out, all the way back up to where the part used to
 /// be, and down again — a wall of wire the user never drew.
-pub(super) fn follow_bend(pin: (f64, f64), axis: Option<bool>, bend: &mut (f64, f64)) {
+pub fn follow_bend(pin: (f64, f64), axis: Option<bool>, bend: &mut (f64, f64)) {
     match axis {
         Some(true) => bend.1 = pin.1,
         Some(false) => bend.0 = pin.0,
@@ -1081,7 +1057,7 @@ pub(super) fn follow_bend(pin: (f64, f64), axis: Option<bool>, bend: &mut (f64, 
 
 /// The legs of every wire touching any of `moving`, judged as a drag
 /// begins — the argument [`follow_bend`] wants on every frame after.
-pub(super) fn wire_legs(parts: &[EditPart], wires: &[Wire], moving: &[usize]) -> Vec<WireStart> {
+pub fn wire_legs(parts: &[EditPart], wires: &[Wire], moving: &[usize]) -> Vec<WireStart> {
     let moved = |at: &PinRef| {
         moving
             .iter()
@@ -1104,7 +1080,7 @@ pub(super) fn wire_legs(parts: &[EditPart], wires: &[Wire], moving: &[usize]) ->
 }
 
 /// The lamp colours a value names: lit and dark.
-pub(super) fn lamp_colors(color: &str) -> (&'static str, &'static str) {
+pub fn lamp_colors(color: &str) -> (&'static str, &'static str) {
     match color.trim().to_ascii_lowercase().as_str() {
         "green" | "绿" => ("#3ddc84", "#1d4a2f"),
         "blue" | "蓝" => ("#4aa8ff", "#1d3350"),
@@ -1116,7 +1092,7 @@ pub(super) fn lamp_colors(color: &str) -> (&'static str, &'static str) {
 
 /// Additive mix of the RGB lens from three channel levels; dark when none
 /// is on.
-pub(super) fn rgb_color(r: bool, g: bool, b: bool) -> &'static str {
+pub fn rgb_color(r: bool, g: bool, b: bool) -> &'static str {
     match (r, g, b) {
         (false, false, false) => "#2a2d33",
         (true, false, false) => "#ff5c5c",
@@ -1131,7 +1107,7 @@ pub(super) fn rgb_color(r: bool, g: bool, b: bool) -> &'static str {
 
 /// One piece of upright text beside a part: where, how anchored, what.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Label {
+pub struct Label {
     pub x: f64,
     pub y: f64,
     /// `start`, `middle` or `end`.
@@ -1146,7 +1122,7 @@ pub(super) struct Label {
 /// again) is left alone, which is why a resistor and a capacitor carry no
 /// writing at all. The text is placed after the part's turn, so it reads
 /// upright however the part lies.
-pub(super) fn pin_labels(part: &EditPart) -> Vec<Label> {
+pub fn pin_labels(part: &EditPart) -> Vec<Label> {
     let Some(plan) = part_layout(part) else {
         return Vec::new();
     };
@@ -1184,7 +1160,7 @@ mod tests {
     /// drawn between its own rows.
     #[test]
     fn a_lit_run_is_one_line_down_the_middle_of_its_row() {
-        let mut screen = rusty_embed::screen::Screen::of(rusty_embed::screen::Panel::Ssd1306);
+        let mut screen = crate::screen::Screen::of(crate::screen::Panel::Ssd1306);
         // Page addressing at the origin, then a column of the lowest three
         // pixels: three rows of one pixel each.
         screen.i2c(&[0x00, 0xaf, 0xb0, 0x00, 0x10]);
@@ -1218,8 +1194,8 @@ mod tests {
         assert_eq!(display_address(&part), None, "a panel rusty cannot read");
     }
 
-    use rusty_embed::nets::kit_rows;
-    use rusty_embed::{Fill, PinKind};
+    use crate::nets::kit_rows;
+    use crate::{Fill, PinKind};
 
     fn led_symbol() -> Symbol {
         let pin = |number: &str, name: &str, x: f64, angle: u16| Pin {
@@ -1272,7 +1248,7 @@ mod tests {
     }
 
     fn rows() -> Vec<Row> {
-        kit_rows(rusty_embed::nets::Pinout::numbered(&[
+        kit_rows(crate::nets::Pinout::numbered(&[
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21,
         ]))
     }
@@ -1509,7 +1485,7 @@ mod tests {
         let pin_before = parts[0].pin("GPIO2").map(|p| pin_point(&parts[0], p));
         assert!(pin_before.is_some(), "the kit has a GPIO2 to wire to");
 
-        crate::view::panels::simulate::edit::rotate(&mut parts, 0);
+        crate::board::edit::rotate(&mut parts, 0);
         assert_eq!(parts[0].inst.rot, 90);
         let after = middle(&parts[0]);
         assert!(
@@ -1522,7 +1498,7 @@ mod tests {
             "and its header went with it"
         );
 
-        crate::view::panels::simulate::edit::mirror(&mut parts, 0);
+        crate::board::edit::mirror(&mut parts, 0);
         let mirrored = middle(&parts[0]);
         assert!(
             (mirrored.0 - before.0).abs() < 0.001 && (mirrored.1 - before.1).abs() < 0.001,
@@ -1586,7 +1562,7 @@ mod tests {
     /// module, so a board can be told apart on screen and in a test.
     #[test]
     fn a_devkit_is_drawn_as_the_catalogue_describes_it() {
-        let kit = |module: &str, usb, reset: &str, rgb| rusty_embed::Kit {
+        let kit = |module: &str, usb, reset: &str, rgb| crate::Kit {
             module: module.to_string(),
             usb,
             reset: reset.to_string(),
@@ -1594,14 +1570,9 @@ mod tests {
             rgb,
         };
         for (module, usb, reset, rgb) in [
-            ("ESP-WROOM-32", rusty_embed::KitUsb::MicroB, "EN", false),
-            ("ESP32-C3-MINI-1", rusty_embed::KitUsb::TypeC, "RST", true),
-            (
-                "ESP32-S3-WROOM-1",
-                rusty_embed::KitUsb::DualTypeC,
-                "RST",
-                true,
-            ),
+            ("ESP-WROOM-32", crate::KitUsb::MicroB, "EN", false),
+            ("ESP32-C3-MINI-1", crate::KitUsb::TypeC, "RST", true),
+            ("ESP32-S3-WROOM-1", crate::KitUsb::DualTypeC, "RST", true),
         ] {
             let style = kit_style(Some(&kit(module, usb, reset, rgb)), "Espressif");
             let art = kit_art(&style, kit_height(26), "ESP32");
@@ -1632,9 +1603,9 @@ mod tests {
     /// not from the top.
     #[test]
     fn the_connector_follows_the_boards_height() {
-        let c3 = rusty_embed::Kit {
+        let c3 = crate::Kit {
             module: "ESP32-C3-MINI-1".to_string(),
-            usb: rusty_embed::KitUsb::TypeC,
+            usb: crate::KitUsb::TypeC,
             reset: "RST".to_string(),
             boot: "BOOT".to_string(),
             rgb: true,

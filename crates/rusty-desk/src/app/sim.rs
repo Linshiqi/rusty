@@ -179,8 +179,32 @@ impl App {
         false
     }
 
-    /// The pins moved: the board redraws once a frame at most.
-    fn board_moved(self: &Rc<Self>) {}
+    /// A switch on the board pressed or let go while a run goes on: two
+    /// GPIOs joined, or one driven — on the console for firmware that reads
+    /// rusty's text protocol, and on the pin channel for firmware that
+    /// reads its input register.
+    pub(super) fn sim_press(&self, tie: Option<(u8, u8)>, gpio: Option<u8>, down: bool) {
+        if self.activity_kind() != Some(Kind::Simulate) {
+            return;
+        }
+        let state = self.state.borrow();
+        let pins = state.sim.pins.as_ref();
+        match (tie, gpio) {
+            (Some((a, b)), _) => {
+                if let Some(pins) = pins {
+                    pins.tie(a, b, down);
+                }
+            }
+            (None, Some(gpio)) => {
+                let line = rusty_embed::protocol::button_line(u32::from(gpio), down);
+                self.runner.send(&line);
+                if let Some(pins) = pins {
+                    pins.follow(&line);
+                }
+            }
+            (None, None) => {}
+        }
+    }
 
     /// What the simulator has heard, in a line: the probe's view of it.
     pub fn sim_report(&self) -> String {
@@ -243,11 +267,15 @@ impl App {
             return;
         }
         let steps: VecDeque<CommandPlan> = plan.steps.clone().into();
+        // The board as this run's plan has it, beside the code.
+        self.load_board(Some(plan.clone()));
+        self.show_panel("right", "board");
         {
             let mut state = self.state.borrow_mut();
             state.sim.reset();
             state.sim.plan = Some(plan);
         }
+        self.board_moved();
         self.runner.clear();
         self.begin(Kind::Simulate, None);
         self.sim_steps(steps, start, firmware);

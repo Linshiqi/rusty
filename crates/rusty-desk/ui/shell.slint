@@ -111,6 +111,43 @@ export struct PlaygroundCard {
     drawing: bool,
 }
 
+// The board's live layer, in the sheet's own units.
+export struct BoardWire {
+    commands: string,
+    // 0 unknown, 1 low, 2 high, 3 switching under PWM.
+    tone: int,
+}
+
+export struct BoardWord {
+    x: float,
+    y: float,
+    // 0 start, 1 middle, 2 end — where the text hangs off its point.
+    anchor: int,
+    text: string,
+    size: float,
+    // 0 a lead's name, 1 a reference, 2 a value.
+    kind: int,
+}
+
+export struct BoardLamp {
+    x: float,
+    y: float,
+    r: float,
+    lit: color,
+    dark: color,
+    // 0 dark to 1 at full current.
+    light: float,
+}
+
+export struct BoardSwitch {
+    x: float,
+    y: float,
+    r: float,
+    held: bool,
+    // The part, as the board numbers them.
+    index: int,
+}
+
 export struct Recent {
     name: string,
     path: string,
@@ -215,6 +252,21 @@ export global Shell {
     in property <[PlaygroundCard]> playgrounds;
     in property <string> playground;
     callback open-playground(string);
+
+    // The board beside the code: its picture, where on the sheet it sits,
+    // and what moves over it.
+    in property <bool> board-shown;
+    in property <image> board-image;
+    in property <float> board-x;
+    in property <float> board-y;
+    in property <float> board-width;
+    in property <float> board-height;
+    in property <[BoardWire]> board-wires;
+    in property <[BoardWord]> board-words;
+    in property <[BoardLamp]> board-lamps;
+    in property <[BoardSwitch]> board-switches;
+    in property <string> board-caption;
+    callback board-press(int, bool);
 
     // What the window ran, line by line.
     in property <[OutputLine]> output;

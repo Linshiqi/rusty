@@ -20,6 +20,7 @@ use rusty_i18n::{Locale, t};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
 
 mod activity;
+mod board;
 mod build;
 mod device;
 mod drafts;
@@ -144,6 +145,9 @@ pub struct App {
     noted: RefCell<HashSet<String>>,
     /// What the window runs, one at a time, into the Output dock.
     runner: Runner,
+    /// The board beside the code; apart from `state`, since the protocol
+    /// reader holds `state` while it tells the board the pins moved.
+    board: RefCell<board::Board>,
     /// When the window started: the activity view's clock counts from it.
     started: std::time::Instant,
     /// Ticks while something runs, so the view's clock moves.
@@ -176,6 +180,7 @@ impl App {
             problems_timer: Timer::default(),
             noted: RefCell::default(),
             runner,
+            board: RefCell::default(),
             started: std::time::Instant::now(),
             clock: slint::Timer::default(),
             state: RefCell::new(State {
@@ -322,6 +327,8 @@ impl App {
         on!(on_output_click, |app, index| app
             .output_click(index as usize));
         on!(on_output_send, |app, text| app.output_send(&text));
+        on!(on_board_press, |app, index, down| app
+            .board_press(index as usize, down));
         on!(on_wiz_go, |app, step| app.wizard_go(step));
         on!(on_wiz_filter, |app, query| app.wizard_filter(&query));
         on!(on_wiz_pick, |app, id| app.wizard_pick(&id));
@@ -521,6 +528,7 @@ impl App {
         self.sync_problems();
         self.start_servers();
         self.probe_environment();
+        self.load_board(None);
         self.bring_back_drafts(opened);
     }
 

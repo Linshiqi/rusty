@@ -1,0 +1,177 @@
+// The board beside the code: the sheet's picture, and over it what the
+// firmware is doing — each wire coloured by its net's level, each lamp's
+// lens as bright as its current, each switch's cap sunk while held. A cap
+// is pressed with the pointer while a run goes on. Filled by
+// `src/app/board.rs`.
+//
+// The sheet is dark in both themes, as a schematic sheet is the same colour
+// in every editor; the words on it are the window's own text, placed on
+// the sheet's coordinates and never turned.
+
+import { Theme } from "theme.slint";
+import { Shell } from "shell.slint";
+
+export component BoardPanel inherits Rectangle {
+    background: #101216;
+    clip: true;
+
+    // Where the sheet is drawn: fitted whole and centred whenever the panel
+    // or the board changes size, then zoomed with the wheel about the
+    // pointer and panned by dragging the sheet; a double-click fits again.
+    in-out property <float> zoom: 1;
+    in-out property <length> left;
+    in-out property <length> top;
+    property <float> sheet-w: Shell.board-width;
+    property <float> sheet-h: Shell.board-height;
+    function fit() {
+        root.zoom = max(0.05, min((root.width - 24px) / 1px / max(Shell.board-width, 1), (root.height - 40px) / 1px / max(Shell.board-height, 1)));
+        root.left = (root.width - Shell.board-width * root.zoom * 1px) / 2;
+        root.top = (root.height - 16px - Shell.board-height * root.zoom * 1px) / 2;
+    }
+    changed width => {
+        root.fit();
+    }
+    changed height => {
+        root.fit();
+    }
+    changed sheet-w => {
+        root.fit();
+    }
+    changed sheet-h => {
+        root.fit();
+    }
+    init => {
+        root.fit();
+    }
+
+    pure function sx(x: float) -> length {
+        return root.left + (x - Shell.board-x) * root.zoom * 1px;
+    }
+    pure function sy(y: float) -> length {
+        return root.top + (y - Shell.board-y) * root.zoom * 1px;
+    }
+
+    if !Shell.board-shown: Text {
+        x: 16px;
+        width: parent.width - 32px;
+        text: @tr("desk.board-none");
+        color: #98a1ae;
+        font-size: Theme.small;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+
+    // Under everything that takes a press: the sheet itself.
+    pan := TouchArea {
+        property <length> from-left;
+        property <length> from-top;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                self.from-left = root.left;
+                self.from-top = root.top;
+            }
+        }
+        moved => {
+            root.left = self.from-left + self.mouse-x - self.pressed-x;
+            root.top = self.from-top + self.mouse-y - self.pressed-y;
+        }
+        double-clicked => {
+            root.fit();
+        }
+        scroll-event(event) => {
+            if (event.delta-y == 0) {
+                return reject;
+            }
+            let factor = event.delta-y > 0 ? 1.15 : 1 / 1.15;
+            let next = max(0.05, min(8, root.zoom * factor));
+            let applied = next / root.zoom;
+            root.left = self.mouse-x - (self.mouse-x - root.left) * applied;
+            root.top = self.mouse-y - (self.mouse-y - root.top) * applied;
+            root.zoom = next;
+            accept
+        }
+    }
+
+    if Shell.board-shown: Image {
+        x: root.left;
+        y: root.top;
+        width: Shell.board-width * root.zoom * 1px;
+        height: Shell.board-height * root.zoom * 1px;
+        source: Shell.board-image;
+        image-fit: fill;
+    }
+
+    for wire in Shell.board-wires: Path {
+        x: root.left;
+        y: root.top;
+        width: Shell.board-width * root.zoom * 1px;
+        height: Shell.board-height * root.zoom * 1px;
+        viewbox-x: Shell.board-x;
+        viewbox-y: Shell.board-y;
+        viewbox-width: Shell.board-width;
+        viewbox-height: Shell.board-height;
+        commands: wire.commands;
+        fill: transparent;
+        // High green, low grey, unknown lighter; a pin under PWM is green
+        // and paler, a net switching rather than sitting.
+        stroke: wire.tone == 2 ? #5ecf7a : wire.tone == 3 ? #5ecf7a99 : wire.tone == 1 ? #5b6472 : #7d8694;
+        stroke-width: max(1px, 1.6px * root.zoom);
+        stroke-line-join: round;
+    }
+
+    for lamp in Shell.board-lamps: Rectangle {
+        x: root.sx(lamp.x - lamp.r);
+        y: root.sy(lamp.y - lamp.r);
+        width: lamp.r * 2 * root.zoom * 1px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: lamp.dark;
+        // Lit, the lens is its colour and glows; dark, it is the colour
+        // dimmed — a red LED is red on the desk with the power off.
+        Rectangle {
+            border-radius: self.width / 2;
+            background: lamp.lit;
+            opacity: lamp.light;
+            drop-shadow-blur: 10px * root.zoom * lamp.light;
+            drop-shadow-color: lamp.lit;
+        }
+    }
+
+    for cap in Shell.board-switches: Rectangle {
+        x: root.sx(cap.x - cap.r);
+        y: root.sy(cap.y - cap.r);
+        width: cap.r * 2 * root.zoom * 1px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: cap.held ? #00000066 : touch.has-hover ? #ffffff14 : transparent;
+        border-width: cap.held ? 1px : 0;
+        border-color: #e05d38;
+        touch := TouchArea {
+            mouse-cursor: pointer;
+            changed pressed => {
+                Shell.board-press(cap.index, self.pressed);
+            }
+        }
+    }
+
+    for word in Shell.board-words: Text {
+        x: word.anchor == 0 ? root.sx(word.x) : word.anchor == 1 ? root.sx(word.x) - 150px : root.sx(word.x) - 300px;
+        y: root.sy(word.y) - word.size * root.zoom * 0.85px;
+        width: 300px;
+        height: word.size * root.zoom * 1.2px;
+        text: word.text;
+        font-size: max(4px, word.size * root.zoom * 1px);
+        font-family: Theme.mono;
+        color: word.kind == 1 ? #5fd0c8 : word.kind == 2 ? #d7dce3 : #98a1ae;
+        horizontal-alignment: word.anchor == 0 ? TextHorizontalAlignment.left : word.anchor == 1 ? TextHorizontalAlignment.center : TextHorizontalAlignment.right;
+    }
+
+    if Shell.board-caption != "": Text {
+        x: 10px;
+        y: root.height - 18px;
+        text: Shell.board-caption;
+        color: #6f7884;
+        font-size: Theme.caption;
+    }
+}
