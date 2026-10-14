@@ -54,6 +54,9 @@ pub struct Runner {
     output: Rc<VecModel<OutputLine>>,
     running: RefCell<Option<Running>>,
     generation: Cell<u64>,
+    /// Where the last run ran: what a relative path it printed is relative
+    /// to.
+    dir: RefCell<Option<PathBuf>>,
 }
 
 /// What kind a line is, by what it says: a compiler's `error` and
@@ -95,7 +98,18 @@ impl Runner {
             output,
             running: RefCell::default(),
             generation: Cell::new(0),
+            dir: RefCell::default(),
         }
+    }
+
+    /// Where the last run ran.
+    pub fn dir(&self) -> Option<PathBuf> {
+        self.dir.borrow().clone()
+    }
+
+    /// A line of the dock, as it is drawn.
+    pub fn line(&self, index: usize) -> Option<OutputLine> {
+        self.output.row_data(index)
     }
 
     pub fn is_running(&self) -> bool {
@@ -105,9 +119,19 @@ impl Runner {
     /// A line in the dock that no process printed: a command line, how a
     /// run ended, what rusty did between two runs.
     pub fn say(&self, text: &str, kind: i32) {
+        self.say_at(text, kind, None);
+    }
+
+    /// A line that names a place — a path as the project names it, a line
+    /// and a column counted from zero — which a click goes to.
+    pub fn say_at(&self, text: &str, kind: i32, place: Option<(String, i32, i32)>) {
+        let (path, line, col) = place.unwrap_or_default();
         self.output.push(OutputLine {
             text: text.into(),
             kind,
+            path: path.into(),
+            line,
+            col,
         });
         let over = self.output.row_count().saturating_sub(KEPT);
         if over > 0 {
@@ -136,7 +160,10 @@ impl Runner {
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
         self.say(&format!("$ {}", plan.display), kind::COMMAND);
-        let session = match rusty_embed::process::spawn(plan, dir.as_deref()) {
+        self.dir.replace(dir.clone());
+        // `launch`, not `spawn`: a UF2 copy and a DFU image are written in
+        // this process, and everything else is spawned as `spawn` would.
+        let session = match rusty_embed::flash::launch(plan, dir.as_deref()) {
             Ok(session) => session,
             Err(error) => {
                 self.say(&error.to_string(), kind::ERROR);
@@ -149,13 +176,15 @@ impl Runner {
             stopper: session.stopper(),
             stopped: Cell::new(false),
         });
+        let program = plan.program.clone();
         std::thread::Builder::new()
             .name("run".into())
             .spawn(move || {
                 while let Some(line) = session.recv() {
-                    work::deliver(plain(&line.text), |app, text| {
-                        app.runner().say(&text, kind_of(&text));
-                    });
+                    // wlink stamps every line with the time; a protocol
+                    // line is read without it.
+                    let text = plain(rusty_embed::flash::firmware_line(&program, &line.text));
+                    work::deliver(text, |app, text| app.heard(&text));
                 }
                 let code = session.wait();
                 work::deliver(code, move |app, code| {

@@ -142,15 +142,26 @@ component OutputPanel inherits Rectangle {
         scrolled => {
             root.follow = self.content-y <= self.visible-height - self.content-height + 4px;
         }
-        for line in Shell.output: Text {
+        for line[index] in Shell.output: Rectangle {
             height: 18px;
-            x: 10px;
-            text: line.text;
-            color: line.kind == 2 ? Theme.crimson : line.kind == 3 ? Theme.amber : line.kind == 4 ? Theme.patina : line.kind == 1 ? Theme.label-2 : Theme.label;
-            font-weight: line.kind == 1 ? 600 : 400;
-            font-family: Theme.mono;
-            font-size: Theme.small;
-            vertical-alignment: center;
+            background: link.has-hover ? Theme.hover : transparent;
+            Text {
+                x: 10px;
+                text: line.text;
+                color: line.kind == 2 ? Theme.crimson : line.kind == 3 ? Theme.amber : line.kind == 4 ? Theme.patina : line.kind == 1 ? Theme.label-2 : Theme.label;
+                font-weight: line.kind == 1 ? 600 : 400;
+                font-family: Theme.mono;
+                font-size: Theme.small;
+                vertical-alignment: center;
+            }
+            // A line that names a place goes there.
+            link := TouchArea {
+                enabled: line.path != "";
+                mouse-cursor: line.path != "" ? pointer : default;
+                clicked => {
+                    Shell.output-click(index);
+                }
+            }
         }
     }
 }

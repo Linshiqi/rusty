@@ -12,15 +12,8 @@ component Item inherits Rectangle {
     in property <string> icon;
     in property <string> tip;
     in property <brush> tint: Theme.label-2;
-    // Text somebody else wrote — a language server's progress, a crate
-    // name, a whole path — gives way first and is cut with an ellipsis,
-    // the whole of it in the tooltip; everything else keeps its width.
-    in property <bool> elide;
     callback clicked;
-    min-width: root.elide ? row.min-width : row.preferred-width;
-    preferred-width: row.preferred-width;
-    max-width: root.elide ? min(row.preferred-width, 22rem) : row.preferred-width;
-    horizontal-stretch: root.elide ? 1 : 0;
+    width: row.preferred-width;
     background: touch.has-hover ? Theme.hover : transparent;
     row := HorizontalLayout {
         padding-left: 8px;
@@ -37,7 +30,6 @@ component Item inherits Rectangle {
             color: root.tint;
             font-size: Theme.caption;
             vertical-alignment: center;
-            overflow: TextOverflow.elide;
         }
     }
     touch := TouchArea {
@@ -71,8 +63,34 @@ export component StatusBar inherits Rectangle {
         height: 1px;
         background: Theme.line;
     }
-    // One row, so the server's words give way to the caret rather than
-    // running under it.
+    // The icon for a kind of run.
+    pure function run-icon(kind: string) -> string {
+        if (kind == "build") {
+            return Icons.hammer;
+        }
+        if (kind == "test") {
+            return Icons.flask;
+        }
+        if (kind == "flash") {
+            return Icons.flash;
+        }
+        if (kind == "monitor") {
+            return Icons.monitor;
+        }
+        if (kind == "simulate") {
+            return Icons.simulate;
+        }
+        if (kind == "debug") {
+            return Icons.bug;
+        }
+        if (kind == "install") {
+            return Icons.toolchain;
+        }
+        if (kind == "link") {
+            return Icons.plug;
+        }
+        return Icons.play;
+    }
     HorizontalLayout {
         Item {
             icon: Icons.dock-left;
@@ -111,11 +129,22 @@ export component StatusBar inherits Rectangle {
                 Shell.act("problems.show");
             }
         }
+        // What is running, as an icon in the state's colour with its clock;
+        // then how it went, the whole verdict on hover. A click shows what
+        // it printed.
+        if Shell.activity-state != 0: Item {
+            icon: root.run-icon(Shell.activity-kind);
+            text: Shell.activity-state == 1 ? Shell.activity-clock : "";
+            tip: Shell.activity;
+            tint: Shell.activity-state == 1 ? Theme.amber : Shell.activity-state == 2 ? Theme.patina : Theme.crimson;
+            clicked => {
+                Shell.act("output.show");
+            }
+        }
         if Shell.server != "": Item {
-            text: Shell.server;
+            icon: Icons.code;
             tip: Shell.server-tip;
-            tint: Shell.server-state == 3 ? Theme.crimson : Shell.server-state == 2 ? Theme.amber : Theme.label-3;
-            elide: true;
+            tint: Shell.server-state == 3 ? Theme.crimson : Shell.server-state == 2 ? Theme.amber : Shell.server-state == 1 ? Theme.rust : Theme.label-3;
         }
         Rectangle {
             horizontal-stretch: 1;
@@ -134,7 +163,6 @@ export component StatusBar inherits Rectangle {
         }
         if Shell.chip != "": Item {
             icon: Icons.chip;
-            text: Shell.chip;
             tip: Shell.chip-tip;
             clicked => {
                 Shell.act("environment.open");

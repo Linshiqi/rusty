@@ -72,7 +72,7 @@ is happening; **Wokwi** for the board beside the code.
 
 ```
 ┌ title bar ────────────────────────────────────────────────────────────────┐
-│ rustfly ▾  ⎇ main ▾   [▶ │ ESP32-C3 · Simulator ▾]  ■  ⚙ build ok · 1.2 s  ⌕  ─ □ ✕ │
+│ rustfly ▾  ⎇ main ▾              [▶ │ ▣ ▾]                             ⌕ ≡  ─ □ ✕ │
 ├ left dock ┬ editor ──────────────────────────────────────┬ right dock ────┤
 │ Project   │ main.rs   estimator.rs ×                     │ Board          │
 │ Search    │                                              │ Assistant      │
@@ -80,7 +80,7 @@ is happening; **Wokwi** for the board beside the code.
 │           ├ bottom dock ─────────────────────────────────┤                │
 │           │ Output  Problems  Terminal  Plot  Debug …    │                │
 ├ status bar┴──────────────────────────────────────────────┴────────────────┤
-│ ◧ ⬓ ◨  ⓧ 2 ⚠ 3  rust-analyzer      Ln 12, Col 4  UTF-8  LF  Rust  ESP32-C3 │
+│ ◧ ⬓ ◨  ⓧ 2 ⚠ 3  ⚒ 0:12  ‹›                Ln 12, Col 4  UTF-8  LF  Rust  ▣  🔔 │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,9 +89,11 @@ is happening; **Wokwi** for the board beside the code.
   middle, Xcode's shape: the run button, *where* it runs — the simulator, a
   serial port, a probe or a USB bootloader, one list — and stop; the button
   means simulate or flash by what is chosen, so there is one verb to learn,
-  not six icons. Beside it the activity: what is running with a clock, then
-  the verdict until the next run. Build and debug are keys, menu rows and
-  the palette, as in Zed. On the right, the palette and the window's own
+  not six icons. Where it runs is an icon, named on hover. Build and debug
+  are keys, menu rows and the palette, as in Zed. **What is running is not
+  said here**: Xcode's activity view stood beside the button for one
+  phase, and the user's verdict was that no IDE puts progress at the top
+  centre — it is the status bar's, as in VS Code and JetBrains. On the right, the palette and the window's own
   controls. No menu bar row: the project menu and a `≡` app menu hold what
   menus held, and everything is in the palette.
 - **Three docks, each a set of panels**, Zed's model. Left: the project's
@@ -110,8 +112,13 @@ is happening; **Wokwi** for the board beside the code.
   split and close anything big. There is no rail: a panel is reached by its
   dock's tab or its key, a page by the palette or a link.
 - **The status bar says the state, and each item is a door**: the docks,
-  problems by count, the language server, then the caret, the encoding, the
-  line endings, the language and the chip.
+  problems by count, what is running — an icon for the kind of run in its
+  state's colour, its clock while it runs, the whole verdict on hover — the
+  language server, then the caret, the encoding, the line endings, the
+  language and the chip. **Icons first, the words in the tooltip**, the
+  user's rule for all chrome: text appears only where it carries a value —
+  a count, a clock, a position — and a server's own words never reach the
+  bar, where they once ran under the caret.
 - **Messages are notifications**, a stack in the corner with their actions
   on them and a history behind a bell in the status bar — not a banner that
   covers the work.
@@ -251,6 +258,21 @@ tests green, and CLAUDE.md saying how it works.
    the device chosen once in the title bar; the serial monitor through the
    one `absorb`, so a board's telemetry and parameters reach Plot as a
    simulation's do.
+   *Done so far:* Build (Ctrl+Shift+B) writes what is on screen, then runs
+   `rusty_embed::buildsys`'s plan a step at a time in the firmware's
+   directory, refusing a cargo write on a nearly full volume
+   (`rusty_core::disk::too_full_for`, the old window's guard moved where
+   both can call it); the status bar's activity — `rusty_embed::activity`,
+   moved out of the old window with its tests — runs a clock and then holds
+   the verdict, the image weighed against the part's memory in it; the
+   compiler's errors (`rusty_embed::buildlog`, rustc's two-line form and
+   GCC's one) are listed in Problems under *The last build*, and every
+   line of output that names a place is a link there. Every line any run
+   prints reaches the window through one door (`App::heard`), and runs go
+   through `flash::launch`, so a UF2 copy and a DFU image run as any
+   command does. The rules for which board a verb uses when none is chosen
+   (`rusty_embed::only_candidate`, `serial_capable`, `usable_boot`) moved
+   into the model, ready for the target list.
 6. **The simulator.** The sheet beside the code, the run in rusty's QEMU or
    rusty's own emulator as the catalogue says, the pin channel, the parts
    and their behaviours, Plot, Waves, Signals, Flight and Draw, debugging

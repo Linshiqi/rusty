@@ -52,6 +52,50 @@ use tree::TreeScan;
 pub use fs::volume_of;
 pub use sweep::{remove_cargo_cache, remove_tree, sweep};
 
+/// Below this much free space a cargo command is refused before it starts.
+/// Two gibibytes: one crate's object files can pass a gigabyte, and a build
+/// that dies half-way leaves work the next one has to redo.
+pub const LOW_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Whether this command is a cargo invocation that writes to the build
+/// directory — the ones worth guarding, and worth sweeping after.
+pub fn cargo_writes(program: &str, args: &[String]) -> bool {
+    let cargo = std::path::Path::new(program)
+        .file_stem()
+        .is_some_and(|stem| stem == "cargo");
+    cargo
+        && args.first().is_some_and(|verb| {
+            matches!(
+                verb.as_str(),
+                "build"
+                    | "b"
+                    | "test"
+                    | "t"
+                    | "run"
+                    | "r"
+                    | "check"
+                    | "c"
+                    | "clippy"
+                    | "doc"
+                    | "bench"
+                    | "tauri"
+                    | "espflash"
+            )
+        })
+}
+
+/// The free bytes on `dir`'s volume when `program args` is a cargo command
+/// that writes and there is less room than [`LOW_DISK_BYTES`] — a build
+/// that would die mid-compile with `IO failure on output stream`. `None`
+/// when it may run, or when the volume cannot be read.
+pub fn too_full_for(program: &str, args: &[String], dir: &std::path::Path) -> Option<u64> {
+    if !cargo_writes(program, args) {
+        return None;
+    }
+    let volume = volume_of(dir)?;
+    (volume.free_bytes < LOW_DISK_BYTES).then_some(volume.free_bytes)
+}
+
 /// What the resolved graph holds — the yardstick for what a build directory
 /// still needs.
 #[derive(Debug, Default, Clone)]

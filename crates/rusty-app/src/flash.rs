@@ -8,7 +8,7 @@
 //! was in the slot killed the session that had replaced it — see
 //! `AppState::release_session`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rusty_embed::{CommandPlan, LogLine, WizardChoice, process, toolchain, wizard};
 use tauri::{State, ipc::Channel};
@@ -276,14 +276,12 @@ pub async fn run_command(
     // `IO failure on output stream`, which reads as a broken compiler. Refuse
     // first, with the number, and point at the place that frees space.
     if let Some(dir) = working_dir.as_deref()
-        && cargo_writes(&plan.program, &plan.args)
-        && let Some(volume) = rusty_core::disk::volume_of(dir)
-        && volume.free_bytes < LOW_DISK_BYTES
+        && let Some(free) = rusty_core::disk::too_full_for(&plan.program, &plan.args, dir)
     {
         return Err(CommandError::new(format!(
             "only {} MB free on the volume holding {}; a build needs room to write. \
              Free space in the Crates panel's Disk section, then retry.",
-            volume.free_bytes / (1024 * 1024),
+            free / (1024 * 1024),
             dir.display(),
         )));
     }
@@ -304,7 +302,7 @@ pub async fn run_command(
     // cargo command that succeeded, sweep what the current graph no longer
     // needs, and say what went in the same output the build wrote to.
     if code == Some(0)
-        && cargo_writes(&plan.program, &plan.args)
+        && rusty_core::disk::cargo_writes(&plan.program, &plan.args)
         && rusty_embed::config::workbench().disk_auto_sweep
         && let Some(root) = state.root().await
     {
@@ -337,36 +335,4 @@ pub async fn run_command(
         }
     }
     Ok(code)
-}
-
-/// Below this much free space a cargo command is refused before it starts.
-/// Two gibibytes: one crate's object files can pass a gigabyte, and a build
-/// that dies half-way leaves work the next one has to redo.
-const LOW_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-
-/// Whether this command is a cargo invocation that writes to the build
-/// directory — the ones worth guarding, and worth sweeping after.
-fn cargo_writes(program: &str, args: &[String]) -> bool {
-    let cargo = Path::new(program)
-        .file_stem()
-        .is_some_and(|stem| stem == "cargo");
-    cargo
-        && args.first().is_some_and(|verb| {
-            matches!(
-                verb.as_str(),
-                "build"
-                    | "b"
-                    | "test"
-                    | "t"
-                    | "run"
-                    | "r"
-                    | "check"
-                    | "c"
-                    | "clippy"
-                    | "doc"
-                    | "bench"
-                    | "tauri"
-                    | "espflash"
-            )
-        })
 }
