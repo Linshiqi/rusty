@@ -1,0 +1,135 @@
+// The code surface: rows of coloured pieces placed by the Rust side, a caret,
+// and one TextInput that only ever holds what an input method is composing.
+//
+// Rust measures and places everything (`src/editor/`); this file draws what
+// it is handed. The rows are a ListView, so only the rows on screen exist.
+
+import { ListView } from "std-widgets.slint";
+
+export struct Piece {
+    text: string,
+    x: length,
+    color: color,
+    italic: bool,
+}
+
+export struct Row {
+    number: int,
+    pieces: [Piece],
+}
+
+export component CodeView inherits Rectangle {
+    in property <[Row]> rows;
+    in property <length> row-height: 19px;
+    in property <length> gutter: 64px;
+    in property <length> font-size: 12.5px;
+    in property <string> font-family: "Cascadia Mono";
+    in property <length> content-width: 2000px;
+    in property <int> caret-line;
+    in property <length> caret-x;
+    in property <color> ink: #f0ebe5;
+    in property <color> ink-dim: #f0ebe566;
+    in property <string> probe-text;
+    out property <length> probe-width: probe.preferred-width;
+    out property <length> view-height: list.visible-height;
+    out property <string> composing: sink.preedit-text;
+    in-out property <length> scroll-y <=> list.content-y;
+
+    // True when the key was taken.
+    callback key(KeyEvent) -> bool;
+    callback typed(string);
+    callback pressed(int, length);
+
+    background: #232020;
+
+    public function focus-input() {
+        sink.focus();
+    }
+
+    probe := Text {
+        visible: false;
+        text: root.probe-text;
+        font-family: root.font-family;
+        font-size: root.font-size;
+    }
+
+    list := ListView {
+        width: parent.width;
+        height: parent.height;
+        for row[index] in root.rows: Rectangle {
+            height: root.row-height;
+            width: root.content-width;
+            Text {
+                x: 0;
+                width: root.gutter - 20px;
+                height: parent.height;
+                text: row.number;
+                color: index == root.caret-line ? root.ink : root.ink-dim;
+                font-family: root.font-family;
+                font-size: root.font-size;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            for piece in row.pieces: Text {
+                x: root.gutter + piece.x;
+                height: parent.height;
+                text: piece.text;
+                color: piece.color;
+                font-italic: piece.italic;
+                font-family: root.font-family;
+                font-size: root.font-size;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                        root.pressed(row.number - 1, self.mouse-x - root.gutter);
+                        sink.focus();
+                    }
+                }
+            }
+        }
+    }
+
+    // Where the next key lands. Drawn here rather than by the TextInput, whose
+    // own caret sits after whatever it is composing.
+    Rectangle {
+        x: root.gutter + root.caret-x + list.content-x - 1px;
+        y: root.caret-line * root.row-height + list.content-y + 2px;
+        width: 2px;
+        height: root.row-height - 4px;
+        background: #e4703f;
+        visible: sink.preedit-text == "";
+    }
+
+    // Every character arrives here, typed or composed: an input method shows
+    // its composition in place, at the caret, and commits it as an edit.
+    // Keys that are not text go to `key` first and never reach it.
+    sink := TextInput {
+        x: root.gutter + root.caret-x + list.content-x;
+        y: root.caret-line * root.row-height + list.content-y;
+        width: max(2px, self.preferred-width);
+        height: root.row-height;
+        font-family: root.font-family;
+        font-size: root.font-size;
+        color: root.ink;
+        vertical-alignment: center;
+        single-line: true;
+        text-cursor-width: 0px;
+        key-pressed(event) => {
+            if (self.preedit-text != "") {
+                return reject;
+            }
+            if (root.key(event)) {
+                return accept;
+            }
+            reject
+        }
+        edited => {
+            if (self.preedit-text == "" && self.text != "") {
+                root.typed(self.text);
+                self.text = "";
+            }
+        }
+    }
+}

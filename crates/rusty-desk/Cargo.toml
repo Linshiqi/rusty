@@ -1,0 +1,24 @@
+[package]
+name = "rusty-desk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "rusty's desktop window, drawn with Slint"
+
+[[bin]]
+name = "rusty"
+path = "src/main.rs"
+
+[dependencies]
+slint = "1.18.1"
+rusty-edit = { path = "../rusty-edit" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[build-dependencies]
+slint-build = "1.18.1"
+
+[lints]
+workspace = true
