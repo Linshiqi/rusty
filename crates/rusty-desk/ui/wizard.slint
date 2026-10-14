@@ -1,0 +1,433 @@
+// New project: where you are among four steps, the list of the step on the
+// left and what the selected row commits the project to on the right; the
+// last step is the name, the consequences and the button. Filled by
+// `src/app/wizard.rs`.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { Button, RowButton, Caption, Segments, Field } from "widgets.slint";
+import { Shell, WizRow } from "shell.slint";
+
+component Pill inherits Rectangle {
+    in property <string> text;
+    in property <bool> accent;
+    height: 22px;
+    width: label.preferred-width + 16px;
+    border-radius: 11px;
+    background: root.accent ? Theme.rust-fill : Theme.sunken;
+    label := Text {
+        text: root.text;
+        color: root.accent ? Theme.rust : Theme.label-2;
+        font-size: Theme.caption;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+// A row of a step's list: a part, a runtime, an option with its box.
+component Choice inherits RowButton {
+    in property <WizRow> choice;
+    height: 32px;
+    selected: root.choice.on && !root.choice.check;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 9px;
+        if root.choice.check: Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            border-width: root.choice.on ? 0 : 1px;
+            border-color: Theme.line-strong;
+            background: root.choice.on ? Theme.rust : transparent;
+            if root.choice.on: Icon {
+                path: Icons.check;
+                size: 10px;
+                color: #ffffff;
+            }
+        }
+        Text {
+            text: root.choice.title;
+            color: root.choice.on ? (root.choice.check ? Theme.label : Theme.rust) : Theme.label-2;
+            font-size: Theme.body;
+            font-weight: root.choice.on ? 600 : 400;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.choice.aside;
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            font-family: root.choice.check ? Theme.mono : "";
+            vertical-alignment: center;
+        }
+    }
+}
+
+component StepMark inherits Rectangle {
+    in property <int> index;
+    in property <string> label;
+    property <bool> current: Shell.wiz-step == root.index;
+    property <bool> done: Shell.wiz-step > root.index;
+    width: row.preferred-width;
+    height: 28px;
+    border-radius: 14px;
+    background: touch.has-hover && !root.current ? Theme.hover : transparent;
+    row := HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 10px;
+        spacing: 7px;
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            border-radius: 10px;
+            background: root.current ? Theme.rust : root.done ? Theme.rust-fill : Theme.sunken;
+            Text {
+                text: root.index + 1;
+                color: root.current ? #ffffff : root.done ? Theme.rust : Theme.label-3;
+                font-size: Theme.caption;
+                font-weight: 700;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.current ? Theme.label : root.done ? Theme.label-2 : Theme.label-3;
+            font-size: Theme.body;
+            font-weight: root.current ? 600 : 400;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            Shell.wiz-go(root.index);
+        }
+    }
+}
+
+export component WizardPage inherits Rectangle {
+    background: Theme.content;
+    VerticalLayout {
+        padding: 24px;
+        padding-top: 20px;
+        spacing: 16px;
+        HorizontalLayout {
+            spacing: 18px;
+            Text {
+                text: @tr("wizard.title");
+                color: Theme.label;
+                font-size: Theme.title;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+            HorizontalLayout {
+                alignment: start;
+                horizontal-stretch: 1;
+                spacing: 2px;
+                StepMark {
+                    index: 0;
+                    label: @tr("wizard.step-chip");
+                }
+                StepMark {
+                    index: 1;
+                    label: @tr("wizard.step-runtime");
+                }
+                StepMark {
+                    index: 2;
+                    label: @tr("wizard.step-options");
+                }
+                StepMark {
+                    index: 3;
+                    label: @tr("wizard.step-review");
+                }
+            }
+        }
+
+        // The list, and what the selected row means.
+        if Shell.wiz-step < 3: HorizontalLayout {
+            spacing: 20px;
+            vertical-stretch: 1;
+            VerticalLayout {
+                width: 340px;
+                spacing: 8px;
+                if Shell.wiz-step == 0: Field {
+                    placeholder: @tr("wizard.filter");
+                    edited(text) => {
+                        Shell.wiz-filter(text);
+                    }
+                }
+                // Around its content, so it hears the pointer the segments
+                // are under too.
+                if Shell.wiz-layouts: TouchArea {
+                    height: 36px;
+                    changed has-hover => {
+                        if (self.has-hover) {
+                            Shell.wiz-hover("layout");
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        Text {
+                            text: @tr("wizard.layout");
+                            color: Theme.label;
+                            font-size: Theme.body;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Segments {
+                                labels: [@tr("wizard.layout-single"), @tr("wizard.layout-workspace")];
+                                values: ["single", "workspace"];
+                                value: Shell.wiz-layout;
+                                picked(value) => {
+                                    Shell.wiz-set-layout(value);
+                                }
+                            }
+                        }
+                    }
+                }
+                if Shell.wiz-list-note != "": Text {
+                    text: Shell.wiz-list-note;
+                    color: Theme.label-2;
+                    font-size: Theme.small;
+                    wrap: word-wrap;
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                        spacing: 2px;
+                        for row in Shell.wiz-rows: Choice {
+                            choice: row;
+                            clicked => {
+                                Shell.wiz-pick(row.id);
+                            }
+                            changed hovered => {
+                                if (self.hovered && row.check) {
+                                    Shell.wiz-hover(row.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 9px;
+                background: Theme.raised;
+                ScrollView {
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+                        alignment: start;
+                        if Shell.wiz-detail-title != "": Text {
+                            text: Shell.wiz-detail-title;
+                            color: Theme.label;
+                            font-size: 15px;
+                            font-weight: 700;
+                            wrap: word-wrap;
+                        }
+                        if Shell.wiz-pills.length > 0: HorizontalLayout {
+                            alignment: start;
+                            spacing: 6px;
+                            for pill in Shell.wiz-pills: Pill {
+                                text: pill;
+                            }
+                        }
+                        Text {
+                            text: Shell.wiz-detail;
+                            color: Theme.label-2;
+                            font-size: Theme.body;
+                            wrap: word-wrap;
+                        }
+                        for fact in Shell.wiz-facts: HorizontalLayout {
+                            spacing: 12px;
+                            Text {
+                                width: 72px;
+                                text: fact.label;
+                                color: Theme.label-3;
+                                font-size: Theme.small;
+                            }
+                            Text {
+                                text: fact.value;
+                                color: Theme.label-2;
+                                font-size: Theme.small;
+                                font-family: Theme.mono;
+                            }
+                        }
+                        if Shell.wiz-detail-foot != "": Text {
+                            text: Shell.wiz-detail-foot;
+                            color: Theme.label-3;
+                            font-size: Theme.small;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        // The name, what it all commits to, and the button.
+        if Shell.wiz-step == 3: ScrollView {
+            vertical-stretch: 1;
+            HorizontalLayout {
+                alignment: center;
+                VerticalLayout {
+                    width: min(680px, root.width - 48px);
+                    spacing: 14px;
+                    alignment: start;
+                    VerticalLayout {
+                        spacing: 6px;
+                        Caption {
+                            text: @tr("wizard.project-name");
+                        }
+                        Field {
+                            width: 300px;
+                            mono: true;
+                            text: Shell.wiz-name;
+                            trouble: Shell.wiz-name-problem != "";
+                            edited(text) => {
+                                Shell.wiz-name-edited(text);
+                            }
+                        }
+                        if Shell.wiz-name-problem != "": Text {
+                            text: Shell.wiz-name-problem;
+                            color: Theme.crimson;
+                            font-size: Theme.small;
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 6px;
+                        for pill[i] in Shell.wiz-summary: Pill {
+                            text: pill;
+                            accent: i == 0;
+                        }
+                    }
+                    if Shell.wiz-missing != "": Rectangle {
+                        border-radius: 9px;
+                        background: Theme.amber-fill;
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: Shell.wiz-missing;
+                                    color: Theme.label;
+                                    font-size: Theme.body;
+                                    font-weight: 600;
+                                }
+                                Text {
+                                    text: @tr("wizard.install-why");
+                                    color: Theme.label-2;
+                                    font-size: Theme.small;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            Button {
+                                y: (parent.height - self.height) / 2;
+                                text: @tr("wizard.install");
+                                primary: true;
+                                enabled: Shell.env-installing == "";
+                                clicked => {
+                                    Shell.act("wizard.install");
+                                }
+                            }
+                        }
+                    }
+                    if Shell.wiz-refusal != "": Text {
+                        text: Shell.wiz-refusal;
+                        color: Theme.crimson;
+                        font-size: Theme.small;
+                        wrap: word-wrap;
+                    }
+                    if Shell.wiz-command != "": Rectangle {
+                        border-radius: 6px;
+                        background: Theme.sunken;
+                        HorizontalLayout {
+                            padding: 10px;
+                            Text {
+                                text: "$ " + Shell.wiz-command;
+                                color: Theme.label-2;
+                                font-size: Theme.small;
+                                font-family: Theme.mono;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    if Shell.wiz-notes.length > 0: Rectangle {
+                        border-radius: 9px;
+                        background: Theme.raised;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 12px;
+                            for note in Shell.wiz-notes: VerticalLayout {
+                                spacing: 3px;
+                                Text {
+                                    text: note.topic;
+                                    color: Theme.label;
+                                    font-size: Theme.body;
+                                    font-weight: 600;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: note.detail;
+                                    color: Theme.label-2;
+                                    font-size: Theme.small;
+                                    wrap: word-wrap;
+                                }
+                                if note.consequence != "": Text {
+                                    text: "→ " + note.consequence;
+                                    color: Theme.label-3;
+                                    font-size: Theme.small;
+                                    font-family: Theme.mono;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            if Shell.wiz-step > 0: Button {
+                text: @tr("wizard.back");
+                clicked => {
+                    Shell.wiz-go(Shell.wiz-step - 1);
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            if Shell.wiz-step == 3: Text {
+                text: @tr("misc.wizard-runs");
+                color: Theme.label-3;
+                font-size: Theme.small;
+                vertical-alignment: center;
+            }
+            if Shell.wiz-step == 3: Button {
+                text: Shell.wiz-creating ? @tr("wizard.creating") : @tr("wizard.create");
+                primary: true;
+                enabled: Shell.wiz-can-create;
+                clicked => {
+                    Shell.act("wizard.create");
+                }
+            }
+            if Shell.wiz-step < 3: Button {
+                text: @tr("wizard.next");
+                primary: true;
+                clicked => {
+                    Shell.wiz-go(Shell.wiz-step + 1);
+                }
+            }
+        }
+    }
+}

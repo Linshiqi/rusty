@@ -13,7 +13,10 @@
 //! its own: run in the real one, its typing would come back the next time
 //! somebody opened that project. With `RUSTY_PROBE_SAVES` it also replaces
 //! the file's text with badly formatted Rust and saves it, and says whether
-//! rustfmt formatted what reached the disk — point it at a copy.
+//! rustfmt formatted what reached the disk — point it at a copy. With
+//! `RUSTY_PROBE_NEW=<folder>` it ends by creating a project there through
+//! the wizard — the first part rusty writes from its own template, so
+//! nothing is generated or downloaded — and says what opened.
 
 use std::{
     cell::{Cell, RefCell},
@@ -43,6 +46,7 @@ pub fn start(window: &AppWindow) {
         return;
     };
     let saves = std::env::var_os("RUSTY_PROBE_SAVES").is_some();
+    let made = std::env::var_os("RUSTY_PROBE_NEW").map(PathBuf::from);
     // The text before find replaced everything, to hold the undo to.
     let before: Rc<RefCell<Option<String>>> = Rc::default();
     std::fs::create_dir_all(&dir).expect("the probe's directory");
@@ -192,9 +196,77 @@ pub fn start(window: &AppWindow) {
                     shell.get_chip(),
                 );
             }
+            // New project, step by step, as far as the button and no
+            // further: a name cargo would refuse, then one it takes.
+            195 => app.act("project.new"),
+            197 => snapshot(&window, &dir.join("wizard-part.png")),
+            198 => shell.invoke_wiz_go(1),
+            200 => snapshot(&window, &dir.join("wizard-runtime.png")),
+            201 => shell.invoke_wiz_go(2),
+            203 => {
+                if let Some(option) = shell.get_wiz_rows().iter().find(|row| row.check) {
+                    shell.invoke_wiz_pick(option.id);
+                }
+            }
+            205 => snapshot(&window, &dir.join("wizard-options.png")),
+            206 => {
+                shell.invoke_wiz_go(3);
+                shell.invoke_wiz_name_edited("2fast".into());
+            }
+            208 => {
+                snapshot(&window, &dir.join("wizard-name.png"));
+                eprintln!(
+                    "wizard: `2fast` refused: {:?}; create offered: {}",
+                    shell.get_wiz_name_problem(),
+                    shell.get_wiz_can_create()
+                );
+                shell.invoke_wiz_name_edited("blinky".into());
+            }
+            210 => {
+                snapshot(&window, &dir.join("wizard-review.png"));
+                eprintln!(
+                    "wizard: `blinky` → {:?}; {} notes; missing {:?}; refusal {:?}; create offered: {}",
+                    shell.get_wiz_command(),
+                    shell.get_wiz_notes().row_count(),
+                    shell.get_wiz_missing(),
+                    shell.get_wiz_refusal(),
+                    shell.get_wiz_can_create()
+                );
+            }
+            // A part whose options step says rusty writes the project
+            // itself, found by asking each row rather than by name.
+            211 if made.is_some() => {
+                let ids: Vec<_> = {
+                    shell.invoke_wiz_go(0);
+                    shell.get_wiz_rows().iter().map(|row| row.id).collect()
+                };
+                let template = ids.into_iter().find(|id| {
+                    shell.invoke_wiz_go(0);
+                    shell.invoke_wiz_pick(id.clone());
+                    shell.invoke_wiz_go(2);
+                    shell.get_wiz_list_note() != ""
+                });
+                eprintln!("wizard: a template part found: {}", template.is_some());
+                shell.invoke_wiz_go(3);
+                shell.invoke_wiz_name_edited("probemade".into());
+                if let Some(parent) = made.clone() {
+                    app.create_project_in(parent);
+                }
+            }
+            240 if made.is_some() => {
+                snapshot(&window, &dir.join("created.png"));
+                eprintln!(
+                    "wizard: opened {:?}, chip {:?}, target {:?}, {} entries in the tree",
+                    shell.get_project(),
+                    shell.get_chip(),
+                    shell.get_target(),
+                    shell.get_tree().row_count()
+                );
+                app.act("app.exit");
+            }
             // Back to the file. (With RUSTY_PROBE_SAVES, the save through
             // rustfmt comes last: it replaces the whole text.)
-            195 => {
+            211 => {
                 let file = shell.get_tabs().iter().find(|tab| tab.kind == "file");
                 if let Some(tab) = file {
                     shell.invoke_pick_tab(tab.id);

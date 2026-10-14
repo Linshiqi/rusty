@@ -96,6 +96,7 @@ export component Button inherits Rectangle {
 // A row of a list that can be picked: a hover fill and a chosen fill.
 export component RowButton inherits Rectangle {
     in property <bool> selected;
+    out property <bool> hovered: touch.has-hover;
     callback clicked;
     callback double-clicked;
     border-radius: 5px;
@@ -160,4 +161,85 @@ export component Caption inherits Text {
     font-weight: 600;
     color: Theme.label-3;
     letter-spacing: 0.4px;
+}
+
+// A choice among a few: the segment chosen is filled.
+export component Segments inherits Rectangle {
+    in property <[string]> labels;
+    in property <[string]> values;
+    in property <string> value;
+    callback picked(string);
+    height: 28px;
+    border-radius: 7px;
+    background: Theme.sunken;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for label[i] in root.labels: Rectangle {
+            border-radius: 5px;
+            background: root.values[i] == root.value ? Theme.raised : touch.has-hover ? Theme.hover : transparent;
+            drop-shadow-blur: root.values[i] == root.value ? 2px : 0;
+            drop-shadow-color: #0000002a;
+            min-width: text.preferred-width + 24px;
+            text := Text {
+                text: label;
+                color: root.values[i] == root.value ? Theme.label : Theme.label-2;
+                font-size: Theme.small;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            touch := TouchArea {
+                clicked => {
+                    root.picked(root.values[i]);
+                }
+            }
+        }
+    }
+}
+
+// A line somebody types a value into: a name, a filter. The placeholder
+// stands in while it is empty; `trouble` rings it in crimson while what is
+// in it would be refused.
+export component Field inherits Rectangle {
+    in property <string> placeholder;
+    in property <bool> trouble;
+    in property <bool> mono;
+    in-out property <string> text;
+    callback edited(string);
+
+    public function focus-all() {
+        input.focus();
+        input.select-all();
+    }
+
+    height: 28px;
+    border-radius: 6px;
+    background: Theme.sunken;
+    border-width: 1px;
+    border-color: root.trouble ? Theme.crimson : input.has-focus ? Theme.rust : Theme.line;
+    clip: true;
+    if root.text == "": Text {
+        x: 9px;
+        width: parent.width - 18px;
+        height: parent.height;
+        text: root.placeholder;
+        color: Theme.label-3;
+        font-size: Theme.small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    input := TextInput {
+        x: 9px;
+        width: parent.width - 18px;
+        height: parent.height;
+        text <=> root.text;
+        color: Theme.label;
+        font-size: Theme.small;
+        font-family: root.mono ? Theme.mono : "";
+        vertical-alignment: center;
+        single-line: true;
+        edited => {
+            root.edited(self.text);
+        }
+    }
 }

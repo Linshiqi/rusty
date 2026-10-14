@@ -4,7 +4,8 @@
 
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
-import { Button, IconButton, RowButton, Caption } from "widgets.slint";
+import { Button, IconButton, RowButton, Caption, Segments } from "widgets.slint";
+import { WizardPage } from "wizard.slint";
 import { Shell, DocTab } from "shell.slint";
 import { CodeView } from "editor.slint";
 import { EnvironmentPage } from "environment.slint";
@@ -194,40 +195,6 @@ component Welcome inherits Rectangle {
     }
 }
 
-// A choice among a few: the segment chosen is filled.
-component Segments inherits Rectangle {
-    in property <[string]> labels;
-    in property <[string]> values;
-    in property <string> value;
-    callback picked(string);
-    height: 28px;
-    border-radius: 7px;
-    background: Theme.sunken;
-    HorizontalLayout {
-        padding: 2px;
-        spacing: 2px;
-        for label[i] in root.labels: Rectangle {
-            border-radius: 5px;
-            background: root.values[i] == root.value ? Theme.raised : touch.has-hover ? Theme.hover : transparent;
-            drop-shadow-blur: root.values[i] == root.value ? 2px : 0;
-            drop-shadow-color: #0000002a;
-            min-width: text.preferred-width + 24px;
-            text := Text {
-                text: label;
-                color: root.values[i] == root.value ? Theme.label : Theme.label-2;
-                font-size: Theme.small;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-            touch := TouchArea {
-                clicked => {
-                    root.picked(root.values[i]);
-                }
-            }
-        }
-    }
-}
-
 // One setting: its name on the left, its control on the right.
 component Setting inherits Rectangle {
     in property <string> label;
@@ -353,7 +320,8 @@ export component EditorArea inherits Rectangle {
             if Shell.active-kind == "welcome": Welcome { }
             if Shell.active-kind == "settings": SettingsPage { }
             if Shell.active-kind == "environment": EnvironmentPage { }
-            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "environment" && Shell.active-kind != "": NotYet {
+            if Shell.active-kind == "wizard": WizardPage { }
+            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "environment" && Shell.active-kind != "wizard" && Shell.active-kind != "": NotYet {
                 name: Shell.active-title;
             }
             if Shell.active-kind == "": Welcome { }

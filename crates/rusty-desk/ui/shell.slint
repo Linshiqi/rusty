@@ -76,6 +76,27 @@ export struct EnvRow {
     command: string,
 }
 
+// A row of a wizard step's list: a part, a runtime, an option (`check`).
+export struct WizRow {
+    id: string,
+    title: string,
+    aside: string,
+    on: bool,
+    check: bool,
+}
+
+export struct WizFact {
+    label: string,
+    value: string,
+}
+
+// What a choice commits the project to.
+export struct WizNote {
+    topic: string,
+    detail: string,
+    consequence: string,
+}
+
 export struct Recent {
     name: string,
     path: string,
@@ -137,6 +158,35 @@ export global Shell {
     in property <string> env-installing;
     in property <[EnvRow]> env-rows;
     callback env-install(string /* name */, string /* command */);
+
+    // New project: the step (0 the part .. 3 create), its list and what the
+    // selected row means; the name, its problem, what the choices commit
+    // to and the command that makes it.
+    in property <int> wiz-step;
+    in property <[WizRow]> wiz-rows;
+    in property <string> wiz-list-note;
+    in property <bool> wiz-layouts;
+    in property <string> wiz-layout;
+    in property <string> wiz-detail-title;
+    in property <[string]> wiz-pills;
+    in property <string> wiz-detail;
+    in property <[WizFact]> wiz-facts;
+    in property <string> wiz-detail-foot;
+    in property <string> wiz-name;
+    in property <string> wiz-name-problem;
+    in property <[string]> wiz-summary;
+    in property <[WizNote]> wiz-notes;
+    in property <string> wiz-command;
+    in property <string> wiz-refusal;
+    in property <string> wiz-missing;
+    in property <bool> wiz-creating;
+    in property <bool> wiz-can-create;
+    callback wiz-go(int);
+    callback wiz-filter(string);
+    callback wiz-pick(string);
+    callback wiz-hover(string);
+    callback wiz-name-edited(string);
+    callback wiz-set-layout(string);
 
     // What the window ran, line by line.
     in property <[OutputLine]> output;

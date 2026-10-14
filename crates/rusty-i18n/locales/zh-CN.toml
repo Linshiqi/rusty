@@ -1094,6 +1094,10 @@ what-low = "下限"
 what-high = "上限"
 
 [wizard]
+title = "新建项目"
+creating = "正在创建…"
+exists = "{path} 已经存在：换个名字或换个文件夹"
+generator-failed = "`{program}` 没有创建 {path}，原因见输出面板中它自己的说明"
 name-empty = "需要一个名字。"
 name-character = "不能包含 `{char}`——只能用字母、数字、`-` 和 `_`。"
 name-start = "不能以 `{char}` 开头——请以字母或 `_` 开头。"

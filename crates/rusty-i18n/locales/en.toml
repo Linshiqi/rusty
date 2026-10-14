@@ -1138,6 +1138,10 @@ what-low = "The low edge"
 what-high = "The high edge"
 
 [wizard]
+title = "New project"
+creating = "Creating…"
+exists = "{path} is already there: choose another name or another folder"
+generator-failed = "`{program}` did not create {path}: its own words in Output say why"
 name-empty = "A name is needed."
 name-character = "`{char}` is not allowed — use letters, digits, `-` and `_`."
 name-start = "It cannot start with `{char}` — start with a letter or `_`."
