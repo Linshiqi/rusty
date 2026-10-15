@@ -467,6 +467,19 @@ tests green, and CLAUDE.md saying how it works.
 8. **The editor's depth**, now that everything it is for exists: folding,
    sticky scroll, the minimap, indent guides, test lenses, inlay hints,
    semantic colours, Vim, two groups.
+
+   Indent guides and test lenses first, and the pure halves moved into
+   `rusty_edit` (`guides`, `lens`, `testrun`) for both windows. A guide is
+   a hairline mark at each level's column, the levels counted once per
+   version of the text, since a blank line takes its neighbours'. A lens
+   sits after everything on the line VS Code would give it — ▶ Run Test |
+   Debug over a test or a module of them, ▶ Run over an example's `main`
+   where `cargo run` would not flash a board — and carries the last run's
+   tick or cross. Run Test is `cargo test <filter> -- --show-output` at the
+   project root in an empty dock, read as it goes; Debug builds, asks the
+   binaries which holds the test, and runs that one under gdb or LLDB's
+   adapter. Proven by the probe on `examples/draw-vectors`: two lenses
+   found, one of them run, and both carry the run's tick.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 

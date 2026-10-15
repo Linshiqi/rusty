@@ -1963,6 +1963,8 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+debug-no-host-gdb = "No gdb for this machine is on PATH. The chips' debuggers cannot debug a program built for this machine; install the platform's own gdb."
+debug-no-adapter = "No debug adapter on this machine would start, so there is nothing to debug the test with. Tried:\n{tried}"
 ai-too-long = "The assistant did not finish within {minutes} minutes and was stopped."
 crates-members = "Workspace crates"
 crates-resolved = "Dependencies"
