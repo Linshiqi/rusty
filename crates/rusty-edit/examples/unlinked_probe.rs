@@ -8,7 +8,7 @@
 //! and "what did it make of it". This answers both, without the window.
 //!
 //! ```text
-//! cargo run -p rusty-edit --features backend --example unlinked_probe -- <project>
+//! cargo run -p rusty-edit --example unlinked_probe -- <project>
 //! ```
 fn main() {
     let root = std::env::args().nth(1).unwrap_or_else(|| ".".into());

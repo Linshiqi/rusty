@@ -10,50 +10,37 @@ authors.workspace = true
 [dependencies]
 # Reading and writing a file in the encoding it was written in — a vendor
 # SDK's GBK, a Windows tool's UTF-16 (`text_file`).
-encoding_rs = { version = "0.8.35", optional = true }
-# The tree and the highlighted document are drawn by the frontend, so the
-# unconditional half of this crate must compile to wasm32.
+encoding_rs = "0.8.35"
 serde = { version = "1.0.229", features = ["derive"] }
 
 # Sublime grammars, bundled — highlighting works offline and needs no npm.
-syntect = { version = "5.3.0", optional = true, default-features = false, features = [
+syntect = { version = "5.3.0", default-features = false, features = [
     "default-syntaxes",
     "regex-fancy",
     "parsing",
 ] }
 # ripgrep's walker, so `target/` and anything else .gitignore names is skipped
 # without this crate having to guess what is build output.
-ignore = { version = "0.4.33", optional = true }
+ignore = "0.4.33"
 # ripgrep's matcher and searcher — the other half of "why is ripgrep fast":
 # SIMD literal search, Unicode case folding, -w word mode, binary detection.
 # Replace runs on the same matcher: grep-matcher's `Captures::interpolate` is
 # what gives `$1` its meaning, so no second regex engine is needed — and a
 # second engine is how search and replace came to disagree about `<`.
-grep-matcher = { version = "0.1.7", optional = true }
-grep-regex = { version = "0.1.14", optional = true }
-grep-searcher = { version = "0.1.17", optional = true }
-thiserror = { version = "2.0.20", optional = true }
+grep-matcher = "0.1.7"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+thiserror = "2.0.20"
 # Platform file watching — ReadDirectoryChangesW, FSEvents, inotify. The
 # workbench is never the only thing writing to a checkout, and until this the
 # window showed whatever it read when the project was opened.
-notify = { version = "8.0.0", optional = true }
+notify = "8.0.0"
 # The tree's Delete goes to the recycle bin, never `remove_dir_all`: a
 # right-click is not a place to lose a directory for ever.
-trash = { version = "5.2.9", optional = true }
-
-[features]
-default = ["backend"]
-backend = ["dep:encoding_rs", "dep:syntect", "dep:ignore", "dep:grep-matcher", "dep:grep-regex", "dep:grep-searcher", "dep:thiserror", "dep:notify", "dep:trash"]
+trash = "5.2.9"
 
 [lints]
 workspace = true
-
-# The probe walks the project, so it needs the half of this crate that does
-# IO. Without this, `--all-targets` builds it with default features off and
-# stops on a missing `ignore`.
-[[example]]
-name = "unlinked_probe"
-required-features = ["backend"]
 
 [dev-dependencies]
 tempfile = "3.27.0"

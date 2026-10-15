@@ -43,13 +43,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 # a minute rather than in a release.
 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null cargo test --workspace
 
-# The model layers without the `backend` feature, which the WebView
-# frontend took them by. The split outlived that frontend and goes in time;
-# until then, CI still holds it.
-cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
-  -p rusty-edit -p rusty-lsp -p rusty-dbg -p rusty-git --no-default-features \
-  --target wasm32-unknown-unknown
-
 # The tools the installers ship beside the app, into target/bundled/: rusty's
 # QEMU (the peripherals), both esp-gdbs, espflash, the LLDB adapter. The
 # release workflow runs this before every build; run it once here and the
@@ -158,14 +151,14 @@ cargo run -p rusty-lsp --example fix_probe -- <project> <file> <line> <from> <to
 # What painting a file costs: whole, after a one-line edit halfway down, and
 # after a block comment opened at the top — the check that a keystroke in a
 # long file repaints its own line and not the file (see "Large files").
-cargo run -p rusty-edit --features backend --release --example highlight_cost -- <file>
+cargo run -p rusty-edit --release --example highlight_cost -- <file>
 
 # Which files rusty will draw dimmed in a project, and every file the scan
 # read to decide -- the check for a report of a file wrongly dim, or one
 # that should be and is not. `rusty_edit::modules` refuses wherever it
 # cannot be sure, so "nothing dimmed" is also what a refusal looks like and
 # the probe says so.
-cargo run -p rusty-edit --features backend --example unlinked_probe -- <project>
+cargo run -p rusty-edit --example unlinked_probe -- <project>
 
 # What EasyEDA actually answers for a part, record by record, beside what
 # the reader made of it -- how tests/fixtures/easyeda/ was captured
@@ -231,16 +224,17 @@ cd examples/draw-vectors && cargo run --example cross
 
 ## The rules that are load-bearing
 
-### 1. Every crate is split by a `backend` feature
+### 1. Every crate keeps its data apart from its work
 
-`model` (and `catalog`'s data types) compile to `wasm32` and contain no IO.
-Everything that spawns a process, reads a file, or walks a graph sits behind
-`backend`. The frontend takes each crate with `default-features = false` and
-`use`s the model types **directly** — there is no generated binding layer, so
-the wire contract cannot drift.
+Each library crate has a `model`: the types its answers are made of, with no
+IO in them — what the window, the CLI and the assistant's tools all read, so
+the three cannot describe one thing three ways. Everything that spawns a
+process, reads a file or walks a graph is in the modules beside it. One
+process links it all; there is no second copy of any type to keep in step.
 
-Adding a field to a model type is free. Adding an `std::process` call to one is
-a build break on wasm, which is the point.
+(Until v0.7.0 each crate was also split by a `backend` feature, so the
+WebView frontend could compile `model` to wasm32. That frontend is gone and
+the split with it.)
 
 ### 2. File formats and wire formats are different types
 

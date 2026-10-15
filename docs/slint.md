@@ -573,10 +573,9 @@ tests green, and CLAUDE.md saying how it works.
    what the key in the code verifies. The macOS and Linux packaging is the
    release workflow's, and is proven by its first run.
 
-   Then `rusty-ui`, `rusty-app` and `rusty-ipc` were deleted, in v0.7.0.
-   The `backend` feature split, which existed for the wasm frontend, is
-   still there and still held by CI; it goes once nothing is moving under
-   it. The tab strip came back with them: what each project had open, in
+   Then `rusty-ui`, `rusty-app` and `rusty-ipc` were deleted, in v0.7.0,
+   and the `backend` feature split with them: it existed so the wasm
+   frontend could take each crate's `model` alone. The tab strip came back with them: what each project had open, in
    which group, is `workbench.toml`'s `open_tabs` as the Tauri window wrote
    it, put back when the project opens — and the window, started with no
    project, opens the last one (`strip.rs`). What the Tauri window had and

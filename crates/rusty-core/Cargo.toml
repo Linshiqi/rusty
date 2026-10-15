@@ -8,34 +8,17 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# The only unconditional dependency. Everything the Leptos frontend links
-# against lives in `model`, which must compile to wasm32.
 serde = { version = "1.0.229", features = ["derive"] }
 
-camino = { version = "1.2.5", optional = true }
-guppy = { version = "0.17.26", optional = true }
-semver = { version = "1.0.28", optional = true }
-serde_json = { version = "1.0.151", optional = true }
-thiserror = { version = "2.0.20", optional = true }
+camino = "1.2.5"
+guppy = "0.17.26"
+semver = "1.0.28"
+serde_json = "1.0.151"
+thiserror = "2.0.20"
 # The crates.io sparse index, for the Crates panel's "latest" column.
-ureq = { version = "3.4.0", optional = true }
+ureq = "3.4.0"
 # Volume free space and the `.cargo-lock` probe behind the Disk view.
-fs4 = { version = "0.13", default-features = false, features = ["sync"], optional = true }
-
-[features]
-default = ["backend"]
-
-# Everything that runs a process, touches the filesystem, or walks a dependency
-# graph. The frontend takes this crate with `default-features = false` and gets
-# only the serde types.
-backend = ["dep:camino", "dep:fs4", "dep:guppy", "dep:semver", "dep:serde_json", "dep:thiserror", "dep:ureq"]
-
-# The probe loads a real workspace, so it needs the half of this crate that
-# runs `cargo metadata`. Without this, `--all-targets` builds it with default
-# features off and stops on a missing `guppy`.
-[[example]]
-name = "open_cost"
-required-features = ["backend"]
+fs4 = { version = "0.13", default-features = false, features = ["sync"] }
 
 [lints]
 workspace = true

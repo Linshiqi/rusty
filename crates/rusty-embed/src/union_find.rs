@@ -18,7 +18,6 @@ impl UnionFind {
 
     /// One more element, on its own, and its index — for the KiCad readers,
     /// which meet their points as they go.
-    #[cfg(feature = "backend")]
     pub(crate) fn push(&mut self) -> usize {
         let index = self.0.len();
         self.0.push(index);

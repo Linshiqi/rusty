@@ -49,7 +49,8 @@ pub fn register(dir: &Path, version: &str, size_kb: u64) -> std::io::Result<()> 
         "QuietUninstallString",
         &format!("{} --silent", quoted(&dir.join("uninstall.exe"))),
     )?;
-    entry.set_value("URLInfoAbout", &rusty_embed::model::REPO)?;
+    // The workspace manifest's `repository`, the one place it is written.
+    entry.set_value("URLInfoAbout", &env!("CARGO_PKG_REPOSITORY"))?;
     entry.set_value("NoModify", &1u32)?;
     entry.set_value("NoRepair", &1u32)?;
     entry.set_value("EstimatedSize", &(size_kb.min(u64::from(u32::MAX)) as u32))?;

@@ -334,17 +334,14 @@ mod tests {
     /// The C3 is the chip every model was proven on and has no limits; the
     /// others each name what they cost, and the one that ends a run is
     /// recognised in the emulator's own last words.
-    #[cfg(feature = "backend")]
     fn emulation(chip: &str) -> Option<Emulation> {
         crate::chip::by_id(chip).unwrap().emulation
     }
 
-    #[cfg(feature = "backend")]
     fn for_chip(chip: &str, outdated: bool) -> Vec<SimLimit> {
         SimLimit::for_emulation(emulation(chip).as_ref(), outdated)
     }
 
-    #[cfg(feature = "backend")]
     #[test]
     fn each_chip_names_what_the_emulator_cannot_do_on_it() {
         // With rusty's current emulator neither the C3 nor the ESP32 has a

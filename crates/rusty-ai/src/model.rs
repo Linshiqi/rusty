@@ -1,9 +1,6 @@
-//! Wire types for the AI layer.
-//!
-//! Compiled unconditionally and free of IO, so the Leptos frontend can `use`
-//! these directly — same split as `rusty_core::model` and `rusty_embed::model`.
-//! Everything that opens a socket or reads a keychain lives behind the
-//! `backend` feature.
+//! The AI layer's data: the conversation, the tools, the providers'
+//! configuration — what the window draws and the providers send, with no
+//! IO. What opens a socket or reads a keychain is in the modules beside it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

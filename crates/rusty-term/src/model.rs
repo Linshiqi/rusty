@@ -1,13 +1,9 @@
-//! What a rendered terminal screen looks like on the wire.
-//!
-//! Compiled unconditionally and free of IO, like every other `model` here, so
-//! the Leptos frontend draws these types directly instead of through a
-//! generated binding layer.
+//! What a rendered terminal screen looks like, as data.
 //!
 //! Runs of same-styled text rather than a cell grid. A 120×40 screen is 4800
 //! cells and perhaps 200 runs, and it is redrawn many times a second while a
-//! build scrolls — sending cells would spend more time serialising than the
-//! emulator spends parsing.
+//! build scrolls — a run is one piece of text to draw, where cells would be
+//! twenty.
 
 use serde::{Deserialize, Serialize};
 

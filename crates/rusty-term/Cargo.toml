@@ -8,30 +8,28 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# The rendered screen is a wire type the frontend draws directly, so the
-# unconditional half of this crate must compile to wasm32.
 serde = { version = "1.0.229", features = ["derive"] }
 
 # `portable-pty` is wezterm's; on Windows it drives ConPTY, which is what makes
 # an interactive shell work at all rather than a pipe that no prompt appears on.
-portable-pty = { version = "0.9.0", optional = true }
+portable-pty = "0.9.0"
 # Terminal emulation. Doing this in Rust rather than shipping xterm.js is what
 # keeps the promise of no npm in this repository.
-vt100 = { version = "0.16.2", optional = true }
-thiserror = { version = "2.0.20", optional = true }
+vt100 = "0.16.2"
+thiserror = "2.0.20"
 # The built-in shell's bash engine: a POSIX/bash-compatible shell in Rust.
 # 0.5 is the first release whose Windows PATH handling is real (split_paths
 # and PATHEXT probing); earlier ones cannot find any external command there.
-brush-core = { version = "0.5.0", optional = true }
-brush-builtins = { version = "0.2.0", optional = true }
-tokio = { version = "1", features = ["rt"], optional = true }
+brush-core = "0.5.0"
+brush-builtins = "0.2.0"
+tokio = { version = "1", features = ["rt"] }
 # The built-in ls: brush-builtins' bash set carries no coreutils lister, and
 # a shell where `ls` errors reads as broken whatever else works.
-clap = { version = "4.6.6", features = ["derive"], optional = true }
+clap = { version = "4.6.6", features = ["derive"] }
 # How many cells a character takes, by the table vt100 draws with — the
 # version it already pulls in — so the built-in shell's line editing rubs out
 # exactly the cells the terminal drew.
-unicode-width = { version = "0.2.2", optional = true }
+unicode-width = "0.2.2"
 
 # Raw console mode for the built-in shell. Without it conhost line-buffers
 # and echoes on its own — every command appeared twice and arrows never
@@ -50,11 +48,6 @@ libc = "0.2"
 [[bin]]
 name = "rusty-shell"
 path = "src/bin/rusty-shell.rs"
-required-features = ["backend"]
-
-[features]
-default = ["backend"]
-backend = ["dep:portable-pty", "dep:vt100", "dep:thiserror", "dep:brush-core", "dep:brush-builtins", "dep:tokio", "dep:clap", "dep:unicode-width"]
 
 [lints]
 workspace = true

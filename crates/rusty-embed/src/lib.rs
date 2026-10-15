@@ -1,14 +1,12 @@
 //! Embedded Rust domain logic for the rusty workbench.
 //!
-//! Split by the `backend` feature exactly as `rusty-core` is: [`model`],
-//! [`protocol`], [`plant`], [`setup`], [`signal`] and [`dsp`] are pure data
-//! and arithmetic and compile to wasm so the Leptos frontend can `use` them;
-//! everything that reads files or spawns processes is backend-only.
+//! [`model`], [`protocol`], [`plant`], [`setup`], [`signal`] and [`dsp`] are
+//! pure data and arithmetic, tested as such; what reads files or spawns
+//! processes is in the modules beside them.
 //!
-//! The chip catalogue is *not* on the wasm side, deliberately: the lookups
-//! need the TOML parser, and only the backend can see the user's and the
-//! project's overlay files. The frontend gets the catalogue over IPC, which
-//! is the one answer that includes those overlays.
+//! The chip catalogue is TOML in three layers — built in, the user's, the
+//! project's — read through one loader (`catalog`), so every answer about a
+//! part includes the overlays.
 
 pub mod model;
 // The plant is arithmetic and no IO, like `protocol` — the frontend runs
@@ -73,7 +71,6 @@ pub mod lab;
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,
 // since only the backend can see the user's and the project's overlay files.
-#[cfg(feature = "backend")]
 pub mod chip;
 
 pub use model::*;
@@ -92,79 +89,49 @@ pub use protocol::{
 
 // The build systems beside Cargo: PlatformIO and CMake, recognised, built,
 // flashed and searched for images.
-#[cfg(feature = "backend")]
 pub mod buildsys;
-#[cfg(feature = "backend")]
 pub mod catalog;
 pub mod circuit;
-#[cfg(feature = "backend")]
 pub mod config;
-#[cfg(feature = "backend")]
 pub mod device;
-#[cfg(feature = "backend")]
 mod error;
-#[cfg(feature = "backend")]
 mod esp_env;
-#[cfg(feature = "backend")]
 pub mod firmware;
-#[cfg(feature = "backend")]
 pub mod flash;
 // A signal generator on the sheet and the table it plays at each converter
 // it reaches, stepped through the sheet's circuit. Pure, beside `circuit`
 // and `live`, whose arithmetic it is.
 pub mod generator;
-#[cfg(feature = "backend")]
 pub mod host_debug;
-#[cfg(feature = "backend")]
 pub mod image;
-#[cfg(feature = "backend")]
 pub mod install;
-#[cfg(feature = "backend")]
 mod layers;
 pub mod live;
-#[cfg(feature = "backend")]
 pub mod memory;
-#[cfg(feature = "backend")]
 pub mod migrate;
-#[cfg(feature = "backend")]
 pub mod net;
 /// Reading a part's declaration — the file format behind [`sensor::Spec`].
-#[cfg(feature = "backend")]
 pub mod partfile;
-#[cfg(feature = "backend")]
 pub mod pins;
 /// The playground: a project rusty keeps per chip for trying things.
-#[cfg(feature = "backend")]
 pub mod playground;
-#[cfg(feature = "backend")]
 pub mod process;
-#[cfg(feature = "backend")]
 pub mod project;
-#[cfg(feature = "backend")]
 pub mod scaffold;
-#[cfg(feature = "backend")]
 pub mod schematic;
-#[cfg(feature = "backend")]
 pub mod serial;
-#[cfg(feature = "backend")]
 pub mod simulate;
 pub mod solve;
-#[cfg(feature = "backend")]
 pub mod svd;
-#[cfg(feature = "backend")]
 pub mod toolchain;
-#[cfg(feature = "backend")]
 pub mod tools;
 mod union_find;
 /// rusty updating itself: the release feed and the signature check.
-#[cfg(feature = "backend")]
 pub mod update;
 // The lines that put a rendered signal on the emulator and its account of
 // playing it. Wasm-safe with the protocol: the frontend reads the account
 // to line the signal it drew up with the conversions the emulator reports.
 pub mod wave;
-#[cfg(feature = "backend")]
 pub mod wizard;
 
-#[cfg(feature = "backend")]
 pub use error::{Error, Result};

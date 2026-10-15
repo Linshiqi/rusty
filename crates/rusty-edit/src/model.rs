@@ -1,7 +1,4 @@
-//! What the file tree and a highlighted document look like on the wire.
-//!
-//! Compiled unconditionally and free of IO, like every other `model` here, so
-//! the Leptos frontend draws these types directly.
+//! What the file tree and a highlighted document look like, as data.
 
 use serde::{Deserialize, Serialize};
 

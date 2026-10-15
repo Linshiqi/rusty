@@ -1,16 +1,10 @@
 //! Cargo workspace analysis for the rusty workbench.
 //!
-//! Split in two by the `backend` feature:
-//!
-//! - [`model`] is always compiled and contains nothing but serde types. The
-//!   Leptos frontend depends on this crate with `default-features = false` and
-//!   `use`s these types directly — there is no generated binding layer, so the
-//!   wire contract cannot drift out of sync.
-//! - Everything else needs a filesystem and a `cargo metadata` subprocess, and
-//!   is only compiled for the backend.
+//! [`model`] is what the analysis answers with — serde types and nothing
+//! else, read alike by the window, the CLI and the assistant's tools. The
+//! rest is the analysis: a filesystem and a `cargo metadata` subprocess.
 //!
 //! ```no_run
-//! # #[cfg(feature = "backend")]
 //! # fn demo() -> Result<(), rusty_core::Error> {
 //! use rusty_core::Workspace;
 //!
@@ -24,22 +18,13 @@
 pub mod model;
 pub use model::*;
 
-#[cfg(feature = "backend")]
 pub mod disk;
-#[cfg(feature = "backend")]
 mod duplicates;
-#[cfg(feature = "backend")]
 mod error;
-#[cfg(feature = "backend")]
 mod features;
-#[cfg(feature = "backend")]
 mod overview;
-#[cfg(feature = "backend")]
 pub mod registry;
-#[cfg(feature = "backend")]
 mod workspace;
 
-#[cfg(feature = "backend")]
 pub use error::{Error, Result};
-#[cfg(feature = "backend")]
 pub use workspace::Workspace;

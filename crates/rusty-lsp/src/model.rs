@@ -507,7 +507,6 @@ mod tests {
     }
 
     /// The wire names, which the mock writes by hand.
-    #[cfg(feature = "backend")]
     #[test]
     fn a_hints_answer_crosses_the_wire_and_back() {
         let answer = InlayHints {

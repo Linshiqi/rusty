@@ -45,32 +45,19 @@
 pub mod model;
 pub use model::*;
 
-#[cfg(feature = "backend")]
 mod agent;
-#[cfg(feature = "backend")]
 pub mod config;
-#[cfg(feature = "backend")]
 mod error;
-#[cfg(feature = "backend")]
 pub mod http;
-#[cfg(feature = "backend")]
 pub mod mcp;
-#[cfg(feature = "backend")]
 pub mod provider;
-#[cfg(feature = "backend")]
 pub mod secrets;
-#[cfg(feature = "backend")]
 pub mod tools;
 
-#[cfg(feature = "backend")]
 pub use agent::{Assistant, wire_history};
-#[cfg(feature = "backend")]
 pub use error::{Error, Result};
-#[cfg(feature = "backend")]
 pub use http::Http;
-#[cfg(feature = "backend")]
 pub use provider::{ChatRequest, Provider};
-#[cfg(feature = "backend")]
 pub use tools::{LazyWorkspace, Tool, ToolContext, ToolRegistry};
 
 /// What the assistant is told about itself.
