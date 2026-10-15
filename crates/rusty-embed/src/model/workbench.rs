@@ -73,9 +73,10 @@ impl Default for EditorView {
     }
 }
 
-/// How the window is laid out and looks: the theme, the interface's scale and
-/// the three docks. A file and not the window's own storage, because a
-/// second window opens laid out as the first was left.
+/// How the window is laid out and looks: the theme, the interface's scale,
+/// the three docks and where the two editor groups part. A file and not the
+/// window's own storage, because a second window opens laid out as the
+/// first was left.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowLayout {
@@ -86,6 +87,9 @@ pub struct WindowLayout {
     pub left: DockLayout,
     pub bottom: DockLayout,
     pub right: DockLayout,
+    /// The share of the editor area the left group takes while the editor
+    /// is split, 0.5 for halves.
+    pub split: f32,
 }
 
 /// One dock: whether it is open, how wide (or for the bottom one, how tall)
@@ -118,6 +122,7 @@ impl Default for WindowLayout {
                 size: 420.0,
                 front: None,
             },
+            split: 0.5,
         }
     }
 }

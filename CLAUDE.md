@@ -1252,6 +1252,35 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   the split.
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
   split comes back with them (`app/strip.rs`).
+- **The divider is dragged, and where it was left is kept** with the docks'
+  sizes (`WindowLayout.split`, the left group's share): a 7 px hold on the
+  1 px line with a resize cursor, each group at least VS Code's 220 px while
+  there is room for two, and a double-click puts it back at half. The share
+  is the window's, not a project's, as the docks' sizes are.
+- **A tab is named by its group as well as its id.** One file can be a tab in
+  both groups under one id, so whatever closes or acts on a tab says which
+  group (`App::close_tab_in`, `tab_in`): the other strip's × once closed the
+  keys group's tab of the same file.
+- **A strip's tabs sit in a lane that ends where its buttons begin**
+  (`TabStrip`, `ui/pages.slint`), VS Code's shape: the split button drawn
+  over the strip covered the last tab's name. More tabs than fit scroll the
+  lane sideways under the wheel, either way of turning it, and the tab in
+  front is brought into view whenever it changes or the lane is resized —
+  from a timer a millisecond on, because a new tab's place is not laid out
+  while the tab is being made, and asked for it then is a binding loop.
+- **A tab's right-click menu is VS Code's** (`app/tab_menu.rs`): Close,
+  Close others, Close to the right, Close saved, Close all; Copy path, Copy
+  relative path (the system's separator, as VS Code's `auto`); Reveal in
+  File Explorer (Finder, or the containing folder, named as each system
+  names it); Split right — the file in the group to its right, a new one
+  when the window is not split. Each row is an action, named and keyed as
+  the palette names and keys it, and the palette's way in acts on the tab
+  in front. What would do nothing is left out rather than offered: nothing
+  to close beside it, no file on disk behind a page or an expansion, no
+  group to the right of the right one. Every close goes through the one
+  close path, so a file with changes asks, and keeping one ends the batch.
+  A row for another verb is one more id in `ROWS` and one more arm in
+  `tab_verb`.
 - **The picker is where navigation lands** (`picker.rs`, `app/navigate.rs`):
   the palette (Ctrl+Shift+P), the finder (Ctrl+P), a line (Ctrl+G opens it
   with `:` typed — `42`, `42:7`), references (Shift+F12), implementations
@@ -1707,7 +1736,10 @@ are the library's, and the ones the window must keep when it does.
   `raw_arg` so a space in a folder name holds. A path a program takes and a
   command line is handed are two different contracts. `open -R` on macOS,
   and the containing folder through `xdg-open` elsewhere, where no file
-  manager takes a selection portably.
+  manager takes a selection portably. **It is `crate::os_paths` in the
+  window**, one door for the tab menu and the tree: `reveal`, and the paths
+  Copy path and Copy relative path put on the clipboard, in the system's
+  spelling.
 
 ## Two crates from the wizard
 
@@ -2326,7 +2358,10 @@ files, which `build.rs` bundles as gettext from the same TOML.
 `docs/slint.md` (*The window, designed again*) is the design; these are the
 rules it settled, each the answer to something that went wrong.
 
-- **The title bar is the run loop.** On the left, which project (its menu is
+- **The title bar is the run loop.** On the left, rusty's mark — the
+  window's own icon, never a gear, which read as a Settings button that did
+  nothing — opening the window's menu as a Windows app's icon opens its own;
+  which project (its menu is
   recents, open, new, clone, the playgrounds) and which branch; in the
   middle, Xcode's shape — the run button and *where* it runs, the simulator,
   a serial port, a probe or a USB bootloader, one list chosen once
@@ -2445,7 +2480,8 @@ is no browser storage, and what the window remembers between runs is
   folder is the cloud-sync story.
 - `workbench.toml` (`config::WorkbenchState`) is the recents, the window's
   layout and theme and scale (`WindowLayout`: each dock's size, whether it is
-  open and which panel was in front), the editor's switches (`vim`,
+  open and which panel was in front, and where the editor groups part), the
+  editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so
   another spelling of the same directory finds it), a skipped update and the

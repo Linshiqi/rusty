@@ -1,7 +1,7 @@
-// The title bar is the run loop: which project, which branch; the run
-// button, where it runs and stop, with what is happening beside them; the
-// palette; the window's own controls. Dragging anywhere empty moves the
-// window, and a double-click maximizes it.
+// The title bar is the run loop: rusty's mark, which opens the window's
+// menu; which project, which branch; the run button, where it runs and
+// stop; the palette; the window's own controls. Dragging anywhere empty
+// moves the window, and a double-click maximizes it.
 
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
@@ -119,6 +119,42 @@ component RunControl inherits Rectangle {
     }
 }
 
+// rusty's mark, the window's own icon, at the far left: a click opens the
+// window's menu — what ≡ opens — as a Windows app's icon opens its own.
+component Logo inherits Rectangle {
+    width: 30px;
+    height: 28px;
+    border-radius: Theme.radius;
+    background: touch.has-hover ? Theme.hover : transparent;
+    Image {
+        source: @image-url("../icons/rusty.png");
+        width: 20px;
+        height: 20px;
+        image-rendering: smooth;
+    }
+    touch := TouchArea {
+        clicked => {
+            Tip.shown = false;
+            Shell.act("app.menu");
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && !Tip.shown;
+        triggered => {
+            Tip.text = @tr("desk.app-menu");
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
 // The window's own buttons: full height, square, the close one red on hover,
 // as every desktop draws them.
 component WindowButton inherits Rectangle {
@@ -167,16 +203,11 @@ export component TitleBar inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 10px;
+        padding-left: 6px;
         spacing: 2px;
         alignment: start;
-        Rectangle {
-            width: 22px;
-            Icon {
-                path: Icons.settings;
-                size: 16px;
-                color: Theme.rust;
-            }
+        Logo {
+            y: (parent.height - self.height) / 2;
         }
         Chooser {
             y: (parent.height - self.height) / 2;
