@@ -18,9 +18,11 @@ struct Found {
 }
 
 fn main() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("templates");
+    // Read when the script runs, not baked in when it was compiled: a build
+    // directory shared by two checkouts reuses one compiled script for both,
+    // and the other checkout's templates may be gone.
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+    let root = Path::new(&manifest).join("data").join("templates");
     println!("cargo:rerun-if-changed={}", root.display());
 
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)

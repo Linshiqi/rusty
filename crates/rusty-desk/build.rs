@@ -14,7 +14,10 @@ use std::{
 };
 
 fn main() {
-    let locales = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rusty-i18n/locales");
+    // Read when the script runs, not baked in when it was compiled: a build
+    // directory shared by two checkouts reuses one compiled script for both.
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+    let locales = Path::new(&manifest).join("../rusty-i18n/locales");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     let bundle = out.join("translations");
     for (tag, file) in [("en", "en.toml"), ("zh-CN", "zh-CN.toml")] {
