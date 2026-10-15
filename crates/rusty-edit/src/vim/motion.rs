@@ -315,6 +315,18 @@ enum Class {
     Punct,
 }
 
+/// Whether `cursor` is on the last character of a word — a one-letter
+/// word's only one.
+pub(super) fn ends_word(text: &str, cursor: usize, big: bool) -> bool {
+    let mut chars = text.chars().skip(cursor);
+    match (chars.next(), chars.next()) {
+        (Some(here), _) if class(here, big) == Class::Blank => false,
+        (Some(_), None) => true,
+        (Some(here), Some(next)) => class(here, big) != class(next, big),
+        (None, _) => false,
+    }
+}
+
 fn class(c: char, big: bool) -> Class {
     if c.is_whitespace() {
         Class::Blank

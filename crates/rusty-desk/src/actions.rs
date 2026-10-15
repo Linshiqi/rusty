@@ -74,6 +74,7 @@ pub const ALL: &[Action] = &[
     action("editor.fold", "desk.fold-region", Some("Ctrl+Shift+[")),
     action("editor.unfold", "desk.unfold-region", Some("Ctrl+Shift+]")),
     action("editor.fold-all", "context.editor-fold-all", None),
+    action("editor.vim", "menu.view.vim", None),
     action("editor.unfold-all", "context.editor-unfold-all", None),
     action("nav.back", "menu.view.back", Some("Alt+ArrowLeft")),
     action("nav.forward", "menu.view.forward", Some("Alt+ArrowRight")),

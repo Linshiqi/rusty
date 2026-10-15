@@ -149,6 +149,10 @@ export component StatusBar inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
         }
+        if Shell.vim-mode != "": Item {
+            text: Shell.vim-hint == "" ? Shell.vim-mode : Shell.vim-mode + "  " + Shell.vim-hint;
+            tip: @tr("status.vim-hint");
+        }
         if Shell.caret != "": Item {
             text: Shell.caret;
         }

@@ -26,6 +26,7 @@ mod keymap;
 mod lineops;
 mod lines;
 mod metrics;
+mod modal;
 mod overview;
 mod pairs;
 mod problems;
@@ -144,6 +145,8 @@ pub struct Surface {
     overview: overview::Overview,
     /// When the server is next asked for colours and hints.
     analysis: analysis::Analysis,
+    /// Vim's keys, when they are on.
+    modal: modal::Modal,
 }
 
 impl Surface {
@@ -195,6 +198,7 @@ impl Surface {
             completing: completion::Completing::default(),
             overview: overview::Overview::default(),
             analysis: analysis::Analysis::default(),
+            modal: modal::Modal::default(),
         });
         surface.wire(window);
         surface
@@ -547,7 +551,8 @@ impl Surface {
     pub fn status(&self) -> Option<(usize, usize, &'static str, &'static str)> {
         let doc = self.current.borrow().clone()?;
         let doc = doc.borrow();
-        let (line, col) = doc.lines.position(&doc.text, doc.primary().head);
+        let at = self.vim_cursor(&doc).unwrap_or(doc.primary().head);
+        let (line, col) = doc.lines.position(&doc.text, at);
         Some((line + 1, col + 1, doc.charset.label(), doc.ending.label()))
     }
 
@@ -591,6 +596,11 @@ impl Surface {
             // Any key puts the card away: it is about the text as it was.
             this.hide_hover();
             if this.completion_key(&event.text, m.control || m.alt || m.meta) {
+                return true;
+            }
+            // Vim's keys come after the popup's — Escape closes the popup
+            // before Vim sees it — and before the editor's own.
+            if this.vim_key(&event.text, m.control || m.meta, m.alt) {
                 return true;
             }
             let page = this.page();
@@ -902,6 +912,10 @@ impl Surface {
     /// Text typed or composed: at every cursor, with the bracket pairs' rules
     /// for one character at one cursor.
     fn type_text(&self, typed: &str) {
+        // What an input method commits in Vim's normal mode is not text.
+        if self.vim_commands() {
+            return;
+        }
         let Some(doc) = self.doc() else { return };
         if let Some(window) = self.window.upgrade() {
             self.metrics.borrow_mut().learn(&window, typed);
@@ -1018,6 +1032,7 @@ impl Surface {
             self.hide_hover();
             self.close_completion();
             self.close_signature();
+            self.vim_pressed();
         }
         // Ctrl+click: the definition of the name clicked, the caret put
         // there first so the jump is about what was clicked.
@@ -1229,17 +1244,23 @@ impl Surface {
             return;
         };
         let Some(doc) = self.doc() else { return };
-        let (line, x) = {
+        // In Vim's command modes the caret is a block on the character the
+        // cursor stands on, which in visual mode is not the selection's head.
+        let (line, x, block) = {
             let d = doc.borrow();
-            let (line, col) = d.lines.position(&d.text, d.primary().head);
-            (
-                line,
-                inlays::caret_on(&self.metrics.borrow(), &d, line, col),
-            )
+            let vim = self.vim_cursor(&d);
+            let (line, col) = d.lines.position(&d.text, vim.unwrap_or(d.primary().head));
+            let x = match vim {
+                Some(_) => inlays::char_on(&self.metrics.borrow(), &d, line, col),
+                None => inlays::caret_on(&self.metrics.borrow(), &d, line, col),
+            };
+            (line, x, vim.map(|at| self.block_width(&d, at)))
         };
         let code = window.global::<Code>();
         code.set_caret_line(doc.borrow().row_of(line) as i32);
         code.set_caret_x(x);
+        code.set_block_caret(block.is_some());
+        code.set_caret_width(block.unwrap_or(2.0));
         self.scroll_to(line, x);
         self.tell_caret();
     }

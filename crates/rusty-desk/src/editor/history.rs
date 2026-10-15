@@ -31,6 +31,9 @@ pub struct History {
     undo: Vec<Step>,
     redo: Vec<Step>,
     last: Option<(Kind, Instant)>,
+    /// Every edit joins the step before it until the next seal: Vim's
+    /// change, from its command through what is typed to Escape.
+    held: bool,
 }
 
 /// How close two keystrokes are to be one step.
@@ -43,6 +46,7 @@ impl History {
     pub fn record(&mut self, text: &str, cursors: &[Cursor], kind: Kind, now: Instant) {
         self.redo.clear();
         let joins = match self.last {
+            Some(_) if self.held => true,
             Some((last, at)) => {
                 last == kind && kind != Kind::Other && now.duration_since(at) < JOIN
             }
@@ -62,6 +66,12 @@ impl History {
     /// The next keystroke starts a step of its own: the caret moved, a save.
     pub fn seal(&mut self) {
         self.last = None;
+        self.held = false;
+    }
+
+    /// Every edit from now to the next seal is one step with the last.
+    pub fn hold(&mut self) {
+        self.held = true;
     }
 
     /// Step back from `text`: what to put on screen instead.
@@ -71,7 +81,7 @@ impl History {
             text: text.to_string(),
             cursors: cursors.to_vec(),
         });
-        self.last = None;
+        self.seal();
         Some((step.text, step.cursors))
     }
 

@@ -95,6 +95,7 @@ pub fn start(window: &AppWindow) {
     let lenses = std::env::var_os("RUSTY_PROBE_LENS").is_some();
     let folding = std::env::var_os("RUSTY_PROBE_FOLD").is_some();
     let hinting = std::env::var_os("RUSTY_PROBE_HINTS").is_some();
+    let modal = std::env::var_os("RUSTY_PROBE_VIM").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -237,6 +238,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if hinting {
                     step.set(2500);
+                }
+                if modal {
+                    step.set(2600);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -918,6 +922,45 @@ pub fn start(window: &AppWindow) {
                 chord(&[Key::Control], "z".into());
             }
             2503 if hinting => app.act("app.exit"),
+            // Vim's keys: a word changed and undone in one press, two lines
+            // deleted by a visual selection and put back.
+            2600 if modal => {
+                app.act("editor.vim");
+                app.editor().go_to(52, Some(9));
+            }
+            2601..=2620 if modal => {
+                let keys: &[&str] = &[
+                    "w", "c", "w", "f", "i", "r", "s", "t", "\u{1b}", "u", "V", "j", "d", "u",
+                ];
+                let at = (n - 2601) as usize;
+                let said = |what: &str| {
+                    let line = draft()
+                        .and_then(|text| text.lines().nth(51).map(str::to_string))
+                        .unwrap_or_default();
+                    eprintln!(
+                        "vim: {what:>4} -> {:?} at {:?}; {} lines; line 52 {line:?}",
+                        app.editor().vim_status(),
+                        app.editor().status().map(|s| (s.0, s.1)),
+                        app.editor().line_count().unwrap_or(0),
+                    );
+                };
+                if at > 0 {
+                    said(&keys[at - 1].escape_default().to_string());
+                } else {
+                    said("on");
+                }
+                match keys.get(at) {
+                    Some(&"\u{1b}") => key(Key::Escape.into()),
+                    Some(k) => key((*k).into()),
+                    None => {
+                        snapshot(&window, &dir.join("vim.png"));
+                        app.act("app.exit");
+                    }
+                }
+                if at == 11 {
+                    snapshot(&window, &dir.join("vim-visual.png"));
+                }
+            }
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -1506,7 +1549,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

@@ -29,6 +29,8 @@ pub mod semantic;
 pub mod sticky;
 /// What a test harness said: each test's verdict, each failure's place.
 pub mod testrun;
+/// Modal editing: Vim's keys as a pure state machine.
+pub mod vim;
 pub use model::*;
 pub use tests_in::{Runnable, RunnableKind};
 
