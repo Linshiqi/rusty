@@ -6125,8 +6125,12 @@ name = "rusty-setup"
 version = "0.7.0"
 dependencies = [
  "embed-resource",
+ "image",
  "liblzma",
  "rfd",
+ "slint",
+ "slint-build",
+ "sys-locale",
  "tar",
  "windows 0.61.3",
  "winreg 0.55.0",

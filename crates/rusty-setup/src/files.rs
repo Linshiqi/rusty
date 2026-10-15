@@ -43,14 +43,31 @@ pub fn installed(dir: &Path) -> Vec<String> {
 /// left that this one does not carry, and write down what is there now —
 /// `extra` too, the files the installer writes itself (`uninstall.exe`).
 pub fn install(payload: &[u8], dir: &Path, extra: &[&str]) -> Result<Vec<String>, String> {
+    install_counted(payload, dir, extra, &mut |_| {})
+}
+
+/// The share of an install the unpacking is; moving the files into place
+/// is the rest.
+const UNPACKING: f32 = 0.9;
+
+/// [`install`], saying how far it has got, 0 to 1.
+pub fn install_counted(
+    payload: &[u8],
+    dir: &Path,
+    extra: &[&str],
+    progress: &mut dyn FnMut(f32),
+) -> Result<Vec<String>, String> {
     let fail = |what: &str, e: std::io::Error| format!("{what}: {e}");
     std::fs::create_dir_all(dir).map_err(|e| fail(&dir.display().to_string(), e))?;
     sweep_old(dir);
     let before = installed(dir);
     let staging = dir.join(STAGING);
     let _ = std::fs::remove_dir_all(&staging);
-    let carried = payload::unpack(payload, &staging).map_err(|e| fail("unpacking", e))?;
-    for rel in &carried {
+    let carried =
+        payload::unpack_counted(payload, &staging, &mut |done| progress(done * UNPACKING))
+            .map_err(|e| fail("unpacking", e))?;
+    for (index, rel) in carried.iter().enumerate() {
+        progress(UNPACKING + (1.0 - UNPACKING) * index as f32 / carried.len().max(1) as f32);
         let target = dir.join(rel);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| fail(rel, e))?;
@@ -69,6 +86,7 @@ pub fn install(payload: &[u8], dir: &Path, extra: &[&str]) -> Result<Vec<String>
     now.dedup();
     let list = now.join("\n") + "\n";
     std::fs::write(dir.join(MANIFEST), list).map_err(|e| fail(MANIFEST, e))?;
+    progress(1.0);
     Ok(now)
 }
 
@@ -76,8 +94,18 @@ pub fn install(payload: &[u8], dir: &Path, extra: &[&str]) -> Result<Vec<String>
 /// — leaving the uninstaller, which cannot remove itself while it runs.
 /// The files that could not go, because something holds them.
 pub fn uninstall(dir: &Path, keep: &str) -> Vec<String> {
+    uninstall_counted(dir, keep, &mut |_| {})
+}
+
+/// [`uninstall`], saying how far it has got, 0 to 1, by files.
+pub fn uninstall_counted(dir: &Path, keep: &str, progress: &mut dyn FnMut(f32)) -> Vec<String> {
     let mut held = Vec::new();
-    for rel in installed(dir).iter().filter(|rel| rel.as_str() != keep) {
+    let list = installed(dir);
+    for (index, rel) in list.iter().enumerate() {
+        progress(index as f32 / list.len().max(1) as f32);
+        if rel == keep {
+            continue;
+        }
         if clear(&dir.join(rel)).is_err() {
             held.push(rel.clone());
         }

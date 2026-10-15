@@ -1,0 +1,597 @@
+// rusty's installer and uninstaller: one small window. Install: where it
+// goes and a desktop shortcut, then the progress with what is new going by
+// under it, then Open. Uninstall: a question, the progress, done.
+//
+// The colours are rusty's own (crates/rusty-desk/ui/theme.slint), light or
+// dark as the system is; the words come from Rust, in the system's language.
+
+import { Palette } from "std-widgets.slint";
+
+export enum Mode { install, update, uninstall }
+export enum Page { welcome, working, done, failed }
+
+export struct Highlight {
+    icon: string,
+    title: string,
+    body: string,
+}
+
+global Colours {
+    out property <bool> dark: Palette.color-scheme != ColorScheme.light;
+    out property <color> window: dark ? #191715 : #f4f3f1;
+    out property <color> side: dark ? #211e1b : #ebe8e4;
+    out property <color> card: dark ? #262320 : #ffffff;
+    out property <color> line: dark ? #ffffff1a : #0000001c;
+    out property <color> label: dark ? #f0ebe5 : #1c1a17;
+    out property <color> label-2: dark ? #f0ebe5a3 : #1c1a179e;
+    out property <color> label-3: dark ? #f0ebe570 : #1c1a176b;
+    out property <color> rust: dark ? #e4703f : #bd4a1f;
+    out property <color> rust-hover: dark ? #ee8152 : #a8401a;
+    out property <color> rust-fill: dark ? #e4703f29 : #bd4a1f1f;
+    out property <color> crimson: dark ? #ef5570 : #bf2f47;
+    out property <color> crimson-hover: dark ? #f46c84 : #a8283e;
+    out property <color> patina: dark ? #4faa9a : #2b7466;
+    out property <color> hover: dark ? #ffffff0f : #0000000a;
+    out property <color> track: dark ? #ffffff14 : #00000012;
+}
+
+// The window's icons: rusty's own hand-drawn set, on a 20-unit grid.
+export global Icons {
+    out property <string> chip: "M6 6h8v8H6zM8 3.5V6M12 3.5V6M8 14v2.5M12 14v2.5M3.5 8H6M3.5 12H6M14 8h2.5M14 12h2.5";
+    out property <string> simulate: "M4 4.5h12v11H4zM8.5 7.5l4 2.5-4 2.5z";
+    out property <string> code: "M7 6 3 10l4 4M13 6l4 4-4 4M11 4.5 9 15.5";
+    out property <string> flash: "M11 2.5 4.5 11.5H9l-1 6 6.5-9H10z";
+    out property <string> bug: "M10 6.5a3.5 3.5 0 0 1 3.5 3.5v3a3.5 3.5 0 1 1-7 0v-3A3.5 3.5 0 0 1 10 6.5zM8 6.8 6.2 4.6M12 6.8l1.8-2.2M6.5 10H3.4M16.6 10h-3.1M7 13.5l-2.4 1.8M13 13.5l2.4 1.8";
+    out property <string> waves: "M2.5 10c1.5-4 3-4 4.5 0s3 4 4.5 0 3-4 4.5 0 1.5 2 1.5 2";
+    out property <string> spark: "M10 2.5v4M10 13.5v4M2.5 10h4M13.5 10h4M5 5l2.5 2.5M12.5 12.5 15 15M15 5l-2.5 2.5M7.5 12.5 5 15";
+    out property <string> bolt: "M11 2.5 4.5 11.5H9l-1 6 6.5-9H10z";
+    out property <string> check: "M4.5 10.5l3.5 3.5 7.5-8";
+    out property <string> warn: "M10 3 18 16.5H2zM10 8v4M10 14.2v.3";
+    out property <string> folder: "M2.5 5.5h5l1.5 1.5h8.5v8.5h-15z";
+}
+
+component Icon {
+    in property <string> path;
+    in property <brush> color: Colours.label-2;
+    in property <length> size: 18px;
+    width: root.size;
+    height: root.size;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 20;
+        viewbox-height: 20;
+        commands: root.path;
+        stroke: root.color;
+        stroke-width: 1.5px * root.size / 20px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        fill: transparent;
+    }
+}
+
+component Button {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    callback clicked;
+    min-width: 96px;
+    height: 34px;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { root.clicked(); }
+    property <color> fill: !root.primary ? transparent
+        : root.danger ? (touch.has-hover ? Colours.crimson-hover : Colours.crimson)
+        : (touch.has-hover ? Colours.rust-hover : Colours.rust);
+    Rectangle {
+        border-radius: 7px;
+        background: root.primary ? root.fill : (touch.has-hover ? Colours.hover : transparent);
+        border-width: root.primary ? 0 : 1px;
+        border-color: Colours.line;
+        opacity: root.enabled ? 1 : 0.45;
+        animate background { duration: 120ms; }
+        HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            Text {
+                text: root.text;
+                color: root.primary ? #ffffff : Colours.label;
+                font-size: 13px;
+                font-weight: root.primary ? 600 : 400;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Check {
+    in property <string> text;
+    in-out property <bool> checked;
+    height: 24px;
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checked: root.checked;
+    accessible-action-default => { root.checked = !root.checked; }
+    HorizontalLayout {
+        spacing: 10px;
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 4px;
+            background: root.checked ? Colours.rust : transparent;
+            border-width: root.checked ? 0 : 1.5px;
+            border-color: Colours.label-3;
+            animate background { duration: 120ms; }
+            if root.checked: Icon {
+                path: Icons.check;
+                color: #ffffff;
+                size: 14px;
+                x: 1px;
+                y: 1px;
+            }
+        }
+        Text {
+            text: root.text;
+            color: Colours.label;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.checked = !root.checked; }
+    }
+}
+
+component Link {
+    in property <string> text;
+    callback clicked;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    Text {
+        text: root.text;
+        color: touch.has-hover ? Colours.rust-hover : Colours.rust;
+        font-size: 12px;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// The progress: a thin track, the done part in rusty's colour.
+component Bar {
+    in property <float> value;
+    height: 6px;
+    Rectangle {
+        border-radius: 3px;
+        background: Colours.track;
+    }
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.value, 0, 1);
+        border-radius: 3px;
+        background: @linear-gradient(90deg, Colours.rust 0%, #f0a35a 100%);
+        animate width { duration: 250ms; easing: ease-out; }
+    }
+}
+
+// One highlight, the icon in a tinted square beside its two lines.
+component HighlightCard {
+    in property <Highlight> item;
+    Rectangle {
+        border-radius: 10px;
+        background: Colours.card;
+        border-width: 1px;
+        border-color: Colours.line;
+    }
+    HorizontalLayout {
+        padding: 18px;
+        spacing: 16px;
+        VerticalLayout {
+            alignment: start;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: 10px;
+                background: Colours.rust-fill;
+                Icon {
+                    path: root.item.icon;
+                    color: Colours.rust;
+                    size: 22px;
+                }
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: root.item.title;
+                color: Colours.label;
+                font-size: 14px;
+                font-weight: 600;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.item.body;
+                color: Colours.label-2;
+                font-size: 12.5px;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export global Words {
+    in property <string> tagline;
+    in property <string> install-title;
+    in property <string> update-title;
+    in property <string> uninstall-title;
+    in property <string> install-lead;
+    in property <string> update-lead;
+    in property <string> uninstall-lead;
+    in property <string> location;
+    in property <string> change;
+    in property <string> desktop;
+    in property <string> kept;
+    in property <string> install;
+    in property <string> update;
+    in property <string> remove;
+    in property <string> cancel;
+    in property <string> installing;
+    in property <string> removing;
+    in property <string> installed;
+    in property <string> installed-lead;
+    in property <string> removed;
+    in property <string> removed-lead;
+    in property <string> open;
+    in property <string> finish;
+    in property <string> failed;
+    in property <string> close;
+    in property <string> whats-new;
+}
+
+export component SetupWindow inherits Window {
+    in property <Mode> mode;
+    in-out property <Page> page: Page.welcome;
+    in property <string> version;
+    in-out property <string> location;
+    in-out property <bool> desktop: true;
+    in property <float> progress;
+    in property <string> step;
+    in property <string> error;
+    in property <[Highlight]> highlights;
+    in-out property <int> shown: 0;
+
+    callback begin();
+    callback change-location();
+    callback open-app();
+    callback quit();
+
+    title: "rusty";
+    icon: @image-url("../../rusty-desk/icons/rusty-256.png");
+    preferred-width: 720px;
+    preferred-height: 460px;
+    min-width: 720px;
+    min-height: 460px;
+    max-width: 720px;
+    max-height: 460px;
+    background: Colours.window;
+    default-font-size: 13px;
+
+    property <bool> removing: root.mode == Mode.uninstall;
+
+    // What is new goes by every few seconds while it installs.
+    Timer {
+        interval: 4.5s;
+        running: root.page == Page.working && !root.removing && root.highlights.length > 1;
+        triggered => {
+            root.shown = Math.mod(root.shown + 1, root.highlights.length);
+        }
+    }
+
+    HorizontalLayout {
+        // The side: the mark, the name, the version.
+        Rectangle {
+            width: 236px;
+            background: @linear-gradient(160deg, Colours.side 0%, Colours.window 100%);
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: Colours.line;
+            }
+            VerticalLayout {
+                padding: 32px;
+                padding-top: 56px;
+                spacing: 14px;
+                alignment: start;
+                Image {
+                    source: @image-url("../../rusty-desk/icons/rusty-256.png");
+                    width: 72px;
+                    height: 72px;
+                    image-rendering: smooth;
+                }
+                Text {
+                    text: "rusty";
+                    color: Colours.label;
+                    font-size: 30px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: Words.tagline;
+                    color: Colours.label-2;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 8px; }
+                Rectangle {
+                    height: 24px;
+                    width: version-text.preferred-width + 20px;
+                    border-radius: 12px;
+                    background: Colours.rust-fill;
+                    version-text := Text {
+                        text: "v" + root.version;
+                        color: Colours.rust;
+                        font-size: 12px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // The page.
+        VerticalLayout {
+            padding: 36px;
+            padding-top: 48px;
+            spacing: 0px;
+
+            if root.page == Page.welcome: VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.removing ? Words.uninstall-title
+                        : root.mode == Mode.update ? Words.update-title : Words.install-title;
+                    color: Colours.label;
+                    font-size: 22px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: root.removing ? Words.uninstall-lead
+                        : root.mode == Mode.update ? Words.update-lead : Words.install-lead;
+                    color: Colours.label-2;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 14px; }
+
+                if !root.removing: Rectangle {
+                    height: 64px;
+                    border-radius: 10px;
+                    background: Colours.card;
+                    border-width: 1px;
+                    border-color: Colours.line;
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        spacing: 12px;
+                        Icon {
+                            path: Icons.folder;
+                            color: Colours.label-2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 3px;
+                            Text {
+                                text: Words.location;
+                                color: Colours.label-3;
+                                font-size: 11px;
+                            }
+                            Text {
+                                text: root.location;
+                                color: Colours.label;
+                                font-size: 12.5px;
+                                overflow: elide;
+                            }
+                        }
+                        if root.mode == Mode.install: Link {
+                            text: Words.change;
+                            y: (parent.height - self.height) / 2;
+                            clicked => { root.change-location(); }
+                        }
+                    }
+                }
+                if !root.removing: Check {
+                    text: Words.desktop;
+                    checked <=> root.desktop;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: Words.kept;
+                        color: Colours.label-3;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: Words.cancel;
+                        clicked => { root.quit(); }
+                    }
+                    Button {
+                        text: root.removing ? Words.remove
+                            : root.mode == Mode.update ? Words.update : Words.install;
+                        primary: true;
+                        danger: root.removing;
+                        clicked => { root.begin(); }
+                    }
+                }
+            }
+
+            if root.page == Page.working: VerticalLayout {
+                spacing: 12px;
+                Text {
+                    text: root.removing ? Words.removing : Words.installing;
+                    color: Colours.label;
+                    font-size: 22px;
+                    font-weight: 600;
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: root.step;
+                        color: Colours.label-2;
+                        font-size: 12px;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: Math.round(root.progress * 100) + "%";
+                        color: Colours.label-2;
+                        font-size: 12px;
+                        font-weight: 600;
+                    }
+                }
+                Bar { value: root.progress; }
+                Rectangle { height: 18px; }
+                if !root.removing && root.highlights.length > 0: VerticalLayout {
+                    alignment: start;
+                    spacing: 10px;
+                    Text {
+                        text: Words.whats-new;
+                        color: Colours.label-3;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 0.6px;
+                    }
+                    Rectangle {
+                        height: 108px;
+                        for item[index] in root.highlights: HighlightCard {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            item: item;
+                            opacity: index == root.shown ? 1 : 0;
+                            animate opacity { duration: 450ms; easing: ease-in-out; }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 7px;
+                        for item[index] in root.highlights: Rectangle {
+                            width: index == root.shown ? 18px : 7px;
+                            height: 7px;
+                            border-radius: 3.5px;
+                            background: index == root.shown ? Colours.rust : Colours.track;
+                            animate width, background { duration: 300ms; }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.shown = index; }
+                            }
+                        }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+
+            if root.page == Page.done: VerticalLayout {
+                spacing: 12px;
+                HorizontalLayout {
+                    alignment: start;
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        border-radius: 28px;
+                        background: Colours.rust-fill;
+                        Icon {
+                            path: Icons.check;
+                            color: Colours.rust;
+                            size: 28px;
+                        }
+                    }
+                }
+                Rectangle { height: 4px; }
+                Text {
+                    text: root.removing ? Words.removed : Words.installed;
+                    color: Colours.label;
+                    font-size: 22px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: root.removing ? Words.removed-lead : Words.installed-lead;
+                    color: Colours.label-2;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+                    Button {
+                        text: Words.finish;
+                        clicked => { root.quit(); }
+                    }
+                    if !root.removing: Button {
+                        text: Words.open;
+                        primary: true;
+                        clicked => { root.open-app(); }
+                    }
+                }
+            }
+
+            if root.page == Page.failed: VerticalLayout {
+                spacing: 12px;
+                HorizontalLayout {
+                    alignment: start;
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        border-radius: 28px;
+                        background: #ef557026;
+                        Icon {
+                            path: Icons.warn;
+                            color: Colours.crimson;
+                            size: 28px;
+                        }
+                    }
+                }
+                Rectangle { height: 4px; }
+                Text {
+                    text: Words.failed;
+                    color: Colours.label;
+                    font-size: 22px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: root.error;
+                    color: Colours.label-2;
+                    font-size: 12.5px;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: Words.close;
+                        clicked => { root.quit(); }
+                    }
+                }
+            }
+        }
+    }
+}
