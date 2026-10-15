@@ -30,6 +30,9 @@ quick-open = "Go to file…"
 go-to-line = "Go to line…"
 references = "Go to references"
 implementations = "Go to implementations"
+type-definition = "Go to type definition"
+call-hierarchy = "Show call hierarchy"
+expand-macro = "Expand macro recursively"
 
 [menu.device]
 monitor = "Monitor"
@@ -256,6 +259,7 @@ registers = "Registers"
 flight = "Flight"
 signals = "Signals"
 draw = "Draw"
+calls = "Calls"
 
 [draw]
 scenes = "{count} scenes"
@@ -289,6 +293,8 @@ kind-span = "parallelogram"
 kind-frame = "frame"
 
 [files]
+# The line over a macro's expansion, which is a document with no file.
+expansion-of = "Expansion of {name} at {place}"
 lens-run-test = "Run Test"
 lens-run-tests = "Run Tests"
 lens-run = "Run"
@@ -732,6 +738,7 @@ reading-pressure = "pressure"
 reading-humidity = "humidity"
 [misc]
 no-quick-fixes = "no quick fixes at the cursor"
+no-macro = "Nothing to expand: the caret is not on a macro call"
 # A file no `mod` line declares: rust-analyzer parses it and answers nothing
 # else, so the reason sits in the file's header with its own fix beside it.
 edited-elsewhere = "the fix also changed {count} other file(s)"
@@ -818,6 +825,25 @@ image-failed = "{path} could not be shown: {error}"
 # The finder's title over a list of places the language server named.
 references = "References to {name}"
 implementations = "Implementations of {name}"
+type-definition = "Type of {name}"
+
+# The dock's Calls panel: who calls a function and what it calls.
+[calls]
+idle = "Right-click a function and choose Show call hierarchy to see who calls it and what it calls."
+asking = "Asking {server}…"
+no-function = "The caret is not on a function."
+not-a-function = "“{name}” is not a function the language server can show calls for."
+incoming = "Incoming calls"
+outgoing = "Outgoing calls"
+none-in = "Nothing calls {name}."
+none-out = "{name} calls no function."
+recursive = "recursive"
+open-row = "Show its calls"
+close-row = "Hide its calls"
+root-tip = "Click to go to the function"
+row-tip = "Click to go to the call, double-click to go to the function"
+sites = "{count} calls from here — list them"
+sites-title = "Calls from {caller} to {callee}"
 
 [disk]
 title = "Disk"
@@ -1190,6 +1216,7 @@ instrument = "Nose {nose} above the horizon · right wing {bank} down · heading
 
 [desk]
 updates = "Updates"
+server-could-not = "{server} could not answer: {reason}"
 split = "Split editor"
 fold-region = "Fold"
 unfold-region = "Unfold"

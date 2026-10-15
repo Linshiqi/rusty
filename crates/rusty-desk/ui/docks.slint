@@ -18,6 +18,7 @@ import { SearchPanel } from "search.slint";
 import { TerminalPanel } from "terminal.slint";
 import { GitPanel } from "git.slint";
 import { AssistantPanel } from "assistant.slint";
+import { CallsPanel } from "calls.slint";
 
 // The row of a dock's panels. A tab is its icon and, in front, its name.
 component DockHeader inherits Rectangle {
@@ -297,6 +298,26 @@ export component BottomDock inherits Rectangle {
                     Shell.act("run.stop");
                 }
             }
+            // Which way the call hierarchy reads: who calls the function,
+            // or what it calls.
+            if Shell.bottom-front == "calls": IconButton {
+                y: 3px;
+                icon: Icons.calls-in;
+                active: Shell.calls-incoming;
+                tip: @tr("calls.incoming");
+                clicked => {
+                    Shell.calls-direction(true);
+                }
+            }
+            if Shell.bottom-front == "calls": IconButton {
+                y: 3px;
+                icon: Icons.calls-out;
+                active: !Shell.calls-incoming;
+                tip: @tr("calls.outgoing");
+                clicked => {
+                    Shell.calls-direction(false);
+                }
+            }
             if Shell.bottom-front == "output": IconButton {
                 y: 3px;
                 icon: Icons.minus;
@@ -332,6 +353,7 @@ export component BottomDock inherits Rectangle {
             if Shell.bottom-front == "debug": DebugPanel { }
             if Shell.bottom-front == "registers": RegistersPanel { }
             if Shell.bottom-front == "terminal": TerminalPanel { }
+            if Shell.bottom-front == "calls": CallsPanel { }
         }
     }
 }

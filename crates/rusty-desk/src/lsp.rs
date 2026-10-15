@@ -193,8 +193,13 @@ impl Servers {
 
     /// The server told about `path`: the one the language table names for
     /// it, among those running — never the other, which would read a C file
-    /// as broken Rust.
+    /// as broken Rust. A macro's expansion is a document with no file, and
+    /// no server hears of it: this is the one door every message goes
+    /// through.
     fn for_path(&self, path: &str) -> Option<Arc<LspClient>> {
+        if rusty_edit::is_expansion(path) {
+            return None;
+        }
         let server = language::of(path)?.server?;
         let running = self.running.borrow();
         running
@@ -289,6 +294,41 @@ impl Servers {
                 }
             },
         );
+    }
+
+    /// Whether a server running reads `path`, so a question about it is
+    /// answered at all.
+    pub fn serves(&self, path: &str) -> bool {
+        self.for_path(path).is_some()
+    }
+
+    /// [`Self::ask`] for a question something waits on — a panel saying
+    /// "asking" — so that its failure comes back as well as its answer,
+    /// in the client's words. False, and nothing asked, when no server
+    /// reads the file.
+    pub fn ask_always<T: Send + 'static>(
+        &self,
+        path: &str,
+        draft: Option<Draft>,
+        question: impl FnOnce(&LspClient, &str) -> rusty_lsp::Result<T> + Send + 'static,
+        then: impl FnOnce(&Rc<App>, Result<T, String>) + Send + 'static,
+    ) -> bool {
+        let Some(client) = self.for_path(path) else {
+            return false;
+        };
+        let path = path.to_string();
+        work::spawn(
+            move || {
+                if let Some(draft) = &draft {
+                    client
+                        .sync_draft(&path, draft)
+                        .map_err(|error| error.to_string())?;
+                }
+                question(&client, &path).map_err(|error| error.to_string())
+            },
+            then,
+        );
+        true
     }
 
     /// [`Self::ask`] for a question whose failure is news: a rename or a

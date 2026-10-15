@@ -301,11 +301,13 @@ impl Surface {
     }
 
     /// Every open document with its draft to keep, or `None` where its
-    /// text is the disk's and any old backup is to go.
+    /// text is the disk's and any old backup is to go. Not a macro's
+    /// expansion, which has no disk to differ from.
     pub fn backups(&self) -> Vec<(String, Option<backup::Backup>)> {
         self.open
             .borrow()
             .values()
+            .filter(|doc| !rusty_edit::is_expansion(&doc.borrow().path))
             .map(|doc| {
                 let doc = doc.borrow();
                 (doc.path.clone(), backup_of(&doc))
@@ -699,6 +701,12 @@ impl Surface {
             }
         });
         let this = Rc::downgrade(self);
+        code.on_context_menu(move |row, x, y, at_x, at_y| {
+            if let Some(this) = this.upgrade() {
+                this.context_press(row.max(0) as usize, x, y, (at_x, at_y));
+            }
+        });
+        let this = Rc::downgrade(self);
         code.on_pointer(move |kind, row, x, y, modifiers| {
             if let Some(this) = this.upgrade() {
                 let held = (
@@ -1046,22 +1054,46 @@ impl Surface {
 
     // ---- the pointer -----------------------------------------------------
 
-    /// `held` is Shift, Alt and Ctrl (or Cmd).
-    fn pointer(&self, kind: i32, row: usize, x: f32, y: f32, held: (bool, bool, bool)) {
-        let (shift, alt, ctrl) = held;
-        let Some(doc) = self.doc() else { return };
+    /// The line a point of the view is on, and the byte the caret would
+    /// stand at there: `y` from the top of `row`, `x` from the code's left.
+    fn point_at(&self, doc: &Rc<RefCell<Document>>, row: usize, x: f32, y: f32) -> (usize, usize) {
         let row_height = self
             .window
             .upgrade()
             .map_or(19.0, |w| w.global::<Code>().get_row_height());
-        let (line, at) = {
-            let d = doc.borrow();
-            let last = d.rows() as isize - 1;
-            let screen = (row as isize + (y / row_height).floor() as isize).clamp(0, last);
-            let line = d.line_at_row(screen as usize);
-            let col = inlays::column_on(&self.metrics.borrow(), &d, line, x.max(0.0));
-            (line, d.lines.byte(&d.text, line, col))
-        };
+        let d = doc.borrow();
+        let last = d.rows() as isize - 1;
+        let screen = (row as isize + (y / row_height).floor() as isize).clamp(0, last);
+        let line = d.line_at_row(screen as usize);
+        let col = inlays::column_on(&self.metrics.borrow(), &d, line, x.max(0.0));
+        (line, d.lines.byte(&d.text, line, col))
+    }
+
+    /// A right-click: the caret to the point first, unless it is inside a
+    /// selection, as VS Code does — so what the menu offers is about what
+    /// was clicked — and the menu at `at` in the window.
+    fn context_press(&self, row: usize, x: f32, y: f32, at: (f32, f32)) {
+        let Some(doc) = self.doc() else { return };
+        self.hide_hover();
+        self.close_completion();
+        self.close_signature();
+        let (_, point) = self.point_at(&doc, row, x, y);
+        let selected = doc
+            .borrow()
+            .cursors
+            .iter()
+            .any(|c| c.start() < c.end() && c.start() <= point && point <= c.end());
+        if !selected {
+            self.set_cursors(vec![Cursor::caret(point)]);
+        }
+        crate::work::app().editor_menu(at.0, at.1);
+    }
+
+    /// `held` is Shift, Alt and Ctrl (or Cmd).
+    fn pointer(&self, kind: i32, row: usize, x: f32, y: f32, held: (bool, bool, bool)) {
+        let (shift, alt, ctrl) = held;
+        let Some(doc) = self.doc() else { return };
+        let (line, at) = self.point_at(&doc, row, x, y);
         if kind == 0 {
             self.hide_hover();
             self.close_completion();
@@ -1439,7 +1471,13 @@ impl Surface {
             return;
         }
         let files = self.files.clone();
-        let asked = path.clone();
+        // The grammar is read off the name; a macro's expansion is named
+        // after its macro, and what rust-analyzer expands it to is Rust.
+        let asked = if rusty_edit::is_expansion(&path) {
+            format!("{path}.rs")
+        } else {
+            path.clone()
+        };
         work::spawn(
             move || files.repaint(&asked, &text, base, stale),
             move |app, repaint| app.editor().painted(&path, version, repaint),
@@ -1502,7 +1540,7 @@ fn applied(text: &str, edit: pairs::Edit, kind: Kind) -> (String, Vec<Cursor>, K
 }
 
 fn backup_of(doc: &Document) -> Option<backup::Backup> {
-    doc.dirty().then(|| backup::Backup {
+    (doc.dirty() && !rusty_edit::is_expansion(&doc.path)).then(|| backup::Backup {
         path: doc.path.clone(),
         text: doc.text.clone(),
         charset: doc.charset,

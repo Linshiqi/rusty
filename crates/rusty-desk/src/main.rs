@@ -6,6 +6,7 @@
 
 mod actions;
 mod app;
+mod calls;
 mod catalogue;
 mod docks;
 mod editor;

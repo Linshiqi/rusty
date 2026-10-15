@@ -480,14 +480,24 @@ export component ContextMenu inherits Rectangle {
                     height: 1px;
                     background: Theme.line;
                 }
-                if item.id != "": Text {
-                    x: 10px;
-                    width: parent.width - 20px;
-                    text: item.label;
-                    color: item.danger ? Theme.crimson : Theme.label;
-                    font-size: Theme.small;
-                    vertical-alignment: center;
-                    overflow: elide;
+                if item.id != "": HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 24px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: item.label;
+                        color: item.danger ? Theme.crimson : Theme.label;
+                        font-size: Theme.small;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if item.chord != "": Text {
+                        text: item.chord;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
                 }
                 touch := TouchArea {
                     enabled: item.id != "";
