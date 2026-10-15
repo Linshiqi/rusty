@@ -91,6 +91,7 @@ impl App {
     /// Open files the disk moved under, nobody having edited them, take
     /// what the disk has now.
     pub(super) fn follow_changed(self: &Rc<Self>, changed: Vec<String>) {
+        self.pictures_changed(&changed);
         let Some(root) = self.root() else { return };
         let open: Vec<(String, String)> = changed
             .into_iter()

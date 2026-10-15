@@ -820,6 +820,16 @@ show-preview = "Show the rendered page"
 # machine, a picture still on its way or not on disk, markup that is not run.
 image-remote = "Not fetched: a remote image would tell its host that you opened this file"
 image-failed = "{path} could not be shown: {error}"
+image-no-project = "Not shown: a page's pictures are read from the open project, and no project is open"
+formula-refused = "This formula could not be drawn: {reason}"
+withheld = "<{tag}> is not run: a page shows what it holds and runs nothing"
+
+[picture]
+# A picture file opened from the tree, or an SVG's picture over its source.
+info = "{width} × {height} px · {size}"
+size = "{width} × {height} px"
+failed = "This picture could not be shown: {reason}"
+reading = "Reading the picture…"
 
 [places]
 # The finder's title over a list of places the language server named.

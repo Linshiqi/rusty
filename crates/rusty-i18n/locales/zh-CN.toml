@@ -777,6 +777,15 @@ show-source = "查看源码"
 show-preview = "查看渲染后的页面"
 image-remote = "未加载：远程图片会让它的服务器知道你打开了这个文件"
 image-failed = "无法显示 {path}：{error}"
+image-no-project = "未显示：页面中的图片从打开的项目中读取，当前没有打开项目"
+formula-refused = "无法绘制这个公式：{reason}"
+withheld = "<{tag}> 不会运行：页面只显示内容，不运行任何东西"
+
+[picture]
+info = "{width} × {height} 像素 · {size}"
+size = "{width} × {height} 像素"
+failed = "无法显示这张图片：{reason}"
+reading = "正在读取图片…"
 
 [places]
 references = "{name} 的引用"

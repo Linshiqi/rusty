@@ -228,6 +228,7 @@ pub(super) fn strip_hints(tabs: &[Tab]) -> Vec<String> {
         .iter()
         .filter_map(|tab| match tab {
             Tab::File(path) if !rusty_edit::is_expansion(path) => Some(path.clone()),
+            Tab::Picture(path) => Some(path.clone()),
             _ => None,
         })
         .collect();
@@ -238,6 +239,7 @@ pub(super) fn strip_hints(tabs: &[Tab]) -> Vec<String> {
                 Some((called, _)) => called.rsplit('/').next().unwrap_or(called).to_string(),
                 None => hints.next().unwrap_or_default(),
             },
+            Tab::Picture(_) => hints.next().unwrap_or_default(),
             Tab::Page(_) => String::new(),
         })
         .collect()

@@ -297,9 +297,34 @@ export struct CodeLine {
     spans: [CodeSpan],
 }
 
+// A piece of a line of a paragraph that holds a formula, placed by Rust
+// (`src/markdown/flow.rs`) from the line's top left: 0 text that does not
+// wrap, 1 a formula's picture, 2 a formula's source standing in for it with
+// the reason in `tip`.
+export struct MdPiece {
+    kind: int,
+    text: styled-text,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    image: image,
+    tip: string,
+}
+
+export struct MdLine {
+    height: length,
+    pieces: [MdPiece],
+}
+
+// A cell: its text, or its lines when it holds a formula (`key` names it
+// when its width is reported back).
 export struct MdCell {
     text: styled-text,
     header: bool,
+    flowing: bool,
+    flow: [MdLine],
+    key: int,
 }
 
 export struct MdRow {
@@ -308,7 +333,7 @@ export struct MdRow {
 
 // A block: 0 text (a paragraph, or a list item with its marker and depth),
 // 1 a heading of `level`, 2 code (`marker` its language), 3 a rule, 4 a
-// table.
+// table, 5 a picture, 6 a formula set apart, 7 markup not run (`marker`).
 export struct MdBlock {
     kind: int,
     text: styled-text,
@@ -319,8 +344,21 @@ export struct MdBlock {
     lines: [CodeLine],
     rows: [MdRow],
     // A picture (kind 5), when it could be read; `marker` says what it is.
+    // A formula set apart (kind 6) likewise, `mw` and `mh` its size in ems
+    // of the text; and `tip` why either is not shown.
     image: image,
     shown: bool,
+    tip: string,
+    mw: float,
+    mh: float,
+    // A figure's picture is centred, and its caption under it.
+    figure: bool,
+    caption: bool,
+    // A paragraph or heading that holds a formula: its lines, laid out by
+    // Rust for the width reported back under `key`.
+    flowing: bool,
+    flow: [MdLine],
+    key: int,
 }
 
 // A row of the math sheet: its field, its colour in the view, what it came
@@ -980,6 +1018,19 @@ export global Shell {
     in property <bool> md-file;
     in property <bool> md-page;
     in property <[MdBlock]> md-blocks;
+    // A paragraph with a formula, laid out for the width and text size it
+    // reports here — as it appears and whenever either changes.
+    callback md-flow-width(int, length, length);
+    // A picture: a picture file opened from the tree, or an SVG's picture
+    // over its source (`picture-page`). Not shown, `picture-note` says why.
+    in property <bool> picture-page;
+    in property <image> picture;
+    in property <bool> picture-shown;
+    in property <string> picture-note;
+    in property <string> picture-info;
+    // The ground under a picture, so transparency reads, in either theme.
+    in property <image> picture-checker;
+    in property <image> picture-checker-dark;
 
     // The assistant.
     in property <bool> ai-ready;

@@ -44,6 +44,7 @@ mod memory;
 mod menu;
 mod navigate;
 mod part;
+mod pictures;
 mod playground;
 mod plot;
 mod registers;
@@ -82,6 +83,9 @@ use crate::{
 pub enum Tab {
     File(String),
     Page(&'static str),
+    /// A picture file of the project, drawn: never a document, so never
+    /// text in the editor and never a language server's.
+    Picture(String),
 }
 
 impl Tab {
@@ -89,12 +93,15 @@ impl Tab {
         match self {
             Tab::File(path) => format!("file:{path}"),
             Tab::Page(kind) => format!("page:{kind}"),
+            Tab::Picture(path) => format!("picture:{path}"),
         }
     }
 
     fn title(&self) -> String {
         match self {
-            Tab::File(path) => path.rsplit('/').next().unwrap_or(path).to_string(),
+            Tab::File(path) | Tab::Picture(path) => {
+                path.rsplit('/').next().unwrap_or(path).to_string()
+            }
             Tab::Page("welcome") => t!("desk.welcome"),
             Tab::Page("settings") => t!("desk.settings"),
             Tab::Page("environment") => rusty_i18n::lookup("panel.toolchain"),
@@ -112,6 +119,7 @@ impl Tab {
         match self {
             Tab::File(_) => "file",
             Tab::Page(kind) => kind,
+            Tab::Picture(_) => "picture",
         }
     }
 }
@@ -185,8 +193,14 @@ struct State {
     crates: crates::Crates,
     assistant: assistant::Assistant,
     math: math::Math,
-    /// Markdown files shown as their source rather than as a page.
+    /// Markdown files (and SVGs) shown as their source rather than as a
+    /// page.
     markdown_source: HashSet<String>,
+    /// The Markdown page in front: what it was read as, its formulas and
+    /// the widths its paragraphs were laid out for.
+    page: markdown_view::Page,
+    /// Picture files read, for the picture page and the pages naming them.
+    pictures: pictures::Pictures,
     watching: watch::Watching,
     testing: testing::Testing,
     term: terminal::Term,
@@ -281,6 +295,7 @@ impl App {
             }),
         });
         app.wire(window);
+        app.picture_ground();
         app.editor.set_view(saved.editor);
         app.editor.set_vim(saved.vim);
         app.sync_all();
@@ -498,6 +513,8 @@ impl App {
         on!(on_ai_preset, |app, index| app.ai_preset(index));
         on!(on_ai_pick_model, |app, model| app.ai_pick_model(&model));
         on!(on_open_link, |_app, link| markdown_view::open_link(&link));
+        on!(on_md_flow_width, |app, key, width, size| app
+            .md_flow_width(key, width, size));
         on!(on_math_select, |app, index| app.math_select(index));
         on!(on_clone_edited, |app| app.clone_edited());
         on!(on_math_toggle, |app, index| app.math_toggle(index));
@@ -911,6 +928,12 @@ impl App {
     /// Open a file and put the caret at a line and column, counted from
     /// zero, when one is given.
     pub fn open_file_at(self: &Rc<Self>, path: String, at: Option<(usize, usize)>) {
+        // A picture is drawn, not read as text; an SVG is both, and opens
+        // as text with its picture over it.
+        if crate::picture::is_picture(&path) && !crate::picture::is_svg(&path) {
+            self.open_picture(path);
+            return;
+        }
         let go = move |app: &Rc<App>| {
             if let Some((line, col)) = at {
                 app.editor.go_to(line + 1, Some(col + 1));
@@ -1182,6 +1205,7 @@ impl App {
         self.sync_tree();
         self.sync_status();
         self.sync_markdown();
+        self.sync_picture();
         if let Some(window) = self.window()
             && !matches!(self.active_tab(), Some(Tab::File(_)))
         {

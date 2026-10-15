@@ -44,7 +44,10 @@
 //! and photographs a name's occurrences washed, then writes a struct
 //! literal missing two fields, opens the hover card on it, photographs the
 //! fixes the card lists, applies one by its click and prints the lines it
-//! wrote — on a copy, since it ends by keeping the draft.
+//! wrote — on a copy, since it ends by keeping the draft. With
+//! `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
+//! page's formulas and figures in both themes, the pictures beside it as
+//! pages of their own, and the book's symbol table (`book` below).
 
 use std::{
     cell::{Cell, RefCell},
@@ -115,6 +118,8 @@ pub fn start(window: &AppWindow) {
     let navigating = std::env::var_os("RUSTY_PROBE_NAV").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
+    let reading_book = std::env::var_os("RUSTY_PROBE_BOOK").is_some();
+    let chapter: Rc<RefCell<String>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -291,6 +296,12 @@ pub fn start(window: &AppWindow) {
                 if marking {
                     step.set(3000);
                 }
+                if reading_book {
+                    step.set(5200);
+                }
+            }
+            n if reading_book && (5200..5400).contains(&n) => {
+                book(n, &window, &app, &dir, &step, &waited, &chapter);
             }
             500 if sim => app.act("run.run"),
             // A breakpoint beside the line that toggles the LED, then F5: the
@@ -2332,6 +2343,235 @@ pub fn start(window: &AppWindow) {
         }
     });
     std::mem::forget(timer);
+}
+
+/// `RUSTY_PROBE_BOOK`, on a chapter of a book (a copy: it ends by keeping
+/// a draft of an SVG it edits): the page with its formulas and figures,
+/// photographed at four places down it in the light theme and again in the
+/// dark; then the pictures beside it, by the names the flight-control book
+/// gives them — `figures/fig-16-e1mini.png` opened from the tree, fitted
+/// and then zoomed by the wheel, `figures/fig-04-phone-euler.svg` drawn over
+/// its source, its source, and its picture again after an edit nobody
+/// saved, and `figures/broken.png` when the copy has one — and last the
+/// book's symbol table (`G-symbols.md`), whose cells hold formulas. What
+/// the page counted, and what it says in place of what it will not draw, is
+/// printed at each stop.
+fn book(
+    n: u32,
+    window: &AppWindow,
+    app: &Rc<crate::app::App>,
+    dir: &Path,
+    step: &Cell<u32>,
+    waited: &Cell<u32>,
+    chapter: &RefCell<String>,
+) {
+    let shell = window.global::<Shell>();
+    let scroll = |by: f32| {
+        let size = window
+            .window()
+            .size()
+            .to_logical(window.window().scale_factor());
+        window.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(size.width * 0.62, size.height * 0.5),
+        });
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(size.width * 0.62, size.height * 0.5),
+                delta_x: 0.0,
+                delta_y: by,
+            });
+    };
+    // Wait, at most a minute, until what the page asked for has arrived.
+    let settle = |what: &str| {
+        if !app.page_settled() && waited.get() < 1500 {
+            waited.set(waited.get() + 1);
+            step.set(n);
+            return false;
+        }
+        eprintln!("book: {what}: {}", app.page_report());
+        waited.set(0);
+        true
+    };
+    let folder = || {
+        chapter
+            .borrow()
+            .rsplit_once('/')
+            .map(|(dir, _)| format!("{dir}/"))
+            .unwrap_or_default()
+    };
+    let picture_ready = |what: &str| {
+        let note = shell.get_picture_note();
+        let reading = note.is_empty() || note.as_str() == rusty_i18n::t!("picture.reading");
+        if !shell.get_picture_shown() && reading && waited.get() < 500 {
+            waited.set(waited.get() + 1);
+            step.set(n);
+            return;
+        }
+        waited.set(0);
+        eprintln!(
+            "book: {what}: shown {} note {:?} info {:?}",
+            shell.get_picture_shown(),
+            shell.get_picture_note(),
+            shell.get_picture_info()
+        );
+    };
+    let photo = |name: &str| snapshot(window, &dir.join(name));
+    match n {
+        5200 => {
+            // The chapter the command line named is read off the UI thread.
+            if (shell.get_active_kind() != "file" || !shell.get_md_page()) && waited.get() < 1500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            *chapter.borrow_mut() = app.editor().current_path().unwrap_or_default();
+            shell.set_theme_choice("light".into());
+        }
+        5201 => {
+            settle("the chapter");
+        }
+        5205 => {
+            // What the page says in place of what it will not draw.
+            for block in shell.get_md_blocks().iter() {
+                for line in block.flow.iter() {
+                    for piece in line.pieces.iter().filter(|p| p.kind == 2) {
+                        eprintln!("book: a formula as its source, tip {:?}", piece.tip);
+                    }
+                }
+                match block.kind {
+                    5 | 6 if !block.shown => {
+                        eprintln!(
+                            "book: block {} not shown: {:?} tip {:?}",
+                            block.kind, block.marker, block.tip
+                        )
+                    }
+                    7 => eprintln!("book: withheld: {:?}", block.marker),
+                    _ => {}
+                }
+            }
+            photo("book-light-1.png");
+        }
+        5206 | 5211 | 5216 | 5226 | 5231 | 5236 => scroll(-1100.0),
+        5210 => photo("book-light-2.png"),
+        5215 => photo("book-light-3.png"),
+        5220 => photo("book-light-4.png"),
+        5221 => {
+            shell.set_theme_choice("dark".into());
+            scroll(100_000.0);
+        }
+        5225 => photo("book-dark-1.png"),
+        5230 => photo("book-dark-2.png"),
+        5235 => photo("book-dark-3.png"),
+        5240 => photo("book-dark-4.png"),
+        5245 => app.open_file(format!("{}figures/fig-16-e1mini.png", folder())),
+        5246 => picture_ready("a PNG"),
+        5250 => photo("picture-png-dark.png"),
+        5251 => shell.set_theme_choice("light".into()),
+        5254 => photo("picture-png-light.png"),
+        5255..=5257 => scroll(120.0),
+        5260 => photo("picture-png-zoomed.png"),
+        5261 => app.open_file(format!("{}figures/fig-04-phone-euler.svg", folder())),
+        5262 => {
+            if shell.get_active_kind() != "file" && waited.get() < 500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            eprintln!(
+                "book: an SVG: page {} picture {} shown {} info {:?}",
+                shell.get_md_page(),
+                shell.get_picture_page(),
+                shell.get_picture_shown(),
+                shell.get_picture_info()
+            );
+        }
+        5266 => photo("svg-page.png"),
+        5267 => app.act("markdown.toggle"),
+        5270 => photo("svg-source.png"),
+        5271 => {
+            // An edit nobody saves: a red disc over the figure's middle.
+            let editor = app.editor();
+            if let Some(path) = editor.current_path()
+                && let Some((text, ..)) = editor.draft_of(&path)
+            {
+                let version = editor.version_of(&path).unwrap_or(0);
+                let edited = text.replacen(
+                    "</svg>",
+                    "<circle cx=\"50%\" cy=\"50%\" r=\"60\" fill=\"#e5484d\" opacity=\"0.8\"/></svg>",
+                    1,
+                );
+                editor.replace(&path, version, edited);
+            }
+            app.act("markdown.toggle");
+        }
+        5275 => {
+            eprintln!(
+                "book: the SVG after an unsaved edit: shown {}",
+                shell.get_picture_shown()
+            );
+            photo("svg-edited.png");
+        }
+        5276 => app.open_file(format!("{}figures/broken.png", folder())),
+        5277 => picture_ready("a broken PNG"),
+        5280 => {
+            photo("picture-broken.png");
+            // The file mended on disk, as another program would: a picture
+            // half transparent, so the ground shows through. The watcher
+            // brings it in.
+            if let Some(root) = app.root_path() {
+                let path = root.join(format!("{}figures/broken.png", folder()));
+                let mended = image::RgbaImage::from_fn(240, 160, |x, y| {
+                    image::Rgba([
+                        (x * 255 / 240) as u8,
+                        90,
+                        (y * 255 / 160) as u8,
+                        (x * 255 / 240) as u8,
+                    ])
+                });
+                if let Err(e) = mended.save(&path) {
+                    eprintln!("book: could not mend {}: {e}", path.display());
+                }
+            }
+        }
+        5281 => {
+            if !shell.get_picture_shown() && waited.get() < 500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            eprintln!(
+                "book: the PNG mended on disk: shown {} info {:?}",
+                shell.get_picture_shown(),
+                shell.get_picture_info()
+            );
+        }
+        5282 => photo("picture-mended.png"),
+        5283 => app.open_file(format!("{}G-symbols.md", folder())),
+        5285 => {
+            // Read off the UI thread: the table is in front once its tab is.
+            let opened = app
+                .editor()
+                .current_path()
+                .is_some_and(|path| path.ends_with("G-symbols.md"));
+            if !opened && waited.get() < 1500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            settle("the symbol table");
+        }
+        5290 => photo("symbols-light.png"),
+        5291 => shell.set_theme_choice("dark".into()),
+        5294 => photo("symbols-dark.png"),
+        5295 => scroll(-2500.0),
+        5299 => photo("symbols-dark-2.png"),
+        5300 => app.act("app.exit"),
+        _ => {}
+    }
 }
 
 /// The marks of `kind` on the code view's rows: each row's line number and
