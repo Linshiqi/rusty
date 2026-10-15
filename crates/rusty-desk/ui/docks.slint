@@ -59,6 +59,13 @@ component DockHeader inherits Rectangle {
                 clicked => {
                     Shell.show-panel(root.dock, panel.id);
                 }
+                // The strip's menu: this panel taken off it, or one taken
+                // off put back.
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                        Shell.surface-menu("dock", root.dock + ":" + panel.id, -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    }
+                }
             }
         }
     }
@@ -344,6 +351,14 @@ component OutputPanel inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
     }
+    // A right-click where no line is.
+    TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                Shell.surface-menu("output", "", -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+    }
     list := ListView {
         y: 0;
         height: Shell.output-input ? parent.height - 40px : parent.height;
@@ -352,7 +367,7 @@ component OutputPanel inherits Rectangle {
         }
         for line[index] in Shell.output: Rectangle {
             height: 18px;
-            background: link.has-hover ? Theme.hover : transparent;
+            background: link.has-hover && line.path != "" ? Theme.hover : transparent;
             Text {
                 x: 10px;
                 text: line.text;
@@ -362,12 +377,18 @@ component OutputPanel inherits Rectangle {
                 font-size: Theme.small;
                 vertical-alignment: center;
             }
-            // A line that names a place goes there.
+            // A line that names a place goes there; any line has the menu.
             link := TouchArea {
-                enabled: line.path != "";
                 mouse-cursor: line.path != "" ? pointer : default;
                 clicked => {
-                    Shell.output-click(index);
+                    if (line.path != "") {
+                        Shell.output-click(index);
+                    }
+                }
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                        Shell.surface-menu("output", "", index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    }
                 }
             }
         }
@@ -397,10 +418,20 @@ component ProblemsPanel inherits Rectangle {
         vertical-alignment: center;
     }
     ListView {
-        for row[index] in Shell.problems: RowButton {
+        for row[index] in Shell.problems: Rectangle {
             height: 24px;
-            clicked => {
-                Shell.problem-click(index);
+            border-radius: 5px;
+            background: problem-touch.has-hover ? Theme.hover : transparent;
+            // A click goes to the problem; the right button has its menu.
+            problem-touch := TouchArea {
+                clicked => {
+                    Shell.problem-click(index);
+                }
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                        Shell.surface-menu("problems", "", index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    }
+                }
             }
             HorizontalLayout {
                 padding-left: row.kind == 0 ? 10px : 30px;

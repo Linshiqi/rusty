@@ -31,6 +31,21 @@ export component AppWindow inherits Window {
     // What the editor measures its characters with (`src/editor/metrics.rs`).
     in property <string> probe-text;
     out property <length> probe-width: probe.preferred-width;
+    // The size the window is laid out at, for the probe's pointer: the
+    // system's own size is in pixels of a scale the layout may not share.
+    out property <length> laid-width: root.width;
+    out property <length> laid-height: root.height;
+
+    // The window took a new size: made on its display, resized, or moved
+    // to a display of another scale. Its zoom is worked out again against
+    // the display's factor, which arrives this way (`zoom::apply`).
+    callback resized();
+    changed width => {
+        root.resized();
+    }
+    changed height => {
+        root.resized();
+    }
 
     public function focus-code() {
         area.focus-code();
