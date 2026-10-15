@@ -63,6 +63,15 @@ impl Project {
         })
     }
 
+    /// The tree read again after the window changed it: the finder's
+    /// files with it, the open folders as they were.
+    pub fn set_entries(&mut self, entries: Vec<Entry>) {
+        let mut files = Vec::new();
+        collect_files(&entries, &mut files);
+        self.entries = entries;
+        self.files = files;
+    }
+
     /// The rows shown: every entry whose folders are all open.
     pub fn rows(&self) -> Vec<ShownRow> {
         let mut rows = Vec::new();
