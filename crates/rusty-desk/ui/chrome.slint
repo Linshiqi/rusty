@@ -149,6 +149,24 @@ export component StatusBar inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
         }
+        // An update downloading, and then waiting for the restart that
+        // installs it.
+        if Shell.update-state == 4: Item {
+            icon: Icons.pull;
+            text: Shell.update-progress < 0 ? "" : round(Shell.update-progress * 100) + "%";
+            tip: Shell.update-detail;
+            clicked => {
+                Shell.act("settings.open");
+            }
+        }
+        if Shell.update-state == 5: Item {
+            icon: Icons.refresh;
+            tint: Theme.rust;
+            tip: Shell.update-title + " — " + Shell.update-detail;
+            clicked => {
+                Shell.act("update.restart");
+            }
+        }
         if Shell.vim-mode != "": Item {
             text: Shell.vim-hint == "" ? Shell.vim-mode : Shell.vim-mode + "  " + Shell.vim-hint;
             tip: @tr("status.vim-hint");

@@ -52,6 +52,7 @@ mod sheet;
 mod sim;
 mod terminal;
 mod testing;
+mod updating;
 mod watch;
 mod waves;
 mod wizard;
@@ -137,6 +138,8 @@ struct State {
     view: rusty_embed::EditorView,
     /// Vim's keys in the editor.
     vim: bool,
+    /// Where updating rusty itself stands.
+    update: updating::Stage,
     /// Split: the other editor group's tabs and its front one — `tabs` and
     /// `active` are always the group with the keys — and which side that
     /// group is on, 0 left and 1 right.
@@ -269,6 +272,7 @@ impl App {
         app.editor.set_view(saved.editor);
         app.editor.set_vim(saved.vim);
         app.sync_all();
+        app.update_soon();
         app
     }
 
@@ -657,6 +661,11 @@ impl App {
             "editor.fold-all" => self.editor.fold_all(true),
             "editor.unfold-all" => self.editor.fold_all(false),
             "editor.split" => self.split(),
+            "update.check" => self.update_check(true),
+            "update.download" => self.update_download(),
+            "update.restart" => self.update_restart(),
+            "update.skip" => self.update_skip(),
+            "update.releases" => markdown_view::open_link(rusty_embed::model::REPO_RELEASES),
             "editor.vim" => {
                 let on = !self.state.borrow().vim;
                 self.set_vim(on);
@@ -1549,6 +1558,7 @@ impl App {
         self.sync_status();
         self.sync_notes();
         self.sync_settings();
+        self.sync_update();
     }
 
     fn sync_project(&self) {

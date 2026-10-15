@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fetch the tools the installer ships beside the app into
-# crates/rusty-app/bundled/, where `cargo tauri build` packages them as
-# resources. The release workflow runs this before every build; run it once
-# locally and `cargo tauri dev` uses them too.
+# Fetch the tools the installer ships beside the app into target/bundled/
+# (or $RUSTY_BUNDLE_DEST), which the release workflow copies into every
+# installer as `bundled/` beside the executable. Run it once locally and the
+# window finds them there too (`bundled_dir` in rusty-desk's main.rs).
 #
 # **What this is for.** A fresh install used to be a workbench that could not
 # simulate, debug or flash until the user had found and fetched four things.
@@ -51,7 +51,7 @@ espflash_version=v4.0.1
 codelldb_version=v1.12.3
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-dest="$root/crates/rusty-app/bundled"
+dest="${RUSTY_BUNDLE_DEST:-$root/target/bundled}"
 mkdir -p "$dest"
 
 # Windows' own tar, by absolute path: a bare `tar` there is usually Git's GNU

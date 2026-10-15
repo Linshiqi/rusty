@@ -76,6 +76,7 @@ pub const ALL: &[Action] = &[
     action("editor.fold-all", "context.editor-fold-all", None),
     action("editor.vim", "menu.view.vim", None),
     action("editor.split", "desk.split", Some("Ctrl+\\")),
+    action("update.check", "menu.help.check-updates", None),
     action("editor.unfold-all", "context.editor-unfold-all", None),
     action("nav.back", "menu.view.back", Some("Alt+ArrowLeft")),
     action("nav.forward", "menu.view.forward", Some("Alt+ArrowRight")),
@@ -147,6 +148,31 @@ pub const ALL: &[Action] = &[
     Action {
         id: "git.branches",
         title: "panel.git",
+        chord: None,
+        listed: false,
+    },
+    // An update's steps, reached from Settings, a note and the status bar.
+    Action {
+        id: "update.download",
+        title: "update.download",
+        chord: None,
+        listed: false,
+    },
+    Action {
+        id: "update.restart",
+        title: "update.restart",
+        chord: None,
+        listed: false,
+    },
+    Action {
+        id: "update.skip",
+        title: "update.skip",
+        chord: None,
+        listed: false,
+    },
+    Action {
+        id: "update.releases",
+        title: "update.releases",
         chord: None,
         listed: false,
     },

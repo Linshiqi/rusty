@@ -440,6 +440,80 @@ component SettingsPage inherits Rectangle {
                 }
             }
             Group {
+                title: @tr("desk.updates");
+                Setting {
+                    label: "rusty " + Shell.update-version;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        if Shell.update-state == 3 || Shell.update-state == 7: Button {
+                            text: @tr("update.skip");
+                            clicked => {
+                                Shell.act("update.skip");
+                            }
+                        }
+                        if Shell.update-state == 3 || Shell.update-state == 7: Button {
+                            text: @tr("update.download");
+                            clicked => {
+                                Shell.act("update.download");
+                            }
+                        }
+                        if Shell.update-state == 5: Button {
+                            text: @tr("update.restart");
+                            clicked => {
+                                Shell.act("update.restart");
+                            }
+                        }
+                        if Shell.update-state == 0 || Shell.update-state == 2 || Shell.update-state == 6: Button {
+                            text: @tr("menu.help.check-updates");
+                            clicked => {
+                                Shell.act("update.check");
+                            }
+                        }
+                    }
+                }
+                if Shell.update-state != 0: VerticalLayout {
+                    padding: 14px;
+                    padding-top: 4px;
+                    spacing: 6px;
+                    Text {
+                        text: Shell.update-title;
+                        color: Theme.label;
+                        font-size: Theme.body;
+                        font-weight: 600;
+                    }
+                    Text {
+                        text: Shell.update-detail;
+                        color: Theme.label-2;
+                        font-size: Theme.small;
+                        wrap: word-wrap;
+                    }
+                    if Shell.update-state == 4: Rectangle {
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Theme.sunken;
+                        Rectangle {
+                            x: 0;
+                            width: Shell.update-progress < 0 ? parent.width : parent.width * Shell.update-progress;
+                            border-radius: 2px;
+                            background: Theme.rust;
+                        }
+                    }
+                    if Shell.update-notes.length > 0: MarkdownView {
+                        blocks: Shell.update-notes;
+                        font-size: Theme.small;
+                    }
+                    if Shell.update-state >= 3: HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: @tr("update.releases");
+                            clicked => {
+                                Shell.act("update.releases");
+                            }
+                        }
+                    }
+                }
+            }
+            Group {
                 title: @tr("panel.assistant");
                 VerticalLayout {
                     padding: 14px;

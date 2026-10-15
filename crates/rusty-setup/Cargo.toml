@@ -1,0 +1,40 @@
+[package]
+name = "rusty-setup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "rusty's installer and uninstaller for Windows"
+publish = false
+
+[[bin]]
+name = "rusty-setup"
+path = "src/main.rs"
+
+[dependencies]
+# The payload is a zip, deflated: the one format with a reader in every
+# toolbox and a writer in this one.
+zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
+# zip names flate2 without a backend; its own default, miniz in Rust, is the one.
+flate2 = "1.1.9"
+# The repository's address for the uninstall entry, from the one place it
+# is written.
+rusty-embed = { path = "../rusty-embed", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55.0"
+rfd = "0.16.0"
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+
+[build-dependencies]
+embed-resource = "3.0.11"
+
+[lints]
+workspace = true

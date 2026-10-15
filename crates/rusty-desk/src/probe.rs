@@ -97,6 +97,7 @@ pub fn start(window: &AppWindow) {
     let hinting = std::env::var_os("RUSTY_PROBE_HINTS").is_some();
     let modal = std::env::var_os("RUSTY_PROBE_VIM").is_some();
     let splitting = std::env::var_os("RUSTY_PROBE_SPLIT").is_some();
+    let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -245,6 +246,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if splitting {
                     step.set(2700);
+                }
+                if updating {
+                    step.set(2800);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -1030,6 +1034,39 @@ pub fn start(window: &AppWindow) {
                 );
                 app.act("app.exit");
             }
+            // Check for updates by hand, download what the feed offers, and
+            // stop at the restart: what Settings says at each step.
+            2800 if updating => app.act("update.check"),
+            2801 if updating => {
+                if shell.get_update_state() == 1 {
+                    step.set(2801);
+                    return;
+                }
+                eprintln!(
+                    "update: checked: state {} {:?} — {:?}",
+                    shell.get_update_state(),
+                    shell.get_update_title(),
+                    shell.get_update_detail()
+                );
+                if shell.get_update_state() == 3 {
+                    app.act("update.download");
+                }
+            }
+            2802 if updating => {
+                let state = shell.get_update_state();
+                if state == 4 {
+                    step.set(2802);
+                    return;
+                }
+                eprintln!(
+                    "update: downloaded: state {state} {:?} — {:?}; {} blocks of notes",
+                    shell.get_update_title(),
+                    shell.get_update_detail(),
+                    shell.get_update_notes().row_count()
+                );
+                snapshot(&window, &dir.join("update.png"));
+                app.act("app.exit");
+            }
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -1618,7 +1655,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || updating) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

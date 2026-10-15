@@ -1963,6 +1963,7 @@ yaw = "Yaw"
 instrument = "Nose {nose} above the horizon · right wing {bank} down · heading {heading}"
 
 [desk]
+updates = "Updates"
 split = "Split editor"
 fold-region = "Fold"
 unfold-region = "Unfold"
