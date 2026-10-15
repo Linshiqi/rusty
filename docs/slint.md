@@ -544,6 +544,21 @@ tests green, and CLAUDE.md saying how it works.
    where its view was scrolled, so a tab comes back where it was left. The
    probe splits `lib.rs`, opens `Cargo.toml` on the right and types there,
    presses in the left view to move the keys, and types there.
+
+   A tab in a window of its own, VS Code's Move into New Window: from the
+   palette or by letting a tab go beyond the main window's edge. A second
+   Slint window (`TornWindow`) with the same code view, and a second
+   surface driving it (`Surface::beside`) over the same documents — Slint
+   gives each window its own `Code`, so the editor's Rust half only had to
+   stop assuming which window it draws into (`editor/host.rs`), and an
+   answer from another thread names the surface that asked rather than
+   reaching for "the editor". One file open in both windows is one document
+   under the split's rule; what is about the file happens in its window,
+   what is about the project in the main window, which comes forward. The
+   probe's `RUSTY_PROBE_TORN` moves the file into a window of its own,
+   types there, opens it in the main window too and types there, undoes
+   from the other window, saves and closes it, then drags `Cargo.toml` out
+   and moves it back.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
@@ -585,7 +600,8 @@ tests green, and CLAUDE.md saying how it works.
    project, opens the last one (`strip.rs`). What the Tauri window had and
    this one did not, as v0.7.0's notes say: the call hierarchy, macro
    expansion, the finder's `@` and `#`, New window, a file or a commit in a
-   window of its own, and a choice of the terminal's shell.
+   window of its own, and a choice of the terminal's shell — a file in a
+   window of its own has since come back (below).
 
    Since then, navigation by what the code means: Go to type definition
    beside references and implementations in the picker; Expand macro

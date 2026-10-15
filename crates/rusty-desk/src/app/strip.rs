@@ -66,8 +66,9 @@ impl Back {
 
 impl App {
     /// The strip as `workbench.toml` keeps it: files only, the left group
-    /// first, whichever has the keys. A macro's expansion is no file, and
-    /// there would be nothing to put back.
+    /// first, whichever has the keys, and the files in windows of their own
+    /// after the left group's. A macro's expansion is no file, and there
+    /// would be nothing to put back.
     fn strip_now(&self) -> Option<ProjectTabs> {
         let state = self.state.borrow();
         let project = state.project.as_ref()?;
@@ -89,9 +90,16 @@ impl App {
             (&state.other, state.other_active, &state.tabs, state.active)
         };
         let split = state.split;
+        // A file in a window of its own comes back in the main window's.
+        let mut tabs = files(left);
+        for path in self.torn_paths() {
+            if !tabs.contains(&path) {
+                tabs.push(path);
+            }
+        }
         Some(ProjectTabs {
             root: project.root.to_string_lossy().into_owned(),
-            tabs: files(left),
+            tabs,
             active: front(left, left_at),
             second: if split { files(right) } else { Vec::new() },
             second_active: if split { front(right, right_at) } else { None },

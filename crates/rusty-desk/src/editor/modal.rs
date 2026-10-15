@@ -28,7 +28,6 @@ use rusty_edit::vim::{self, Ask, Mode, Vim, motion::Motion};
 use super::{
     Command, Document, Surface, cursors::Cursor, history::Kind, inlays, language, lineops,
 };
-use slint::ComponentHandle;
 
 use crate::Code;
 
@@ -203,7 +202,6 @@ impl Surface {
 
     /// What the machine asks of the editor.
     fn vim_ask(&self, ask: Ask, text: &str, cursor: usize) {
-        let app = || crate::work::app();
         match ask {
             // The editor's own history, not a second undo stack that would
             // disagree with Ctrl+Z about what the last change was.
@@ -217,11 +215,12 @@ impl Surface {
                 // Vim leaves it.
                 self.vim_collapse();
             }
-            Ask::Save => app().act("file.save"),
-            Ask::Close => app().act("tab.close"),
+            // The window's own: a window of its own saves and closes its file.
+            Ask::Save => self.act("file.save"),
+            Ask::Close => self.act("tab.close"),
             Ask::SaveAndClose => {
-                app().act("file.save");
-                app().act("tab.close");
+                self.act("file.save");
+                self.act("tab.close");
             }
             // The find bar that already exists, rather than a second
             // search that would drift from it.
@@ -252,7 +251,7 @@ impl Surface {
                     self.set_cursors(vec![at]);
                 }
             }
-            Ask::Jump { back } => app().act(if back { "nav.back" } else { "nav.forward" }),
+            Ask::Jump { back } => self.act(if back { "nav.back" } else { "nav.forward" }),
             // Comment syntax is the document's language, which the editor
             // knows and the machine deliberately does not.
             Ask::Comment { from, to } => {

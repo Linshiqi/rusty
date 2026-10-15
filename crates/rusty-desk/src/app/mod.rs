@@ -55,6 +55,7 @@ mod sim;
 mod strip;
 mod terminal;
 mod testing;
+mod torn;
 mod updating;
 mod watch;
 mod waves;
@@ -162,7 +163,8 @@ struct State {
     /// The call hierarchy the Calls panel shows.
     calls: calls::Calls,
     /// The fixes the picker lists, with the version of the text they are for.
-    fixes: Option<(u64, rusty_lsp::CodeActions)>,
+    /// And which surface asked for them, which applies the one picked.
+    fixes: Option<(u64, rusty_lsp::CodeActions, usize)>,
     /// A rename being typed: where the symbol is, and its name now.
     renaming: Option<(String, u32, u32, String)>,
     /// What the picker lists when a list was handed to it.
@@ -232,6 +234,11 @@ pub struct App {
     strip_back: Cell<bool>,
     /// The strip as it was last written.
     strip_saved: RefCell<Option<rusty_embed::model::ProjectTabs>>,
+    /// The windows tabs were moved into (`torn.rs`).
+    torn: RefCell<Vec<torn::Torn>>,
+    /// The surface of the window of its own an action was asked for in,
+    /// while the action runs (`App::keyed`).
+    keyed: RefCell<Option<Rc<Surface>>>,
 }
 
 impl App {
@@ -270,6 +277,8 @@ impl App {
             clock: slint::Timer::default(),
             strip_back: Cell::new(false),
             strip_saved: RefCell::default(),
+            torn: RefCell::default(),
+            keyed: RefCell::default(),
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 view: saved.editor,
@@ -405,6 +414,7 @@ impl App {
             .dock_resized(&dock, size));
         on!(on_pick_tab, |app, id| app.pick_tab(&id));
         on!(on_close_tab, |app, id| app.close_tab(&id));
+        on!(on_tab_dropped, |app, id, x, y| app.tab_dropped(&id, x, y));
         on!(on_shade_pick, |app, id| app.shade_pick(&id));
         on!(on_shade_close, |app, id| app.close_tab(&id));
         let weak = Rc::downgrade(self);
@@ -670,12 +680,12 @@ impl App {
             "wizard.install" => self.wizard_install(),
             "welcome.open" => self.open_tab(Tab::Page("welcome")),
             "file.save" => self.save(),
-            "find.open" => self.editor.find_open(false),
-            "find.replace" => self.editor.find_open(true),
-            "find.next" => self.editor.find_next(true),
-            "find.previous" => self.editor.find_next(false),
+            "find.open" => self.keyed().find_open(false),
+            "find.replace" => self.keyed().find_open(true),
+            "find.next" => self.keyed().find_next(true),
+            "find.previous" => self.keyed().find_next(false),
             "editor.go-to-line" => self.open_picker_with(Mode::Files, ":"),
-            "editor.show-hover" => self.editor.hover_caret(),
+            "editor.show-hover" => self.keyed().hover_caret(),
             "editor.definition" => self.go_to_definition(),
             "editor.references" => self.find_places(navigate::Places::References),
             "editor.implementations" => self.find_places(navigate::Places::Implementations),
@@ -684,11 +694,12 @@ impl App {
             "editor.expand-macro" => self.expand_macro(),
             "editor.quick-fix" => self.quick_fix(),
             "editor.rename" => self.rename_prompt(),
-            "editor.fold" => self.editor.fold_at_caret(true),
-            "editor.unfold" => self.editor.fold_at_caret(false),
-            "editor.fold-all" => self.editor.fold_all(true),
-            "editor.unfold-all" => self.editor.fold_all(false),
+            "editor.fold" => self.keyed().fold_at_caret(true),
+            "editor.unfold" => self.keyed().fold_at_caret(false),
+            "editor.fold-all" => self.keyed().fold_all(true),
+            "editor.unfold-all" => self.keyed().fold_all(false),
             "editor.split" => self.split(),
+            "editor.detach" => self.detach(None, None),
             "update.check" => self.update_check(true),
             "update.download" => self.update_download(),
             "update.restart" => self.update_restart(),
@@ -825,6 +836,8 @@ impl App {
     fn project_opened(self: &Rc<Self>, project: Project) {
         // The project going keeps its drafts, as a closing window does.
         self.keep_drafts();
+        // Its windows of their own go with it.
+        self.torn_all_gone();
         self.backup_timers.borrow_mut().clear();
         let opened = project.root.clone();
         let root = project.root.to_string_lossy().into_owned();
@@ -1064,7 +1077,8 @@ impl App {
 
     // ---- editor groups ---------------------------------------------------
 
-    /// How many tabs, across both groups, show `path`.
+    /// How many tabs, across both groups and every window of its own,
+    /// show `path`.
     fn views_of(&self, path: &str) -> usize {
         let state = self.state.borrow();
         state
@@ -1073,6 +1087,7 @@ impl App {
             .chain(&state.other)
             .filter(|tab| matches!(tab, Tab::File(p) if p == path))
             .count()
+            + self.torn_views_of(path)
     }
 
     /// Ctrl+\: the file in front beside itself — the new group on the
@@ -1251,7 +1266,9 @@ impl App {
             }
             *view
         };
-        self.editor.set_view(view);
+        for surface in self.surfaces() {
+            surface.set_view(view);
+        }
         self.sync_settings();
         let _ = rusty_embed::config::update(move |saved| saved.editor = view);
     }
@@ -1261,7 +1278,9 @@ impl App {
     /// keystrokes doing something else.
     fn set_vim(self: &Rc<Self>, on: bool) {
         self.state.borrow_mut().vim = on;
-        self.editor.set_vim(on);
+        for surface in self.surfaces() {
+            surface.set_vim(on);
+        }
         self.sync_settings();
         self.sync_status();
         let _ = rusty_embed::config::update(move |saved| saved.vim = on);
@@ -1472,6 +1491,9 @@ impl App {
     /// the project opens — so closing asks nothing.
     pub fn closing(self: &Rc<Self>) -> slint::CloseRequestResponse {
         self.keep_drafts_and_wait();
+        // Every window of its own goes with this one: their drafts are
+        // kept above, and their files are on the strip written for next time.
+        self.torn_all_gone();
         slint::CloseRequestResponse::HideWindow
     }
 
@@ -1744,6 +1766,8 @@ impl App {
             _ => "rusty".to_string(),
         };
         window.set_caption(title.into());
+        drop(state);
+        self.sync_torn();
     }
 
     fn sync_tree(&self) {
@@ -1842,6 +1866,8 @@ impl App {
         shell.set_view_sticky(state.view.sticky_scroll);
         shell.set_view_guides(state.view.indent_guides);
         shell.set_vim_on(state.vim);
+        drop(state);
+        self.sync_torn_settings();
     }
 }
 

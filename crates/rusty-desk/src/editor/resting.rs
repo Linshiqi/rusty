@@ -263,11 +263,16 @@ impl Surface {
         };
         let asked = self.occurring.asks.ask();
         let about = path.clone();
+        let asker = self.id;
         self.servers.ask(
             &path,
             Some(draft),
             move |client, path| client.document_highlights(path, line, col),
-            move |app, ranges| app.editor().occurred(asked, &about, version, ranges),
+            move |app, ranges| {
+                if let Some(this) = app.editor().view(asker) {
+                    this.occurred(asked, &about, version, ranges);
+                }
+            },
         );
     }
 

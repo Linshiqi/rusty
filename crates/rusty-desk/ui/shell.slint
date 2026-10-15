@@ -1364,6 +1364,9 @@ export global Shell {
     callback dock-resized(string /* dock */, length);
     callback pick-tab(string);
     callback close-tab(string);
+    // A tab let go of after a drag, where the pointer was in the window: let
+    // go beyond the window's edge, it moves into a window of its own.
+    callback tab-dropped(string, length /* x */, length /* y */);
     // The other group's strip: its group to front, and the tab.
     callback shade-pick(string);
     callback shade-close(string);

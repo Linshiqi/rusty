@@ -45,6 +45,13 @@
 //! literal missing two fields, opens the hover card on it, photographs the
 //! fixes the card lists, applies one by its click and prints the lines it
 //! wrote — on a copy, since it ends by keeping the draft.
+//! With `RUSTY_PROBE_TORN` it moves the file into a window of its own
+//! (Move into New Window), types there, opens the same file in the main
+//! window and photographs both with the edit in each, types in the main
+//! window and undoes it from the other (one history), saves from the
+//! window of its own, closes it and types in the main window again; then
+//! drags `Cargo.toml`'s tab out beyond the main window's edge and moves it
+//! back — on a copy, since it saves.
 
 use std::{
     cell::{Cell, RefCell},
@@ -115,6 +122,7 @@ pub fn start(window: &AppWindow) {
     let navigating = std::env::var_os("RUSTY_PROBE_NAV").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
+    let tearing = std::env::var_os("RUSTY_PROBE_TORN").is_some();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -290,6 +298,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if marking {
                     step.set(3000);
+                }
+                if tearing {
+                    step.set(3600);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -1425,6 +1436,319 @@ pub fn start(window: &AppWindow) {
                 );
             }
             3070 if navigating => app.act("app.exit"),
+            // A tab moved into a window of its own, and the document the two
+            // windows share.
+            3600 if tearing => {
+                if shell.get_active_kind() != "file" {
+                    step.set(3600);
+                    return;
+                }
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+                app.act("editor.detach");
+            }
+            3601 if tearing => {
+                let torn = app.torn_windows();
+                eprintln!(
+                    "torn: moved {:?}: {} window(s) of its own | main strip {:?} | its caption {:?} tab {:?} | its rows {}",
+                    start_path.borrow(),
+                    torn.len(),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                    torn.first().map(|(w, _)| w.get_caption().to_string()),
+                    torn.first().map(|(w, _)| w.get_name().to_string()),
+                    torn.first().map_or(0, |(w, _)| w.global::<Code>().get_rows().row_count()),
+                );
+                let size = |w: &slint::Window| (w.scale_factor(), w.size().width, w.size().height);
+                eprintln!(
+                    "torn: scale and size: main {:?}, its {:?}",
+                    size(window.window()),
+                    torn.first().map(|(w, _)| size(w.window()))
+                );
+            }
+            3605 if tearing => {
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    for ch in ["/", "*", "t", "o", "r", "n", "*", "/"] {
+                        torn.window().dispatch_event(WindowEvent::KeyPressed { text: ch.into() });
+                        torn.window().dispatch_event(WindowEvent::KeyReleased { text: ch.into() });
+                    }
+                }
+            }
+            3606 if tearing => {
+                let path = start_path.borrow().clone();
+                let first = app
+                    .editor()
+                    .draft_of(&path)
+                    .and_then(|(text, ..)| text.lines().next().map(str::to_string));
+                eprintln!(
+                    "torn: typed in the window of its own: line 1 {first:?}, dirty {}",
+                    app.editor().is_dirty(&path)
+                );
+                // Ctrl+F there: its own find bar.
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    torn_chord(torn, &[Key::Control], "f");
+                }
+            }
+            3607 if tearing => {
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    eprintln!(
+                        "torn: Ctrl+F in the window of its own: its find bar open {}, query {:?}; the main window's open {}",
+                        torn.global::<Find>().get_open(),
+                        torn.global::<Find>().get_query(),
+                        window.global::<Find>().get_open()
+                    );
+                    snapshot_of(torn.window(), &dir.join("torn-find.png"));
+                    torn_chord(torn, &[], &slint::SharedString::from(Key::Escape));
+                }
+            }
+            3608 if tearing => {
+                // A function at the end of the file, typed there, asking for
+                // `v.no` to be completed.
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    torn_chord(torn, &[Key::Control], &slint::SharedString::from(Key::End));
+                    torn_chord(torn, &[], &slint::SharedString::from(Key::Return));
+                    for ch in "fn torn_probe(v: Vector) -> f32 { v.no".chars() {
+                        torn_chord(torn, &[], &ch.to_string());
+                    }
+                }
+                waited.set(0);
+            }
+            3609 if tearing => {
+                let Some((torn, _)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                let popup = torn.global::<Code>();
+                let labels: Vec<String> = popup
+                    .get_completion_rows()
+                    .iter()
+                    .map(|row| row.label.to_string())
+                    .collect();
+                if !(popup.get_completion_open() && labels.iter().any(|l| l.starts_with("norm"))) {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1500 {
+                        step.set(3609);
+                        return;
+                    }
+                }
+                eprintln!(
+                    "torn: completion in the window of its own after {} ms: open {}, rows {:?}",
+                    waited.get() * 40,
+                    popup.get_completion_open(),
+                    labels.iter().take(6).collect::<Vec<_>>()
+                );
+                snapshot_of(torn.window(), &dir.join("torn-completion.png"));
+                torn_chord(&torn, &[], &slint::SharedString::from(Key::Escape));
+                // A line that does not parse, for a squiggle.
+                for ch in "; let = ;".chars() {
+                    torn_chord(&torn, &[], &ch.to_string());
+                }
+                waited.set(0);
+                step.set(3620);
+            }
+            3620 if tearing => {
+                let Some((torn, surface)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                let squiggled: Vec<i32> = torn
+                    .global::<Code>()
+                    .get_rows()
+                    .iter()
+                    .filter(|row| row.marks.iter().any(|m| m.kind == 5))
+                    .map(|row| row.number)
+                    .collect();
+                if squiggled.is_empty() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1500 {
+                        step.set(3620);
+                        return;
+                    }
+                }
+                eprintln!(
+                    "torn: an error in the window of its own after {} ms, squiggled on rows {squiggled:?}",
+                    waited.get() * 40
+                );
+                // The card for the name `Vector` in the line typed there.
+                let text = surface
+                    .current_path()
+                    .and_then(|path| app.editor().draft_of(&path))
+                    .map(|(text, ..)| text)
+                    .unwrap_or_default();
+                if let Some((line, col)) = text.lines().enumerate().find_map(|(index, line)| {
+                    line.contains("torn_probe")
+                        .then(|| line.find("Vector").map(|at| (index + 1, at + 3)))
+                        .flatten()
+                }) {
+                    surface.go_to(line, Some(col));
+                }
+                surface.hover_caret();
+                waited.set(0);
+            }
+            3621 if tearing => {
+                let Some((torn, _)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                let card = torn.global::<Code>();
+                let answered = card.get_hover_open()
+                    && (card.get_hover_code().row_count() > 0 || card.get_hover_has_docs());
+                if !answered {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 750 {
+                        step.set(3621);
+                        return;
+                    }
+                }
+                let code: Vec<String> = card
+                    .get_hover_code()
+                    .iter()
+                    .map(|row| row.pieces.iter().map(|p| p.text.to_string()).collect())
+                    .collect();
+                eprintln!(
+                    "torn: the hover card in the window of its own after {} ms: open {}, its code {code:?}",
+                    waited.get() * 40,
+                    card.get_hover_open()
+                );
+                snapshot_of(torn.window(), &dir.join("torn-hover.png"));
+                torn_chord(&torn, &[], &slint::SharedString::from(Key::Escape));
+                app.open_file(start_path.borrow().clone());
+                step.set(3610);
+            }
+            3610 if tearing => {
+                let path = start_path.borrow().clone();
+                if shell.get_active_tab() != format!("file:{path}").as_str() {
+                    step.set(3610);
+                    return;
+                }
+                let row = code.get_rows().row_data(0).map(|row| {
+                    row.pieces.iter().map(|p| p.text.to_string()).collect::<String>()
+                });
+                eprintln!("torn: the same file in the main window, its row 1 {row:?}");
+                let size = |w: &slint::Window| (w.scale_factor(), w.size().width, w.size().height);
+                eprintln!(
+                    "torn: scale and size: main {:?}, its {:?}",
+                    size(window.window()),
+                    app.torn_windows().first().map(|(w, _)| size(w.window()))
+                );
+                snapshot(&window, &dir.join("torn-main.png"));
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    snapshot_of(torn.window(), &dir.join("torn-window.png"));
+                }
+                // The caret to the line's end in the main window: a new undo
+                // step, apart from the typing in the other.
+                key(Key::End.into());
+            }
+            3611 if tearing => key("M".into()),
+            3612 if tearing => {
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    let row = torn.global::<Code>().get_rows().row_data(0).map(|row| {
+                        row.pieces.iter().map(|p| p.text.to_string()).collect::<String>()
+                    });
+                    eprintln!(
+                        "torn: typed in the main window, the other's row 1 {row:?}, its caret {:?}",
+                        app.torn_windows()[0].1.status().map(|s| (s.0, s.1))
+                    );
+                    snapshot_of(torn.window(), &dir.join("torn-window-follows.png"));
+                    // Undone from the window of its own: one history.
+                    let send = |event| torn.window().dispatch_event(event);
+                    send(WindowEvent::KeyPressed { text: Key::Control.into() });
+                    send(WindowEvent::KeyPressed { text: "z".into() });
+                    send(WindowEvent::KeyReleased { text: "z".into() });
+                    send(WindowEvent::KeyReleased { text: Key::Control.into() });
+                }
+            }
+            3613 if tearing => {
+                let path = start_path.borrow().clone();
+                let first = app
+                    .editor()
+                    .draft_of(&path)
+                    .and_then(|(text, ..)| text.lines().next().map(str::to_string));
+                eprintln!("torn: Ctrl+Z in the window of its own: line 1 {first:?}");
+                // Saved from there.
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    let send = |event| torn.window().dispatch_event(event);
+                    send(WindowEvent::KeyPressed { text: Key::Control.into() });
+                    send(WindowEvent::KeyPressed { text: "s".into() });
+                    send(WindowEvent::KeyReleased { text: "s".into() });
+                    send(WindowEvent::KeyReleased { text: Key::Control.into() });
+                }
+            }
+            3640 if tearing => {
+                let path = start_path.borrow().clone();
+                let disk = app
+                    .root_path()
+                    .and_then(|root| std::fs::read_to_string(root.join(&path)).ok())
+                    .and_then(|text| text.lines().next().map(str::to_string));
+                let torn = app.torn_windows();
+                eprintln!(
+                    "torn: Ctrl+S in the window of its own: on disk line 1 {disk:?}, dirty {}, its tab dirty {:?}",
+                    app.editor().is_dirty(&path),
+                    torn.first().map(|(w, _)| w.get_dirty())
+                );
+                snapshot_of(torn[0].0.window(), &dir.join("torn-saved.png"));
+                // Closed with Ctrl+W there: the main window still shows it.
+                let send = |event| torn[0].0.window().dispatch_event(event);
+                send(WindowEvent::KeyPressed { text: Key::Control.into() });
+                send(WindowEvent::KeyPressed { text: "w".into() });
+                send(WindowEvent::KeyReleased { text: "w".into() });
+                send(WindowEvent::KeyReleased { text: Key::Control.into() });
+            }
+            3642 if tearing => {
+                let path = start_path.borrow().clone();
+                eprintln!(
+                    "torn: closed: {} window(s) of its own, main holds it {}, main strip {:?}",
+                    app.torn_windows().len(),
+                    app.editor().holds(&path),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                );
+                key("Q".into());
+            }
+            3643 if tearing => {
+                let first = draft().and_then(|t| t.lines().next().map(str::to_string));
+                eprintln!("torn: typed in the main window after: line 1 {first:?}");
+                snapshot(&window, &dir.join("torn-closed.png"));
+                chord(&[Key::Control], "z".into());
+                app.open_file("Cargo.toml".into());
+            }
+            3646 if tearing => {
+                if shell.get_active_tab() != "file:Cargo.toml" {
+                    step.set(3646);
+                    return;
+                }
+                // The tab pressed, dragged over the window's left edge and
+                // let go beyond it, through the window's own pointer events:
+                // the strip's TouchArea keeps the press while it is outside.
+                let tab = slint::LogicalPosition::new(450.0, 58.0);
+                let send = |event| window.window().dispatch_event(event);
+                let left = slint::platform::PointerEventButton::Left;
+                send(WindowEvent::PointerPressed { position: tab, button: left });
+                for x in [400.0, 300.0, 150.0, 20.0, -60.0] {
+                    send(WindowEvent::PointerMoved {
+                        position: slint::LogicalPosition::new(x, 90.0),
+                    });
+                }
+                let out = slint::LogicalPosition::new(-60.0, 90.0);
+                send(WindowEvent::PointerReleased { position: out, button: left });
+            }
+            3650 if tearing => {
+                let torn = app.torn_windows();
+                eprintln!(
+                    "torn: Cargo.toml dragged out: {} window(s) of its own, its tab {:?}, main strip {:?}",
+                    torn.len(),
+                    torn.first().map(|(w, _)| w.get_name().to_string()),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                );
+                if let Some((torn, _)) = torn.first() {
+                    snapshot_of(torn.window(), &dir.join("torn-dragged.png"));
+                    torn.invoke_move_back();
+                }
+            }
+            3652 if tearing => {
+                eprintln!(
+                    "torn: moved back: {} window(s) of its own, main strip {:?}, in front {:?}",
+                    app.torn_windows().len(),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                    shell.get_active_tab(),
+                );
+                snapshot(&window, &dir.join("torn-back.png"));
+            }
+            3655 if tearing => app.act("app.exit"),
             // Where the caret rests: the brace beside it and its partner
             // outlined; the name under it washed where else it occurs, and
             // the washes gone at the next key; a problem's fixes listed on
@@ -2416,8 +2740,31 @@ fn screen_text(shell: &Shell) -> String {
         .join("\n")
 }
 
+/// A key with modifiers held, sent to a window of its own as a hand presses
+/// it: each modifier first and let go after.
+fn torn_chord(torn: &crate::TornWindow, held: &[Key], text: &str) {
+    let send = |event| torn.window().dispatch_event(event);
+    for key in held {
+        send(WindowEvent::KeyPressed {
+            text: (*key).into(),
+        });
+    }
+    send(WindowEvent::KeyPressed { text: text.into() });
+    send(WindowEvent::KeyReleased { text: text.into() });
+    for key in held.iter().rev() {
+        send(WindowEvent::KeyReleased {
+            text: (*key).into(),
+        });
+    }
+}
+
 fn snapshot(window: &AppWindow, path: &Path) {
-    match window.window().take_snapshot() {
+    snapshot_of(window.window(), path);
+}
+
+/// [`snapshot`] of any of the process's windows.
+fn snapshot_of(window: &slint::Window, path: &Path) {
+    match window.take_snapshot() {
         Ok(buffer) => {
             let (width, height) = (buffer.width(), buffer.height());
             let bytes = buffer.as_bytes().to_vec();

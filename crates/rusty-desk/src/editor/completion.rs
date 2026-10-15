@@ -14,7 +14,7 @@ use rusty_lsp::{
     ActionEdit, CompletionItem, CompletionList, SignatureInfo,
     complete::{self, Ask, Showing},
 };
-use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
+use slint::{ModelRc, Timer, TimerMode, VecModel};
 
 use super::{Cursor, Kind, Surface};
 use crate::{Code, CompletionRow};
@@ -153,11 +153,16 @@ impl Surface {
         let asked = self.completing.asked.get() + 1;
         self.completing.asked.set(asked);
         self.completing.pending.set(Some((asked, line, word_start)));
+        let asker = self.id;
         self.servers.ask(
             &path,
             Some(draft),
             move |client, path| client.completion(path, line, col),
-            move |app, list| app.editor().completed(asked, line, word_start, list),
+            move |app, list| {
+                if let Some(this) = app.editor().view(asker) {
+                    this.completed(asked, line, word_start, list);
+                }
+            },
         );
     }
 
@@ -362,11 +367,16 @@ impl Surface {
         }
         let version = doc.borrow().version;
         let index = item.index;
+        let asker = self.id;
         self.servers.ask(
             &path,
             None,
             move |client, path| client.resolve_completion(path, reply, index),
-            move |app, edits| app.editor().apply_resolved(version, edits),
+            move |app, edits| {
+                if let Some(this) = app.editor().view(asker) {
+                    this.apply_resolved(version, edits);
+                }
+            },
         );
         // Between the parentheses of a call: what it takes.
         if self
@@ -492,11 +502,16 @@ impl Surface {
         let draft = self.servers.draft(&doc.borrow().text);
         let asked = self.completing.signature_asked.get() + 1;
         self.completing.signature_asked.set(asked);
+        let asker = self.id;
         self.servers.ask(
             &path,
             Some(draft),
             move |client, path| client.signature_help(path, line, col),
-            move |app, info| app.editor().signature(asked, line, info),
+            move |app, info| {
+                if let Some(this) = app.editor().view(asker) {
+                    this.signature(asked, line, info);
+                }
+            },
         );
     }
 

@@ -21,6 +21,8 @@ pub(super) const FORMAT_BUDGET: Duration = Duration::from_secs(1);
 pub(super) enum After {
     Stay,
     Close,
+    /// Close the window of its own the file is in (`torn.rs`).
+    CloseWindow(usize),
 }
 
 /// What the formatter made of a file being saved.
@@ -158,8 +160,10 @@ impl App {
                     // anew if something was.
                     app.back_up(&path);
                     app.sync_tabs();
-                    if after == After::Close {
-                        app.close_tab(&Tab::File(path).id());
+                    match after {
+                        After::Close => app.close_tab(&Tab::File(path).id()),
+                        After::CloseWindow(id) => app.torn_close(id),
+                        After::Stay => {}
                     }
                 }
                 Err((path, reason)) => {

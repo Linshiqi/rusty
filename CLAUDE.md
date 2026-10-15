@@ -1304,6 +1304,63 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   default finds structs and not functions, and a symbol answer is kept with
   its ask so a slow reply to `#gp` is never shown under `#gpio`.
 
+## A tab in a window of its own
+
+VS Code's Move into New Window: `editor.detach` in the palette, or a tab let
+go of beyond the main window's edge (`Shell.tab-dropped`). One process, a
+second Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
+`app/torn.rs` for when it opens, what its keys do and how it closes.
+
+- **A second window is a second surface, not a second editor.** Slint gives
+  every window its own instance of each global, so a torn window's `Code`
+  and `Find` are the main window's properties and callbacks again, of the
+  same Rust type. `editor/host.rs` is the one place that knows there are two
+  kinds of window (`Host`, `Strong::global`), and every `self.window` in
+  `src/editor/` goes through it. `Surface::beside` makes the new window's
+  surface, which shares the main surface's documents (`Open`), servers,
+  painting, margin and metrics, and keeps a view of its own: rows, caret,
+  popups, the hover card, the find bar, the Vim machine.
+- **One file open in two windows is one document, the split's rule.** An
+  edit in either draws both (`Surface::follows`, called where the split's
+  shade already followed: an edit, a painting, the server's colours and
+  hints, what a server found), the history is the document's, the servers
+  hear about the file once — from whichever surface made the edit — and
+  the last view to close asks about changes not saved (`App::views_of`
+  counts the windows). The cursors and the folds are the document's too,
+  as they are across the split, so typing in one window moves the caret
+  the other draws; what the other view had open over the text — a popup,
+  the card, the caret's marks — goes, since it was about the text before.
+- **An answer finds the surface that asked by number** (`Surface::id`,
+  `Views`). Work comes back through `work::spawn`, whose answer must be
+  `Send`, and a surface is not: a completion, a hover, a signature, the
+  colours, a repaint name their surface, and `app.editor().view(id)` finds
+  it or drops the answer, its window having closed. A repaint, which frees
+  its document for the next one, lands on the main surface then.
+- **What is about the file happens in its window; what is about the
+  project is the main window's, which comes forward.** Typing, completion,
+  the hover card and its fixes, find, folds, save, undo, Vim's `:w` and `:q`
+  (`Surface::on_act`) belong to the torn window. The palette, the finder, a
+  list of places, a run and a jump to another file land in the main
+  window, brought to the front with winit's `focus_window` — the one use of
+  Slint's `unstable-winit-030` feature. An action asked for there runs with
+  `App::keyed` set to its surface, so F12, Shift+F12, Ctrl+., F2, F8 and the
+  call hierarchy ask about the caret in that window, and the quick fix
+  picked from the main window's list is applied to the surface that asked;
+  a definition in the same file is gone to in the torn window. Go to Line
+  and the split are refused there, in its status line, since both act on
+  the main window's editor. A right-click there has no menu yet: the menu
+  is the main window's overlay.
+- **Closing.** A torn window closes with its tab — its ×, Ctrl+W, `:q`, the
+  system's close button — and its file's last view with changes asks first
+  (`After::CloseWindow` when the answer is save). Closing it never closes
+  the main window. The main window closing, or the project switching, keeps
+  every draft first (one map of documents) and then closes every torn window
+  without a question; a torn file is written to the remembered strip after
+  the main window's left group, so a restart opens it there. A window let go
+  of from inside its own callback is dropped a turn later
+  (`Timer::single_shot`). Move into Main Window, the icon on its strip, puts
+  the tab back in the group with the keys, where its view was scrolled.
+
 ## What the editor draws beside the text
 
 Indent guides, sticky scroll, inlay hints, a minimap and more than one

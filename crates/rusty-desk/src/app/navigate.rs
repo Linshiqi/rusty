@@ -16,7 +16,7 @@ use rusty_lsp::{CodeActions, Location, Place};
 
 use super::{App, Tab};
 use crate::{
-    editor::Document,
+    editor::{Document, Surface},
     picker::{Mode, Pick},
     work,
 };
@@ -183,18 +183,39 @@ impl App {
 
     /// F12, and Ctrl+click: the definition of the name at the caret.
     pub(super) fn go_to_definition(self: &Rc<Self>) {
-        let Some((path, line, col, draft)) = self.editor.caret_question() else {
+        let asker = self.keyed();
+        let Some((path, line, col, draft)) = asker.caret_question() else {
             return;
         };
+        let asker = asker.id();
         self.servers.ask(
             &path,
             Some(draft),
             move |client, path| client.definition(path, line, col),
-            |app, found| match found {
-                Some(location) => app.jump(&location),
+            move |app, found| match found {
+                Some(location) => app.definition_found(asker, &location),
                 None => app.note_transient(0, t!("desk.nothing-found")),
             },
         );
+    }
+
+    /// A definition found from the surface `asker`: in the file a window of
+    /// its own shows, gone to there; anywhere else, in the main window,
+    /// which comes forward.
+    fn definition_found(self: &Rc<Self>, asker: usize, location: &Location) {
+        let torn = (asker != self.editor.id())
+            .then(|| self.editor.view(asker))
+            .flatten();
+        if let Some(surface) = &torn
+            && surface.current_path().as_deref() == Some(location.path.as_str())
+        {
+            surface.go_to(location.line as usize + 1, Some(location.col as usize + 1));
+            return;
+        }
+        self.jump(location);
+        if torn.is_some() {
+            self.bring_forward();
+        }
     }
 
     /// Shift+F12, Ctrl+F12 and Go to type definition: the references to
@@ -202,10 +223,11 @@ impl App {
     /// defined, in the picker. One implementation or one type is a jump, as
     /// a definition is.
     pub(super) fn find_places(self: &Rc<Self>, kind: Places) {
-        let Some((path, line, col, draft)) = self.editor.caret_question() else {
+        let asker = self.keyed();
+        let Some((path, line, col, draft)) = asker.caret_question() else {
             return;
         };
-        let name = self.editor.caret_word().unwrap_or_default();
+        let name = asker.caret_word().unwrap_or_default();
         self.servers.ask(
             &path,
             Some(draft),
@@ -237,21 +259,25 @@ impl App {
 
     /// Ctrl+.: what the server offers to do at the caret, in the picker.
     pub(super) fn quick_fix(self: &Rc<Self>) {
-        let Some((path, line, col, draft)) = self.editor.caret_question() else {
+        let asker = self.keyed();
+        let Some((path, line, col, draft)) = asker.caret_question() else {
             return;
         };
-        let Some(version) = self.editor.version_now() else {
+        let Some(version) = asker.version_now() else {
             return;
         };
+        let asker = asker.id();
         self.servers.ask(
             &path,
             Some(draft),
             move |client, path| client.code_actions(path, line, col),
-            move |app, actions| app.show_fixes(version, actions),
+            move |app, actions| app.show_fixes(version, actions, asker),
         );
     }
 
-    fn show_fixes(self: &Rc<Self>, version: u64, actions: CodeActions) {
+    /// The fixes for the surface `asker` — the main window's, or a window
+    /// of its own's, where the one picked is applied.
+    fn show_fixes(self: &Rc<Self>, version: u64, actions: CodeActions, asker: usize) {
         if actions.fixes.is_empty() {
             self.note_transient(0, rusty_i18n::lookup("misc.no-quick-fixes"));
             return;
@@ -272,7 +298,7 @@ impl App {
                 (fix.title.clone(), detail, Pick::Fix(index))
             })
             .collect();
-        self.state.borrow_mut().fixes = Some((version, actions));
+        self.state.borrow_mut().fixes = Some((version, actions, asker));
         self.open_list(
             Mode::Fixes,
             rusty_i18n::lookup("context.editor-quick-fix"),
@@ -282,10 +308,13 @@ impl App {
 
     /// The fix picked from the list.
     pub(super) fn apply_fix(self: &Rc<Self>, index: usize) {
-        let Some((version, actions)) = self.state.borrow_mut().fixes.take() else {
+        let Some((version, actions, asker)) = self.state.borrow_mut().fixes.take() else {
             return;
         };
-        self.apply_fix_from(version, actions, index);
+        // Asked in a window since closed: its file is nobody's to edit here.
+        if let Some(surface) = self.editor.view(asker) {
+            self.apply_fix_in(&surface, version, actions, index);
+        }
     }
 
     /// A fix the server offered — in Ctrl+.'s list or on the hover card —
@@ -299,6 +328,19 @@ impl App {
         actions: CodeActions,
         index: usize,
     ) {
+        let editor = self.editor.clone();
+        self.apply_fix_in(&editor, version, actions, index);
+    }
+
+    /// [`App::apply_fix_from`] for the file `surface` shows: the main
+    /// window's or a window of its own's.
+    pub(super) fn apply_fix_in(
+        self: &Rc<Self>,
+        surface: &Rc<Surface>,
+        version: u64,
+        actions: CodeActions,
+        index: usize,
+    ) {
         let Some(fix) = actions.fixes.get(index).cloned() else {
             return;
         };
@@ -306,10 +348,10 @@ impl App {
             self.note(1, t!("misc.save-first", path = draft.clone()));
             return;
         }
-        let Some(path) = self.editor.current_path() else {
+        let Some(path) = surface.current_path() else {
             return;
         };
-        self.editor.apply_server_edits(version, fix.edits.clone());
+        surface.apply_server_edits(version, fix.edits.clone());
         if fix.elsewhere.is_empty() {
             return;
         }
@@ -326,14 +368,15 @@ impl App {
 
     /// F2: a new name for the symbol at the caret, typed in the picker.
     pub(super) fn rename_prompt(self: &Rc<Self>) {
-        let Some((path, line, col, _)) = self.editor.caret_question() else {
+        let asker = self.keyed();
+        let Some((path, line, col, _)) = asker.caret_question() else {
             return;
         };
         // An expansion is no file: nothing in it is the symbol's to rename.
         if rusty_edit::is_expansion(&path) {
             return;
         }
-        let Some(name) = self.editor.caret_word() else {
+        let Some(name) = asker.caret_word() else {
             return;
         };
         self.state.borrow_mut().renaming = Some((path, line, col, name.clone()));
