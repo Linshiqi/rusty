@@ -1698,9 +1698,43 @@ two. A file's diff is a page of its own. `app/git.rs` reads and writes,
 
 Move, copy, rename and delete what the tree shows go through
 `rusty_edit::entries` — confined to the root like every other write, every
-answer the relative path it produced. The Slint window's tree does not offer
-them yet (no drag-and-drop, no right-click verbs, no reveal); the rules below
-are the library's, and the ones the window must keep when it does.
+answer the relative path it produced. The tree is VS Code's explorer
+(`app/tree.rs`, its pure half `crate::tree`): a right-click on a folder
+offers New file…, New folder…, Reveal in File Explorer, Cut, Copy, Paste,
+Copy path, Copy relative path, Rename… and Delete; on a file, Open to the
+side in place of the three that make something; below the rows, the root's
+New file, New folder and Paste. The same verbs are keys while the tree has
+them — the arrows, Enter, Space, F2, Delete, Ctrl+X, Ctrl+C, Ctrl+V,
+Escape — and drag and drop moves; a new file or folder in the folder
+selected is also the dock's buttons and the palette's. `RUSTY_PROBE_TREE` drives all of it by the
+pointer and the keys and photographs it.
+
+- **A new entry is named where it will be**, VS Code's box: a row among its
+  future siblings — a folder first in its folder, a file after the folders
+  — the folder opened first (`tree::with_box`), and a rename in the entry's
+  own row with the name before its extension selected. Enter makes it,
+  Escape puts it away, a click elsewhere makes it when it can be made and
+  puts it away when it cannot. A new file opens in the editor. A new entry
+  may be a path (`src/x.rs` makes `src`), as VS Code's may; a rename is a
+  name.
+- **A name is refused under the box while it is typed, by the library's
+  rule** (`rusty_edit::name_problem`, which `rename_entry` keeps — so the
+  box and the write cannot disagree) and by the tree's own entries for a
+  name that is taken, never the disk on the thread that draws. **Only
+  committed text is judged**: the box judges when the input method has
+  nothing composing (`preedit-text`), so `f'l'y` on the way to 飞 is never a
+  name anybody typed. Enter over a refused name leaves the box saying why.
+- **The box is never made again under the keys typing into it.** The rows
+  are one model changed in place (`patch`: the rows before and after a
+  change keep their elements), because replaced whole on every sync — the
+  watcher's re-read, a tab switch — the box was a new element each time,
+  and the text being typed and the keys went with the old one.
+- **A click keeps the keys in the tree; a double-click or Enter gives them
+  to the file**, VS Code's single click: the file opens and the arrows still
+  walk the tree (`open_file_then`, which takes the keys back after the
+  editor has put them in the code). The tree follows the file in front —
+  selected, the folders above it opened, brought into view — once each time
+  it changes, so a folder closed over it stays closed (`explorer.autoReveal`).
 
 - **Move refuses an existing name; copy takes a free one.** An editor that
   silently replaces a file eats work, so a move or rename onto a taken name
@@ -1718,13 +1752,29 @@ are the library's, and the ones the window must keep when it does.
   and a panic there becomes an error. Every tab under the entry closes
   without a second question: the file is gone and a draft of it has nowhere
   to be saved.
-- **Paths that move take their state with them, before the watcher hears**:
-  the tabs, the documents, the expanded folders, and the servers, which hear
-  a moved file's old name closed and its new one opened. A path is under a
-  folder by its separator, not its prefix — `src2/a.rs` is not under `src`.
-- **A drop target is a pure rule, and a highlight follows it**: a file's row
-  stands for its folder, a folder never accepts itself or anything below it,
-  and the folder an entry is already in is not a move.
+- **Paths that move take their state with them, before the watcher hears**
+  (`App::follow_move`, after a rename, a drop and a cut pasted): the tabs in
+  both groups, the documents with their text, cursors, folds and history
+  (`Surface::moved`, painted again where the extension changed), the drafts
+  kept for them, the expanded folders, the breakpoints, the selection and
+  what is cut, and the servers, which hear a moved file's old name closed
+  and its new one opened. A path is under a folder by its separator, not its
+  prefix — `src2/a.rs` is not under `src` (`rusty_edit::moved_path`).
+- **A drop target is a pure rule, and a highlight follows it**
+  (`rusty_edit::drop_target`): a file's row stands for its folder, a folder
+  never accepts itself or anything below it, and the folder an entry is
+  already in is not a move. The drag is the row's own: a press pulled four
+  pixels carries it, and the row it is let go over is counted from the
+  pressed row in rows, since the pointer is that row's until it is let go;
+  past the last row is the root, lit as a frame round the list. Escape gives
+  a drag up, then a cut. No question before a drop, unlike VS Code's
+  default — a move is undone by dragging it back.
+- **Paste goes into the folder right-clicked, the folder selected, or a
+  selected file's folder** — the root below the rows; Paste is listed only
+  when something was cut or copied, since a menu row cannot be greyed. A cut
+  is drawn faint and used up by its paste; a copy stays to be pasted again.
+- **Reveal is one function, `crate::reveal`**, the tree's and a tab's; the
+  menu names the platform's file manager (`reveal::label_key`).
 - **Reveal is Explorer's `/select,"<path>"` as one raw argument** — a space
   after the comma makes Explorer open the home folder, and **so does a
   forward slash in the path**. The tree and the tabs name a file relative to

@@ -32,7 +32,13 @@ impl App {
         self.show_menu(owner, rows, x, y);
     }
 
-    fn show_menu(self: &Rc<Self>, owner: &'static str, rows: Vec<MenuItem>, x: f32, y: f32) {
+    pub(super) fn show_menu(
+        self: &Rc<Self>,
+        owner: &'static str,
+        rows: Vec<MenuItem>,
+        x: f32,
+        y: f32,
+    ) {
         let Some(window) = self.window() else { return };
         let shell = window.global::<Shell>();
         self.state.borrow_mut().menu = Some(owner);
@@ -103,6 +109,7 @@ impl App {
         }
         match owner {
             Some("git") => self.git_menu_picked(id),
+            Some("tree") => self.tree_menu_picked(id),
             // The keys back in the code, then what was picked.
             Some("editor") => {
                 self.front_focus();
@@ -118,11 +125,15 @@ impl App {
 
     pub(super) fn menu_dismissed(self: &Rc<Self>) {
         let owner = self.menu_close();
-        if owner == Some("tab") {
-            self.state.borrow_mut().tab_menu = None;
-        }
-        if matches!(owner, Some("editor" | "tab")) {
-            self.front_focus();
+        match owner {
+            Some("editor") => self.front_focus(),
+            // The keys back in the tree, its menu gone.
+            Some("tree") => self.tree_menu_dismissed(),
+            Some("tab") => {
+                self.state.borrow_mut().tab_menu = None;
+                self.front_focus();
+            }
+            _ => {}
         }
     }
 

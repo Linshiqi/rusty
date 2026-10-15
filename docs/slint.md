@@ -611,6 +611,26 @@ tests green, and CLAUDE.md saying how it works.
    offers them. The probe's `RUSTY_PROBE_NAV` drives all three on
    `draw-vectors`' example.
 
+   Then the tree's own verbs, reported from the release candidate as "the
+   tree cannot make, copy, paste or rename anything": VS Code's explorer
+   (`app/tree.rs`, the arithmetic in `crate::tree`). A right-click on a
+   folder, a file or the space below the rows opens its own menu; a new
+   entry is named in a box among its future siblings and a rename in its
+   own row, the name refused under the box as it is typed — committed text
+   only — by `rusty_edit::name_problem`, the rule the library's rename
+   keeps, and by the tree's entries for a name that is taken. Cut, copy and
+   paste are the menu's and Ctrl+X, C and V while the tree has the keys,
+   which a click on a row gives it (the file opens; a double-click or Enter
+   gives the keys to the file), with the arrows, Enter, Space, F2 and
+   Delete. Delete goes to the recycle bin after asking; a drag moves, the
+   folder it would land in lit by `rusty_edit::drop_target`. A rename, a
+   drop or a cut pasted carries every tab, document, draft, fold, open
+   folder and breakpoint with the path, and the servers hear the old name
+   closed and the new one opened. Reveal is `crate::reveal`, for the tabs'
+   menu as well. The rows are one model changed in place, so the box being
+   typed in survives a re-read of the tree. `RUSTY_PROBE_TREE` works all of
+   it by pointer events at the rows and keys, on a copy of `draw-vectors`.
+
 ## Decided
 
 - **Shipping is our own, not a packager's.** `cargo-packager` was the
