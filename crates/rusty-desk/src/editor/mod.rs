@@ -33,6 +33,7 @@ mod problems;
 
 pub use problems::is_problem;
 mod rows;
+mod shade;
 pub(crate) use rows::kind as token_kind;
 
 use std::{
@@ -147,6 +148,8 @@ pub struct Surface {
     analysis: analysis::Analysis,
     /// Vim's keys, when they are on.
     modal: modal::Modal,
+    /// The other editor group's file, drawn beside this one.
+    shade: shade::Shade,
 }
 
 impl Surface {
@@ -170,6 +173,17 @@ impl Surface {
         window
             .global::<Code>()
             .set_rows(ModelRc::from(rows.clone()));
+        let shade_doc: Shared = Rc::default();
+        let shade_rows = Rc::new(Rows::new(
+            shade_doc.clone(),
+            metrics.clone(),
+            Rc::default(),
+            problems.clone(),
+            gutter.clone(),
+        ));
+        window
+            .global::<crate::Shade>()
+            .set_rows(ModelRc::from(shade_rows.clone()));
         let surface = Rc::new_cyclic(|this| Surface {
             this: this.clone(),
             files,
@@ -199,6 +213,10 @@ impl Surface {
             overview: overview::Overview::default(),
             analysis: analysis::Analysis::default(),
             modal: modal::Modal::default(),
+            shade: shade::Shade {
+                doc: shade_doc,
+                rows: shade_rows,
+            },
         });
         surface.wire(window);
         surface
@@ -347,6 +365,7 @@ impl Surface {
             let path = doc.borrow().path.clone();
             self.servers.changed(&path, &doc.borrow().text);
             self.tell_edit(&path);
+            self.shade_follows(doc);
         }
     }
 
@@ -384,6 +403,12 @@ impl Surface {
             return;
         };
         self.widest.set(self.metrics.borrow().widest(&doc.borrow()));
+        // The view leaves its place with the document it showed, and
+        // finds the one this document was left at.
+        if let Some(leaving) = self.doc() {
+            leaving.borrow_mut().scroll = self.scroll();
+        }
+        let scroll = doc.borrow().scroll;
         *self.current.borrow_mut() = Some(doc);
         *self.marked.borrow_mut() = 0..0;
         self.squiggled.borrow_mut().clear();
@@ -396,8 +421,8 @@ impl Surface {
             let code = window.global::<Code>();
             code.set_has_document(true);
             code.set_content_width(self.widest.get() + 200.0);
-            code.set_scroll_y(0.0);
-            code.set_scroll_x(0.0);
+            code.set_scroll_y(scroll.0);
+            code.set_scroll_x(scroll.1);
             self.show_caret();
             window.invoke_focus_code();
         }
@@ -416,6 +441,15 @@ impl Surface {
     pub fn close(&self, path: &str) {
         if self.open.borrow_mut().remove(path).is_some() {
             self.servers.closed(path);
+        }
+        let shaded = self
+            .shade
+            .doc
+            .borrow()
+            .as_ref()
+            .is_some_and(|doc| doc.borrow().path == path);
+        if shaded {
+            self.show_shade(None, (0.0, 0.0));
         }
         let showing = self
             .current
@@ -1177,6 +1211,7 @@ impl Surface {
         self.cursors_moved();
         self.view_changed();
         self.analyse_soon();
+        self.shade_follows(doc);
     }
 
     /// The cursors moved (or the text under them changed): redraw the rows
@@ -1427,6 +1462,7 @@ impl Surface {
             self.paint(&doc);
             return;
         }
+        self.shade_follows(&doc);
         let showing = self.doc().is_some_and(|current| Rc::ptr_eq(&current, &doc));
         if showing {
             self.rows.changed(from, from + count);

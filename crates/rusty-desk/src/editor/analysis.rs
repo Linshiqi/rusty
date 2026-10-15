@@ -150,6 +150,7 @@ impl Surface {
         if again {
             self.analyse_soon();
         }
+        self.shade_follows(&doc);
         if self
             .doc()
             .is_some_and(|current| std::rc::Rc::ptr_eq(&current, &doc))

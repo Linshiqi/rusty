@@ -96,6 +96,7 @@ pub fn start(window: &AppWindow) {
     let folding = std::env::var_os("RUSTY_PROBE_FOLD").is_some();
     let hinting = std::env::var_os("RUSTY_PROBE_HINTS").is_some();
     let modal = std::env::var_os("RUSTY_PROBE_VIM").is_some();
+    let splitting = std::env::var_os("RUSTY_PROBE_SPLIT").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -241,6 +242,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if modal {
                     step.set(2600);
+                }
+                if splitting {
+                    step.set(2700);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -961,6 +965,71 @@ pub fn start(window: &AppWindow) {
                     snapshot(&window, &dir.join("vim-visual.png"));
                 }
             }
+            // Two groups: the file beside itself, another file on the right,
+            // a press on the left moving the keys there, the right's last
+            // tab closed ending the split.
+            2700 if splitting => app.act("editor.split"),
+            2701 if splitting => {
+                let groups = |what: &str| {
+                    let shade = window.global::<crate::Shade>();
+                    eprintln!(
+                        "split: {what}: split {} keys on {} | {:?} in front {:?} ({} rows) | other {:?} in front {:?} ({} rows) | caret {:?}",
+                        shell.get_split(),
+                        shell.get_focus_group(),
+                        shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                        shell.get_active_tab(),
+                        code.get_rows().row_count(),
+                        shell.get_shade_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                        shell.get_shade_active(),
+                        shade.get_rows().row_count(),
+                        app.editor().status().map(|s| (s.0, s.1)),
+                    );
+                };
+                groups("split");
+                app.open_file("Cargo.toml".into());
+            }
+            2702 if splitting => {
+                if shell.get_active_tab() != "file:Cargo.toml" {
+                    step.set(2702);
+                    return;
+                }
+                key("x".into());
+            }
+            2703 if splitting => {
+                let line = draft().and_then(|t| t.lines().next().map(str::to_string));
+                eprintln!("split: typed on the right: {line:?}");
+                snapshot(&window, &dir.join("split.png"));
+                chord(&[Key::Control], "z".into());
+            }
+            2704 if splitting => {
+                window.global::<crate::Shade>().invoke_pressed(5, 40.0, 5.0);
+            }
+            2705 if splitting => {
+                eprintln!(
+                    "split: a press on the left: keys on {}, front {:?}, caret {:?}",
+                    shell.get_focus_group(),
+                    shell.get_active_tab(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                key("y".into());
+            }
+            2706 if splitting => {
+                let line = draft().and_then(|t| t.lines().nth(5).map(str::to_string));
+                eprintln!("split: typed on the left, line 6 {line:?}");
+                snapshot(&window, &dir.join("split-left.png"));
+                chord(&[Key::Control], "z".into());
+            }
+            2707 if splitting => {
+                shell.invoke_shade_close("file:Cargo.toml".into());
+            }
+            2708 if splitting => {
+                eprintln!(
+                    "split: the right's last tab closed: split {}, tabs {:?}",
+                    shell.get_split(),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>()
+                );
+                app.act("app.exit");
+            }
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -1549,7 +1618,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

@@ -137,6 +137,13 @@ struct State {
     view: rusty_embed::EditorView,
     /// Vim's keys in the editor.
     vim: bool,
+    /// Split: the other editor group's tabs and its front one — `tabs` and
+    /// `active` are always the group with the keys — and which side that
+    /// group is on, 0 left and 1 right.
+    split: bool,
+    other: Vec<Tab>,
+    other_active: Option<usize>,
+    focus: usize,
     project: Option<Project>,
     recents: Vec<String>,
     tabs: Vec<Tab>,
@@ -382,6 +389,16 @@ impl App {
             .dock_resized(&dock, size));
         on!(on_pick_tab, |app, id| app.pick_tab(&id));
         on!(on_close_tab, |app, id| app.close_tab(&id));
+        on!(on_shade_pick, |app, id| app.shade_pick(&id));
+        on!(on_shade_close, |app, id| app.close_tab(&id));
+        let weak = Rc::downgrade(self);
+        window
+            .global::<crate::Shade>()
+            .on_pressed(move |row, x, y| {
+                if let Some(app) = weak.upgrade() {
+                    app.shade_pressed(row.max(0) as usize, x, y);
+                }
+            });
         on!(on_tree_click, |app, index| app.tree_click(index as usize));
         on!(on_open_recent, |app, path| app
             .open_project(PathBuf::from(path.as_str()), None));
@@ -639,6 +656,7 @@ impl App {
             "editor.unfold" => self.editor.fold_at_caret(false),
             "editor.fold-all" => self.editor.fold_all(true),
             "editor.unfold-all" => self.editor.fold_all(false),
+            "editor.split" => self.split(),
             "editor.vim" => {
                 let on = !self.state.borrow().vim;
                 self.set_vim(on);
@@ -784,13 +802,16 @@ impl App {
         }
         {
             let mut state = self.state.borrow_mut();
-            for tab in std::mem::take(&mut state.tabs) {
+            let mut gone = std::mem::take(&mut state.tabs);
+            gone.append(&mut state.other);
+            for tab in gone {
                 if let Tab::File(path) = tab {
                     self.editor.close(&path);
                 }
             }
             state.tabs = vec![Tab::Page("welcome")];
             state.active = Some(0);
+            (state.split, state.other_active, state.focus) = (false, None, 0);
             if !playground {
                 state.recents.retain(|path| path != &root);
                 state.recents.insert(0, root);
@@ -940,15 +961,20 @@ impl App {
     /// Close a tab; a file with changes not saved asks first — save, throw
     /// the changes away, or keep the tab — as every editor does.
     fn close_tab(self: &Rc<Self>, id: &str) {
-        let tab = self
-            .state
-            .borrow()
-            .tabs
-            .iter()
-            .find(|t| t.id() == id)
-            .cloned();
+        let tab = {
+            let state = self.state.borrow();
+            state
+                .tabs
+                .iter()
+                .chain(&state.other)
+                .find(|t| t.id() == id)
+                .cloned()
+        };
+        // The last view of a file with changes asks; one of two does not,
+        // since the other still holds them.
         if let Some(Tab::File(path)) = tab
             && self.editor.is_dirty(&path)
+            && self.views_of(&path) < 2
         {
             match ask_to_save(&path) {
                 Some(true) => self.save_file(path, After::Close),
@@ -968,23 +994,141 @@ impl App {
     fn drop_tab(self: &Rc<Self>, id: &str) {
         let closed = {
             let mut state = self.state.borrow_mut();
-            let Some(at) = state.tabs.iter().position(|t| t.id() == id) else {
+            let state = &mut *state;
+            let (tabs, active) = if state.tabs.iter().any(|t| t.id() == id) {
+                (&mut state.tabs, &mut state.active)
+            } else {
+                (&mut state.other, &mut state.other_active)
+            };
+            let Some(at) = tabs.iter().position(|t| t.id() == id) else {
                 return;
             };
-            let closed = state.tabs.remove(at);
-            state.active = match state.active {
-                _ if state.tabs.is_empty() => None,
-                Some(active) if active > at => Some(active - 1),
-                Some(active) if active == at => Some(at.min(state.tabs.len() - 1)),
+            let closed = tabs.remove(at);
+            *active = match *active {
+                _ if tabs.is_empty() => None,
+                Some(front) if front > at => Some(front - 1),
+                Some(front) if front == at => Some(at.min(tabs.len() - 1)),
                 other => other,
             };
             closed
         };
-        if let Tab::File(path) = closed {
-            self.backup_timers.borrow_mut().remove(&path);
-            self.editor.close(&path);
+        if let Tab::File(path) = &closed
+            && self.views_of(path) == 0
+        {
+            self.backup_timers.borrow_mut().remove(path);
+            self.editor.close(path);
         }
+        self.settle_groups();
         self.front_tab();
+    }
+
+    // ---- editor groups ---------------------------------------------------
+
+    /// How many tabs, across both groups, show `path`.
+    fn views_of(&self, path: &str) -> usize {
+        let state = self.state.borrow();
+        state
+            .tabs
+            .iter()
+            .chain(&state.other)
+            .filter(|tab| matches!(tab, Tab::File(p) if p == path))
+            .count()
+    }
+
+    /// Ctrl+\: the file in front beside itself — the new group on the
+    /// right, with the keys, the left keeping every tab it had. Split
+    /// already, the keys go to the other group.
+    fn split(self: &Rc<Self>) {
+        if self.state.borrow().split {
+            self.swap_groups();
+            return;
+        }
+        let Some(Tab::File(path)) = self.active_tab() else {
+            return;
+        };
+        let scroll = self.editor.scroll();
+        {
+            let mut state = self.state.borrow_mut();
+            state.other = std::mem::take(&mut state.tabs);
+            state.other_active = state.active.take();
+            state.tabs = vec![Tab::File(path)];
+            state.active = Some(0);
+            state.split = true;
+            state.focus = 1;
+        }
+        self.editor.show_shade(self.shade_file().as_deref(), scroll);
+        self.front_tab();
+        self.editor.set_scroll(scroll);
+    }
+
+    /// The keys to the other group: it is put in front where its view was
+    /// scrolled, and the group leaving is drawn where it was.
+    fn swap_groups(self: &Rc<Self>) {
+        if !self.state.borrow().split {
+            return;
+        }
+        let (leaving, coming) = (self.editor.scroll(), self.editor.shade_scroll());
+        {
+            let mut state = self.state.borrow_mut();
+            let state = &mut *state;
+            std::mem::swap(&mut state.tabs, &mut state.other);
+            std::mem::swap(&mut state.active, &mut state.other_active);
+            state.focus = 1 - state.focus;
+        }
+        self.editor
+            .show_shade(self.shade_file().as_deref(), leaving);
+        self.front_tab();
+        self.editor.set_scroll(coming);
+    }
+
+    /// The file the other group has in front, while split.
+    fn shade_file(&self) -> Option<String> {
+        let state = self.state.borrow();
+        if !state.split {
+            return None;
+        }
+        match state.other_active.and_then(|at| state.other.get(at)) {
+            Some(Tab::File(path)) => Some(path.clone()),
+            _ => None,
+        }
+    }
+
+    /// A group left with no tabs ends the split: the other's tabs are the
+    /// window's, on the left — never an empty pane beside the work.
+    fn settle_groups(&self) {
+        let ended = {
+            let mut state = self.state.borrow_mut();
+            let state = &mut *state;
+            if !state.split || (!state.tabs.is_empty() && !state.other.is_empty()) {
+                false
+            } else {
+                if state.tabs.is_empty() {
+                    state.tabs = std::mem::take(&mut state.other);
+                    state.active = state.other_active.take();
+                }
+                state.other.clear();
+                (state.split, state.other_active, state.focus) = (false, None, 0);
+                true
+            }
+        };
+        let scroll = self.editor.shade_scroll();
+        self.editor.show_shade(self.shade_file().as_deref(), scroll);
+        if ended {
+            self.sync_tabs();
+        }
+    }
+
+    /// A tab on the other group's strip: its group to front, and that tab.
+    fn shade_pick(self: &Rc<Self>, id: &str) {
+        self.swap_groups();
+        self.pick_tab(id);
+    }
+
+    /// A press in the other group's view: its group to front, and the
+    /// press made there.
+    fn shade_pressed(self: &Rc<Self>, row: usize, x: f32, y: f32) {
+        self.swap_groups();
+        self.editor.press_at(row, x, y);
     }
 
     /// Put the active tab's document on screen and say so.
@@ -1511,19 +1655,35 @@ impl App {
         let Some(window) = self.window() else { return };
         let shell = window.global::<Shell>();
         let state = self.state.borrow();
-        let tabs: Vec<DocTab> = state
-            .tabs
-            .iter()
-            .map(|tab| DocTab {
-                id: tab.id().into(),
-                title: tab.title().into(),
-                hint: SharedString::new(),
-                dirty: matches!(tab, Tab::File(path) if self.editor.is_dirty(path)),
-                kind: tab.kind().into(),
-            })
-            .collect();
+        let strip = |tabs: &[Tab]| -> Vec<DocTab> {
+            tabs.iter()
+                .map(|tab| DocTab {
+                    id: tab.id().into(),
+                    title: tab.title().into(),
+                    hint: SharedString::new(),
+                    dirty: matches!(tab, Tab::File(path) if self.editor.is_dirty(path)),
+                    kind: tab.kind().into(),
+                })
+                .collect()
+        };
+        let tabs = strip(&state.tabs);
         let active = state.active.and_then(|at| state.tabs.get(at));
         shell.set_tabs(ModelRc::new(VecModel::from(tabs)));
+        let shade = state
+            .other_active
+            .and_then(|at| state.other.get(at))
+            .filter(|_| state.split);
+        shell.set_split(state.split);
+        shell.set_focus_group(state.focus as i32);
+        shell.set_shade_tabs(ModelRc::new(VecModel::from(strip(&state.other))));
+        shell.set_shade_active(shade.map(Tab::id).unwrap_or_default().into());
+        shell.set_shade_kind(
+            shade
+                .map(|t| t.kind().to_string())
+                .unwrap_or_default()
+                .into(),
+        );
+        shell.set_shade_title(shade.map(Tab::title).unwrap_or_default().into());
         shell.set_active_tab(active.map(Tab::id).unwrap_or_default().into());
         shell.set_active_kind(
             active

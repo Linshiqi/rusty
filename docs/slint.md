@@ -525,6 +525,22 @@ tests green, and CLAUDE.md saying how it works.
    there — `let a =` lost its `=`. The probe switches Vim on in
    `draw-vectors`, changes `a` to `first` with `cw` and takes it back with
    one `u`, then deletes two lines with `Vjd` and puts them back.
+
+   Two groups, side by side and no more. `tabs` and `active` are always
+   the group with the keys and the other group waits beside them, so every
+   path that opens, picks or closes a tab works on one group without
+   knowing there are two, and giving the keys to the other group swaps the
+   two. The code view is one component, moved to the side that has the
+   keys; the other side draws its file from a second rows model over its
+   own document (`editor/shade.rs`, the `Shade` global), and a press there
+   swaps the groups and is made again in the code view. One file open on
+   both sides is one document in two views: an edit, a painting or the
+   server's answer draws both, and closing one view of a file with changes
+   asks nothing while the other holds it. A group left with no tabs ends
+   the split. Ctrl+\ splits, and split moves the keys; each document keeps
+   where its view was scrolled, so a tab comes back where it was left. The
+   probe splits `lib.rs`, opens `Cargo.toml` on the right and types there,
+   presses in the left view to move the keys, and types there.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
