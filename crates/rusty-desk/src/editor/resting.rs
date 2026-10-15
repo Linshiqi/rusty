@@ -32,10 +32,14 @@ pub type Wash = (usize, usize, usize);
 
 /// What is drawn where the caret rests, each with the document and the
 /// version of its text it is about — the rows draw it only over that text.
+/// And beside them the one mark that is the pointer's, not the caret's:
+/// the name under it drawn as a link while Ctrl is held (`link.rs`) — its
+/// line and the columns it covers — drawn by the same rule.
 #[derive(Default)]
 pub struct Resting {
     pub brackets: Option<(String, u64, [brackets::At; 2])>,
     pub washes: Option<(String, u64, Vec<Wash>)>,
+    pub link: Option<(String, u64, usize, usize, usize)>,
 }
 
 impl Resting {
@@ -66,6 +70,16 @@ impl Resting {
         }
     }
 
+    /// The columns drawn as a link on `line` of `path` at `version`.
+    pub fn link_on(&self, path: &str, version: u64, line: usize) -> Option<(usize, usize)> {
+        match &self.link {
+            Some((p, v, l, from, to)) if p == path && *v == version && *l == line => {
+                Some((*from, *to))
+            }
+            _ => None,
+        }
+    }
+
     /// Everything drawn taken away after `change`: the lines it was drawn
     /// on outside the change, where they are now — the rows that still show
     /// it, since the change drew its own again.
@@ -76,6 +90,9 @@ impl Resting {
         }
         if let Some((.., washes)) = self.washes.take() {
             lines.extend(washes.iter().map(|w| w.0));
+        }
+        if let Some((_, _, line, ..)) = self.link.take() {
+            lines.push(line);
         }
         lines
             .into_iter()
@@ -193,12 +210,14 @@ impl Surface {
     /// before it, and goes from the rows that still show it.
     pub(super) fn rest_edited(&self, change: Change) {
         self.occurring.asks.forget();
+        self.unlink();
         let stale = self.resting.borrow_mut().take_after(change);
         self.redraw_lines(stale);
     }
 
     /// Nothing on screen: nothing rests, and nothing is asked.
     pub(super) fn rest_nowhere(&self) {
+        self.unlink();
         self.occurring.timer.stop();
         self.occurring.asks.forget();
         *self.occurring.rested.borrow_mut() = None;
@@ -361,6 +380,7 @@ mod tests {
         let mut resting = Resting {
             brackets: Some(("a.rs".into(), 1, [(1, 4), (9, 0)])),
             washes: Some(("a.rs".into(), 1, vec![(0, 2, 5), (5, 1, 4), (12, 0, 3)])),
+            link: Some(("a.rs".into(), 1, 20, 4, 9)),
         };
         let change = Change {
             first: 4,
@@ -369,8 +389,9 @@ mod tests {
         };
         let mut stale = resting.take_after(change);
         stale.sort_unstable();
-        assert_eq!(stale, [0, 1, 10, 13]);
+        assert_eq!(stale, [0, 1, 10, 13, 21]);
         assert!(resting.brackets.is_none() && resting.washes.is_none());
+        assert!(resting.link.is_none());
     }
 
     /// Marks are drawn only over the text they are about.
@@ -379,6 +400,7 @@ mod tests {
         let resting = Resting {
             brackets: Some(("a.rs".into(), 3, [(1, 4), (1, 9)])),
             washes: Some(("a.rs".into(), 3, vec![(1, 0, 2), (2, 5, 8), (2, 9, 12)])),
+            link: Some(("a.rs".into(), 3, 2, 5, 8)),
         };
         assert_eq!(resting.brackets_on("a.rs", 3, 1), [4, 9]);
         assert!(
@@ -388,5 +410,8 @@ mod tests {
         assert!(resting.brackets_on("b.rs", 3, 1).is_empty(), "another file");
         assert_eq!(resting.washes_on("a.rs", 3, 2), [(5, 8), (9, 12)]);
         assert!(resting.washes_on("a.rs", 3, 3).is_empty());
+        assert_eq!(resting.link_on("a.rs", 3, 2), Some((5, 8)));
+        assert_eq!(resting.link_on("a.rs", 4, 2), None, "another version");
+        assert_eq!(resting.link_on("a.rs", 3, 1), None, "another line");
     }
 }

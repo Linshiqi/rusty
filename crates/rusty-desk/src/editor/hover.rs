@@ -205,7 +205,7 @@ impl Surface {
 
     /// The line and the byte under the pointer, when it is over something
     /// written there or a squiggle drawn past the end of the line.
-    fn spot_at(&self, row: usize, x: f32, y: f32) -> Option<(usize, usize)> {
+    pub(super) fn spot_at(&self, row: usize, x: f32, y: f32) -> Option<(usize, usize)> {
         let doc = self.doc()?;
         let window = self.window.upgrade()?;
         let row_height = window.global::<Code>().get_row_height();

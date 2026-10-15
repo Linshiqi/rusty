@@ -150,12 +150,14 @@ export component Transport inherits Rectangle {
     border-color: Theme.line;
     drop-shadow-blur: 12px;
     drop-shadow-color: #00000055;
+    // Each names its key as the keys stand, rebound or not: a tooltip that
+    // names a key nothing is bound to is worse than none.
     row := HorizontalLayout {
         padding: 3px;
         spacing: 2px;
         if Shell.debug-running: IconButton {
             icon: Icons.pause;
-            tip: @tr("debugger.pause") + " (F6)";
+            tip: @tr("debugger.pause") + Shell.key-of("debug.pause", Shell.keys-version);
             tint: Theme.amber;
             clicked => {
                 Shell.act("debug.pause");
@@ -163,7 +165,7 @@ export component Transport inherits Rectangle {
         }
         if !Shell.debug-running: IconButton {
             icon: Icons.play;
-            tip: @tr("debugger.continue") + " (F5)";
+            tip: @tr("debugger.continue") + Shell.key-of("run.debug", Shell.keys-version);
             tint: Theme.patina;
             enabled: Shell.debug-stopped;
             clicked => {
@@ -172,7 +174,7 @@ export component Transport inherits Rectangle {
         }
         IconButton {
             icon: Icons.step-over;
-            tip: @tr("debugger.step-over") + " (F10)";
+            tip: @tr("debugger.step-over") + Shell.key-of("debug.over", Shell.keys-version);
             enabled: Shell.debug-stopped;
             clicked => {
                 Shell.act("debug.over");
@@ -180,7 +182,7 @@ export component Transport inherits Rectangle {
         }
         IconButton {
             icon: Icons.step-into;
-            tip: @tr("debugger.step-into") + " (F11)";
+            tip: @tr("debugger.step-into") + Shell.key-of("debug.into", Shell.keys-version);
             enabled: Shell.debug-stopped;
             clicked => {
                 Shell.act("debug.into");
@@ -188,7 +190,7 @@ export component Transport inherits Rectangle {
         }
         IconButton {
             icon: Icons.step-out;
-            tip: @tr("debugger.step-out") + " (Shift+F11)";
+            tip: @tr("debugger.step-out") + Shell.key-of("debug.out", Shell.keys-version);
             enabled: Shell.debug-stopped;
             clicked => {
                 Shell.act("debug.out");
@@ -196,7 +198,7 @@ export component Transport inherits Rectangle {
         }
         IconButton {
             icon: Icons.stop;
-            tip: @tr("debugger.stop") + " (Shift+F5)";
+            tip: @tr("debugger.stop") + Shell.key-of("run.stop", Shell.keys-version);
             tint: Theme.crimson;
             clicked => {
                 Shell.act("run.stop");

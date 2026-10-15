@@ -32,7 +32,13 @@ impl App {
         self.show_menu(owner, rows, x, y);
     }
 
-    fn show_menu(self: &Rc<Self>, owner: &'static str, rows: Vec<MenuItem>, x: f32, y: f32) {
+    pub(super) fn show_menu(
+        self: &Rc<Self>,
+        owner: &'static str,
+        rows: Vec<MenuItem>,
+        x: f32,
+        y: f32,
+    ) {
         let Some(window) = self.window() else { return };
         let shell = window.global::<Shell>();
         self.state.borrow_mut().menu = Some(owner);
@@ -66,9 +72,23 @@ impl App {
             ids.extend(["", "editor.rename", "editor.quick-fix", ""]);
         }
         ids.push("palette.open");
+        self.open_action_menu("editor", &ids, x, y);
+    }
+
+    /// A menu of actions by their ids, each row named and keyed as the
+    /// palette names and keys it — the key in force, so a rebound key is
+    /// the key shown; an empty id is a divider.
+    pub(super) fn open_action_menu(
+        self: &Rc<Self>,
+        owner: &'static str,
+        ids: &[&str],
+        x: f32,
+        y: f32,
+    ) {
+        let keys = self.state.borrow().keys.map.clone();
         let rows = ids
-            .into_iter()
-            .map(|id| {
+            .iter()
+            .map(|&id| {
                 let action = actions::by_id(id);
                 MenuItem {
                     id: id.into(),
@@ -77,11 +97,12 @@ impl App {
                         .unwrap_or_default()
                         .into(),
                     danger: false,
-                    chord: action.and_then(|a| a.chord).unwrap_or_default().into(),
+                    // The key in force: a rebound key is the key shown.
+                    chord: keys.chord(id).unwrap_or_default().into(),
                 }
             })
             .collect();
-        self.show_menu("editor", rows, x, y);
+        self.show_menu(owner, rows, x, y);
     }
 
     pub(super) fn menu_picked(self: &Rc<Self>, id: &str) {
@@ -91,10 +112,15 @@ impl App {
         }
         match owner {
             Some("git") => self.git_menu_picked(id),
+            Some("tree") => self.tree_menu_picked(id),
             // The keys back in the code, then what was picked.
             Some("editor") => {
                 self.front_focus();
                 self.act(id);
+            }
+            Some("tab") => {
+                self.front_focus();
+                self.tab_menu_picked(id);
             }
             _ => {}
         }
@@ -102,8 +128,15 @@ impl App {
 
     pub(super) fn menu_dismissed(self: &Rc<Self>) {
         let owner = self.menu_close();
-        if owner == Some("editor") {
-            self.front_focus();
+        match owner {
+            Some("editor") => self.front_focus(),
+            // The keys back in the tree, its menu gone.
+            Some("tree") => self.tree_menu_dismissed(),
+            Some("tab") => {
+                self.state.borrow_mut().tab_menu = None;
+                self.front_focus();
+            }
+            _ => {}
         }
     }
 

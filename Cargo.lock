@@ -3172,8 +3172,6 @@ dependencies = [
 [[package]]
 name = "i-slint-renderer-femtovg"
 version = "1.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb0de504d57cdadf80c2abf7bcb8b7135a3716aee1f41b6ebb90ea93e3649d7c"
 dependencies = [
  "cfg-if",
  "const-field-offset",
@@ -6278,6 +6276,7 @@ dependencies = [
  "arboard",
  "embed-resource",
  "flate2",
+ "i-slint-core",
  "image",
  "jiff",
  "pulldown-cmark",

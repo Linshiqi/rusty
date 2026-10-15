@@ -342,6 +342,8 @@ mod file {
         pub bottom: Option<Dock>,
         #[serde(default)]
         pub right: Option<Dock>,
+        #[serde(default = "half")]
+        pub split: f32,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -360,6 +362,10 @@ mod file {
         1.0
     }
 
+    fn half() -> f32 {
+        0.5
+    }
+
     impl From<&Layout> for WindowLayout {
         fn from(file: &Layout) -> Self {
             let defaults = WindowLayout::default();
@@ -376,6 +382,13 @@ mod file {
                 left: dock(&file.left, defaults.left),
                 bottom: dock(&file.bottom, defaults.bottom),
                 right: dock(&file.right, defaults.right),
+                // A share, whatever a hand put in the file: the window
+                // still keeps each group a minimum width.
+                split: if file.split.is_finite() {
+                    file.split.clamp(0.05, 0.95)
+                } else {
+                    defaults.split
+                },
             }
         }
     }
@@ -395,6 +408,7 @@ mod file {
                 left: dock(&layout.left),
                 bottom: dock(&layout.bottom),
                 right: dock(&layout.right),
+                split: layout.split,
             }
         }
     }
@@ -773,8 +787,10 @@ fn copy_tree(from: &Path, to: &Path, anchor: &Path) -> Result<usize> {
     Ok(copied)
 }
 
-/// Path equality as the filesystem sees it, not as the string does.
-fn same_dir(a: &Path, b: &Path) -> bool {
+/// Path equality as the filesystem sees it, not as the string does. The
+/// recents, the tab strips and the window that has a project open all
+/// answer "is this that directory" by it.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         // One of them may not exist yet; fall back to a spelling-insensitive
@@ -927,6 +943,7 @@ mod tests {
                     size: 500.0,
                     front: Some("board".into()),
                 },
+                split: 0.3,
             },
         };
         save_workbench_at(&path, &state).unwrap();
@@ -945,6 +962,7 @@ mod tests {
         assert_eq!(back.open_tabs, state.open_tabs);
         assert_eq!(back.skipped_update, state.skipped_update);
         assert_eq!(back.editor, state.editor);
+        assert_eq!(back.layout, state.layout);
         assert!(
             !path
                 .with_extension(format!("toml.{}.tmp", std::process::id()))
@@ -970,6 +988,19 @@ mod tests {
         save_workbench_at(&path, &WorkbenchState::default()).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(!written.contains("[editor]"), "{written}");
+    }
+
+    /// A layout written before the editor groups' divider was kept reads as
+    /// halves, and a share no window could draw is brought back to one.
+    #[test]
+    fn the_split_reads_as_halves_until_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench.toml");
+        std::fs::write(&path, "[layout]\ntheme = \"dark\"\nzoom = 1.0\n").unwrap();
+        assert_eq!(workbench_at(&path).layout.split, 0.5);
+
+        std::fs::write(&path, "[layout]\nsplit = 7.0\n").unwrap();
+        assert_eq!(workbench_at(&path).layout.split, 0.95);
     }
 
     /// The two properties the tab strips need: a different spelling of the

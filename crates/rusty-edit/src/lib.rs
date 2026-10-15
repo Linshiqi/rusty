@@ -47,7 +47,10 @@ mod tree;
 mod watch;
 
 pub use document::{Files, create, is_library_source, read_bytes, save};
-pub use entries::{absolute, copy_entry, delete_entry, move_entry, rename_entry};
+pub use entries::{
+    NameProblem, absolute, copy_entry, delete_entry, drop_target, is_within, move_entry,
+    moved_path, name_problem, name_problem_on, parent_dir, rename_entry,
+};
 pub use error::{Error, Result};
 pub use format::{clang_style, format_c, format_rust};
 pub use modules::scan as scan_unlinked;

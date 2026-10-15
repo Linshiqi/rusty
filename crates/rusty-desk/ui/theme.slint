@@ -56,6 +56,11 @@ export global Theme {
     out property <color> bracket-fill: dark ? #f0ebe514 : #1c1a170d;
     out property <color> occurrence: dark ? #f0ebe521 : #1c1a1717;
 
+    // A name under the pointer while Ctrl is held, which a click follows:
+    // VS Code's `editorLink.activeForeground` in both themes, so the gesture
+    // looks as it does there.
+    out property <color> link: dark ? #4e94ce : #0000ff;
+
     // Syntax: the ANSI-and-token palette the editor and the terminal share.
     out property <color> term-1: dark ? #ef6b56 : #b3341f;
     out property <color> term-2: dark ? #92cf7b : #3f7a34;
@@ -68,8 +73,11 @@ export global Theme {
 
     // A token's colour, by the kind `src/editor/rows.rs` gives it: plain,
     // keyword, string, number, comment, type, function, macro, punctuation,
-    // variable, namespace.
+    // variable, namespace; and a name drawn as a link (11).
     public pure function token(kind: int) -> color {
+        if (kind == 11) {
+            return link;
+        }
         if (kind == 1) {
             return term-5;
         }
