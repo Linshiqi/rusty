@@ -9,6 +9,55 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.0
+
+**A new window.** rusty is now drawn with [Slint](https://slint.dev)
+instead of a web page in a WebView: one program, with no WebView2 runtime
+and no browser process behind it. A key reaches the screen in the next
+frame, measured on a 24,000-line file.
+
+The panels you used are in it: the editor with rust-analyzer and clangd —
+completion, hover, fixes, rename, references — the simulator and the
+board, building, flashing and the device picker, the debugger, the Git
+panel, the terminal, the memory and crates panels, the assistant, the
+math toolbox, Markdown pages, and the plot, waves and signal instruments.
+The editor has folding, sticky scroll, the minimap, indent guides, inlay
+hints in the line, the compiler's colours, test lenses with their
+results, Vim keys, and two editor groups side by side (`Ctrl+\`).
+Settings ▸ Editor turns the minimap, sticky scroll, hints and guides on
+and off. rusty opens on the project you had open, with its tabs as you
+left them, and tabs that share a name say which directory each is in.
+
+**Install this version by hand.** Earlier versions do not update to it by
+themselves, and its installer does not replace them. On Windows, download
+`rusty-0.7.0-windows-x86_64-setup.exe`: it installs for your account,
+without administrator rights, in `%LOCALAPPDATA%\Programs\rusty`. Then
+uninstall the old version in Settings ▸ Apps — it is the other entry
+called rusty. Your settings, drafts and projects are kept: they live apart
+from the program. On macOS, drag the new `rusty.app` from the disk image
+over the old one; it is a universal app for Intel and Apple Silicon. On
+Linux, use the new AppImage or `.deb`.
+
+**Updates from here on.** rusty checks for a newer version a moment after
+it opens, downloads it in the background when you ask, checks its
+signature, and installs it when you restart. Settings ▸ Updates shows
+where that stands. Each download's signature is published beside it as a
+`.minisig` file, which `minisign` can check too.
+
+**Not in the new window yet.** In the editor: quick fixes on the hover
+card (`Ctrl+.` still lists them), the matching bracket and the other
+places a name occurs drawn around the caret, dimming a file no `mod`
+declares, the call hierarchy, expanding a macro, go to type definition,
+and the finder's `@` (this file's symbols) and `#` (the workspace's). On
+the board: importing a KiCad or Wokwi schematic or an LCSC part, tidying
+the sheet, and the live readings under the pointer. Elsewhere: File ▸ New
+window, a file or a commit in a window of its own, pictures compared in
+the Git panel, a failed test's message on its line, choosing the
+terminal's shell (it starts PowerShell on Windows and your `$SHELL`
+elsewhere), moving the data directory, removing a project from the
+recent list, and the Help menu's links to the issue tracker and the
+releases. They come back in the next releases.
+
 ## v0.6.77
 
 **PlatformIO and CMake projects open.** A folder with a `platformio.ini` or
