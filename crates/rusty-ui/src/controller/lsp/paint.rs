@@ -159,7 +159,7 @@ fn take_hints(
         return;
     };
     let mut hints = answer.hints;
-    crate::inlay::follow(&mut hints, asked, &now);
+    rusty_lsp::follow::hints(&mut hints, asked, &now);
     hints.sort_by_key(|hint| (hint.line, hint.col));
     let _ = state
         .editor

@@ -23,6 +23,8 @@ pub mod guides;
 pub mod lens;
 /// The minimap's arithmetic: runs of ink, and where it stands.
 pub mod minimap;
+/// A server's colours over the painter's.
+pub mod semantic;
 /// Sticky scroll: which lines stay at the top.
 pub mod sticky;
 /// What a test harness said: each test's verdict, each failure's place.

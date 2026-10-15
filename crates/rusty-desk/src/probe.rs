@@ -94,6 +94,7 @@ pub fn start(window: &AppWindow) {
     let following = std::env::var_os("RUSTY_PROBE_WATCH").is_some();
     let lenses = std::env::var_os("RUSTY_PROBE_LENS").is_some();
     let folding = std::env::var_os("RUSTY_PROBE_FOLD").is_some();
+    let hinting = std::env::var_os("RUSTY_PROBE_HINTS").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -233,6 +234,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if folding {
                     step.set(2400);
+                }
+                if hinting {
+                    step.set(2500);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -865,6 +869,55 @@ pub fn start(window: &AppWindow) {
                 snapshot(&window, &dir.join("sticky.png"));
                 app.act("app.exit");
             }
+            // The server's colours and hints arrive; a click just past a
+            // hint lands on its column, and typing there carries it along.
+            2500 if hinting => {
+                let told = app.editor().told();
+                let arrived = told
+                    .as_ref()
+                    .is_some_and(|(colours, _, first)| *colours > 0 && first.is_some());
+                if !arrived {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 2400 {
+                        step.set(2500);
+                    }
+                    return;
+                }
+                let (colours, hints, first) = told.unwrap_or_default();
+                eprintln!("hints: {colours} colours, {hints} hints after {} ticks; first {first:?}", waited.get());
+                let rows = code.get_rows();
+                let drawn: Vec<(i32, String)> = rows
+                    .iter()
+                    .filter(|r| r.hints.row_count() > 0)
+                    .take(3)
+                    .map(|r| {
+                        let labels: Vec<String> = r.hints.iter().map(|h| h.text.to_string()).collect();
+                        (r.number, labels.join(" "))
+                    })
+                    .collect();
+                eprintln!("hints: drawn on {drawn:?}");
+                snapshot(&window, &dir.join("hints.png"));
+                if let Some((line, col, _, start)) = first {
+                    waited.set(col as u32);
+                    code.invoke_pointer(0, line as i32, start + 2.0, 5.0, Default::default());
+                    code.invoke_pointer(2, line as i32, start + 2.0, 5.0, Default::default());
+                }
+            }
+            2501 if hinting => {
+                eprintln!(
+                    "hints: a click just past the hint at column {} lands at {:?}",
+                    waited.get() + 1,
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                key("x".into());
+            }
+            2502 if hinting => {
+                let first = app.editor().told().and_then(|t| t.2);
+                eprintln!("hints: typed at it, the first hint is now {first:?}");
+                snapshot(&window, &dir.join("hints-typed.png"));
+                chord(&[Key::Control], "z".into());
+            }
+            2503 if hinting => app.act("app.exit"),
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -1453,7 +1506,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

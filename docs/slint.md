@@ -495,6 +495,23 @@ tests green, and CLAUDE.md saying how it works.
    `draw-vectors` (64 rows to 18), steps Down over a block (9 to 13),
    jumps into one (it alone opens), and scrolls into `impl Vector` to see
    its line stick.
+
+   Semantic colours and inlay hints, drawn in the line. A hint takes room,
+   so from a line's first hint on every x and every column goes through
+   one walk of its characters and hints (`editor/inlays.rs`): the pieces,
+   the caret, a selection, a squiggle, a click, the popups. The caret at a
+   hint's column stands on the side of the code it is not about — before
+   `: f32`, after `sensor: ` — and `rusty_lsp::follow::hints`, moved out of
+   the old window with the semantic overlay (`rusty_edit::semantic`), moves
+   hints and colours through every edit by the same rule. Both are asked
+   for together a moment after typing stops and when the server says it
+   settled, around the view for a long file, and an answer about another
+   text is asked for again rather than drawn. Inlay hints are a switch in
+   Settings ▸ Editor. Found on the way: a relative project root on the
+   command line gave the server `file://examples/…`, refused as no file —
+   the root is made absolute now. The probe waits for rust-analyzer's
+   answer on `draw-vectors` (261 colours, 23 hints), clicks just past a
+   hint and lands on its column, and types there to see it carried along.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 

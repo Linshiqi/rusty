@@ -29,7 +29,13 @@ fn main() -> Result<(), slint::PlatformError> {
         std::process::exit(2);
     }
     let mut args = std::env::args().skip(1);
-    let root = args.next().map(std::path::PathBuf::from);
+    // Absolute, as every path the window keeps is: a relative root gave
+    // the language server `file://examples/…`, which it refuses as no file.
+    // Not canonicalised — on Windows that is a `\\?\` path, which tools
+    // handed it cannot append to.
+    let root = args
+        .next()
+        .map(|arg| std::path::absolute(&arg).unwrap_or_else(|_| arg.into()));
     let file = args.next();
 
     let saved = rusty_embed::config::workbench();

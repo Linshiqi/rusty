@@ -360,6 +360,19 @@ component SettingsPage inherits Rectangle {
             Group {
                 title: @tr("settings.editor.view");
                 Setting {
+                    label: @tr("settings.editor.inlay-hints");
+                    Switch {
+                        checked: Shell.view-hints;
+                        toggled => {
+                            Shell.set-view("hints", self.checked);
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                Setting {
                     label: @tr("settings.editor.minimap");
                     Switch {
                         checked: Shell.view-minimap;
