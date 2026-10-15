@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use rusty_i18n::t;
-use slint::{ComponentHandle, SharedString};
+use slint::SharedString;
 
 use super::{
     Change, Cursor, Kind, Surface,

@@ -81,6 +81,8 @@ pub const ALL: &[Action] = &[
     action("editor.fold-all", "context.editor-fold-all", None),
     action("editor.vim", "menu.view.vim", None),
     action("editor.split", "desk.split", Some("Ctrl+\\")),
+    // No key of its own, as in VS Code.
+    action("editor.detach", "desk.detach", None),
     action("update.check", "menu.help.check-updates", None),
     action("editor.unfold-all", "context.editor-unfold-all", None),
     action("nav.back", "menu.view.back", Some("Alt+ArrowLeft")),

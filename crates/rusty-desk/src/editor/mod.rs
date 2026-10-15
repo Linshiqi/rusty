@@ -21,6 +21,7 @@ mod document;
 mod find;
 mod finding;
 mod history;
+mod host;
 mod hover;
 mod indent;
 mod inlays;
@@ -55,7 +56,7 @@ use rusty_edit::{
 use slint::{ComponentHandle, ModelRc};
 
 use crate::{
-    AppWindow, Code, Find, language,
+    AppWindow, Code, Find, TornWindow, language,
     lsp::{Problems, Servers},
     work,
 };
@@ -63,12 +64,65 @@ use cursors::Cursor;
 use document::Change;
 pub use document::Document;
 use history::Kind;
+use host::{Host, Strong};
 use keymap::Command;
 pub use metrics::Metrics;
 pub use rows::Gutter;
 use rows::Rows;
 
 type Shared = Rc<RefCell<Option<Rc<RefCell<Document>>>>>;
+
+/// The open documents by path, shared by every surface: one file open in
+/// two views is one document.
+type Open = Rc<RefCell<HashMap<String, Rc<RefCell<Document>>>>>;
+
+/// Every surface the process has — the main window's, and one per window a
+/// tab was moved into — so that what one view does to a document the others
+/// showing it draw too, and an answer finds the surface that asked.
+#[derive(Default)]
+struct Views {
+    next: Cell<usize>,
+    all: RefCell<Vec<(usize, Weak<Surface>)>>,
+}
+
+impl Views {
+    fn join(&self, surface: Weak<Surface>) -> usize {
+        let id = self.next.get();
+        self.next.set(id + 1);
+        let mut all = self.all.borrow_mut();
+        all.retain(|(_, view)| view.strong_count() > 0);
+        all.push((id, surface));
+        id
+    }
+
+    fn live(&self) -> Vec<Rc<Surface>> {
+        self.all
+            .borrow()
+            .iter()
+            .filter_map(|(_, view)| view.upgrade())
+            .collect()
+    }
+
+    fn find(&self, id: usize) -> Option<Rc<Surface>> {
+        self.all
+            .borrow()
+            .iter()
+            .find(|(view, _)| *view == id)
+            .and_then(|(_, view)| view.upgrade())
+    }
+}
+
+/// What every surface shares with the others.
+struct Common {
+    files: Arc<Files>,
+    open: Open,
+    metrics: Rc<RefCell<Metrics>>,
+    gutter: Rc<RefCell<Gutter>>,
+    painting: Rc<RefCell<HashSet<String>>>,
+    servers: Rc<Servers>,
+    problems: Problems,
+    views: Rc<Views>,
+}
 
 /// Who is told after an edit, with the edited document's path.
 type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
@@ -79,6 +133,9 @@ type OnLens = RefCell<Option<Box<dyn Fn(rusty_edit::Runnable, String)>>>;
 /// Who applies a fix the hover card offered: the text's version, the
 /// server's answer, and which of its actions.
 type OnFix = RefCell<Option<Box<dyn Fn(u64, rusty_lsp::CodeActions, usize)>>>;
+/// Who does an action the view asked for by its id — a Ctrl+click's
+/// definition, Vim's `:w` — for the window the view is in.
+type OnAct = RefCell<Option<Box<dyn Fn(&str)>>>;
 
 /// A press being dragged: what the press itself selected — a point, a word
 /// or a line — which every move extends from.
@@ -113,8 +170,12 @@ const CLICK_SLOP: f32 = 4.0;
 pub struct Surface {
     /// Itself, for the timers that call back into it.
     this: Weak<Surface>,
+    /// Which of the process's surfaces this is: an answer from another
+    /// thread names it, since a surface cannot travel there.
+    id: usize,
+    views: Rc<Views>,
     files: Arc<Files>,
-    open: RefCell<HashMap<String, Rc<RefCell<Document>>>>,
+    open: Open,
     current: Shared,
     metrics: Rc<RefCell<Metrics>>,
     rows: Rc<Rows>,
@@ -127,11 +188,14 @@ pub struct Surface {
     on_lens: OnLens,
     /// Told which fix the hover card's click picked.
     on_fix: OnFix,
-    window: slint::Weak<AppWindow>,
+    /// Told what action the view asked for; the app's own when nobody is.
+    on_act: OnAct,
+    window: Host,
     on_edit: OnEdit,
     on_caret: OnCaret,
-    /// Paths with a repaint on its way: one at a time each.
-    painting: RefCell<HashSet<String>>,
+    /// Paths with a repaint on its way: one at a time each, whichever
+    /// surface asked for it.
+    painting: Rc<RefCell<HashSet<String>>>,
     drag: Cell<Option<Drag>>,
     press: Cell<Option<Press>>,
     /// The last line copied with nothing selected, which pastes as a line.
@@ -171,10 +235,50 @@ impl Surface {
         servers: Rc<Servers>,
         problems: Problems,
     ) -> Rc<Surface> {
+        let strong = Strong::Main(window.clone_strong());
+        let common = Common {
+            files,
+            open: Rc::default(),
+            metrics: Rc::new(RefCell::new(Metrics::measure(&strong))),
+            gutter: Rc::default(),
+            painting: Rc::default(),
+            servers,
+            problems,
+            views: Rc::default(),
+        };
+        Surface::build(&strong, Host::Main(window.as_weak()), common)
+    }
+
+    /// A surface for a window a tab was moved into, beside this one: the
+    /// same documents, servers, painting and margin, a view of its own.
+    pub fn beside(&self, window: &TornWindow) -> Rc<Surface> {
+        let strong = Strong::Torn(window.clone_strong());
+        let common = Common {
+            files: self.files.clone(),
+            open: self.open.clone(),
+            metrics: self.metrics.clone(),
+            gutter: self.gutter.clone(),
+            painting: self.painting.clone(),
+            servers: self.servers.clone(),
+            problems: self.problems.clone(),
+            views: self.views.clone(),
+        };
+        Surface::build(&strong, Host::Torn(window.as_weak()), common)
+    }
+
+    fn build(strong: &Strong, host: Host, common: Common) -> Rc<Surface> {
+        let Common {
+            files,
+            open,
+            metrics,
+            gutter,
+            painting,
+            servers,
+            problems,
+            views,
+        } = common;
         let current: Shared = Rc::default();
-        let metrics = Rc::new(RefCell::new(Metrics::measure(window)));
         let found: Rc<RefCell<find::Marks>> = Rc::default();
-        let gutter: Rc<RefCell<Gutter>> = Rc::default();
         let resting: Rc<RefCell<resting::Resting>> = Rc::default();
         let rows = Rc::new(Rows::new(
             current.clone(),
@@ -184,7 +288,7 @@ impl Surface {
             problems.clone(),
             gutter.clone(),
         ));
-        window
+        strong
             .global::<Code>()
             .set_rows(ModelRc::from(rows.clone()));
         let shade_doc: Shared = Rc::default();
@@ -196,13 +300,18 @@ impl Surface {
             problems.clone(),
             gutter.clone(),
         ));
-        window
-            .global::<crate::Shade>()
-            .set_rows(ModelRc::from(shade_rows.clone()));
+        // The other editor group is the main window's alone.
+        if let Strong::Main(window) = strong {
+            window
+                .global::<crate::Shade>()
+                .set_rows(ModelRc::from(shade_rows.clone()));
+        }
         let surface = Rc::new_cyclic(|this| Surface {
             this: this.clone(),
+            id: views.join(this.clone()),
+            views,
             files,
-            open: RefCell::default(),
+            open,
             current,
             metrics,
             rows,
@@ -210,10 +319,11 @@ impl Surface {
             on_breakpoint: RefCell::default(),
             on_lens: RefCell::default(),
             on_fix: RefCell::default(),
-            window: window.as_weak(),
+            on_act: RefCell::default(),
+            window: host,
             on_edit: RefCell::default(),
             on_caret: RefCell::default(),
-            painting: RefCell::default(),
+            painting,
             drag: Cell::new(None),
             press: Cell::new(None),
             copied_line: RefCell::default(),
@@ -236,8 +346,50 @@ impl Surface {
                 rows: shade_rows,
             },
         });
-        surface.wire(window);
+        surface.wire(strong);
         surface
+    }
+
+    /// Which surface this is, for an answer to find it by.
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// The surface `id`, while it is there: one in another window's, or
+    /// this one.
+    pub fn view(&self, id: usize) -> Option<Rc<Surface>> {
+        self.views.find(id)
+    }
+
+    /// The surface `id`, or this one when that one has gone: an answer that
+    /// must land somewhere — a repaint, which frees its document for the
+    /// next — lands here.
+    fn view_or_this(&self, id: usize) -> Rc<Surface> {
+        self.view(id)
+            .or_else(|| self.this.upgrade())
+            .expect("a surface answering is alive")
+    }
+
+    /// Every other surface still open.
+    fn others(&self) -> Vec<Rc<Surface>> {
+        self.views
+            .live()
+            .into_iter()
+            .filter(|view| view.id != self.id)
+            .collect()
+    }
+
+    /// Who does what the view asks for by an action's id.
+    pub fn on_act(&self, tell: impl Fn(&str) + 'static) {
+        *self.on_act.borrow_mut() = Some(Box::new(tell));
+    }
+
+    /// An action the view asked for: its window's to do.
+    fn act(&self, id: &str) {
+        match self.on_act.borrow().as_ref() {
+            Some(tell) => tell(id),
+            None => work::app().act(id),
+        }
     }
 
     pub fn on_edit(&self, tell: impl Fn(&str) + 'static) {
@@ -257,7 +409,7 @@ impl Surface {
         verdicts: std::collections::HashMap<String, rusty_edit::testrun::Verdict>,
     ) {
         self.gutter.borrow_mut().verdicts = verdicts;
-        self.rows.reset();
+        self.gutter_changed();
     }
 
     /// Where an example's `main` may be run from: not a root that is its own
@@ -282,9 +434,12 @@ impl Surface {
         self.gutter.clone()
     }
 
-    /// The margin changed: every row on screen is drawn again.
+    /// The margin changed: every row on screen is drawn again, in every
+    /// window, since the margin is every view's.
     pub fn gutter_changed(&self) {
-        self.rows.reset();
+        for view in self.views.live() {
+            view.rows.reset();
+        }
     }
 
     pub fn on_caret(&self, tell: impl Fn() + 'static) {
@@ -390,7 +545,7 @@ impl Surface {
             let path = doc.borrow().path.clone();
             self.servers.changed(&path, &doc.borrow().text);
             self.tell_edit(&path);
-            self.shade_follows(doc);
+            self.follows(doc, Some(change));
         }
     }
 
@@ -470,6 +625,14 @@ impl Surface {
         if self.open.borrow_mut().remove(path).is_some() {
             self.servers.closed(path);
         }
+        for other in self.others() {
+            other.let_go(path);
+        }
+        self.let_go(path);
+    }
+
+    /// `path` is no longer open: neither view of this surface shows it.
+    fn let_go(&self, path: &str) {
         let shaded = self
             .shade
             .doc
@@ -638,7 +801,7 @@ impl Surface {
 
     // ---- the view's callbacks --------------------------------------------
 
-    fn wire(self: &Rc<Self>, window: &AppWindow) {
+    fn wire(self: &Rc<Self>, window: &Strong) {
         self.wire_find(&window.global::<Find>());
         let code = window.global::<Code>();
         self.wire_hover(&code);
@@ -1112,7 +1275,10 @@ impl Surface {
         if !selected {
             self.set_cursors(vec![Cursor::caret(point)]);
         }
-        crate::work::app().editor_menu(at.0, at.1);
+        // The menu is the main window's; a window of its own has none yet.
+        if self.window.is_main() {
+            crate::work::app().editor_menu(at.0, at.1);
+        }
     }
 
     /// `held` is Shift, Alt and Ctrl (or Cmd).
@@ -1130,7 +1296,7 @@ impl Surface {
         // there first so the jump is about what was clicked.
         if kind == 0 && ctrl && !alt {
             self.set_cursors(vec![Cursor::caret(at)]);
-            crate::work::app().act("editor.definition");
+            self.act("editor.definition");
             return;
         }
         match kind {
@@ -1270,7 +1436,7 @@ impl Surface {
         self.cursors_moved();
         self.view_changed();
         self.analyse_soon();
-        self.shade_follows(doc);
+        self.follows(doc, Some(change));
     }
 
     /// The cursors moved (or the text under them changed): redraw the rows
@@ -1318,6 +1484,7 @@ impl Surface {
         self.find_follow_selection();
         self.show_caret();
         self.caret_rested();
+        self.cursors_follow(&doc);
     }
 
     /// Scroll so `at` is on screen.
@@ -1335,10 +1502,18 @@ impl Surface {
     }
 
     fn show_caret(&self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some((line, x)) = self.place_caret() else {
             return;
         };
-        let Some(doc) = self.doc() else { return };
+        self.scroll_to(line, x);
+        self.tell_caret();
+    }
+
+    /// The caret drawn where the cursor is, the view left where it is: the
+    /// line and the x it stands at.
+    fn place_caret(&self) -> Option<(usize, f32)> {
+        let window = self.window.upgrade()?;
+        let doc = self.doc()?;
         // In Vim's command modes the caret is a block on the character the
         // cursor stands on, which in visual mode is not the selection's head.
         let (line, x, block) = {
@@ -1356,8 +1531,7 @@ impl Surface {
         code.set_caret_x(x);
         code.set_block_caret(block.is_some());
         code.set_caret_width(block.unwrap_or(2.0));
-        self.scroll_to(line, x);
-        self.tell_caret();
+        Some((line, x))
     }
 
     fn scroll_to(&self, line: usize, x: f32) {
@@ -1499,6 +1673,7 @@ impl Surface {
             return;
         }
         let files = self.files.clone();
+        let asker = self.id;
         // The grammar is read off the name; a macro's expansion is named
         // after its macro, and what rust-analyzer expands it to is Rust.
         let asked = if rusty_edit::is_expansion(&path) {
@@ -1508,7 +1683,11 @@ impl Surface {
         };
         work::spawn(
             move || files.repaint(&asked, &text, base, stale),
-            move |app, repaint| app.editor().painted(&path, version, repaint),
+            move |app, repaint| {
+                app.editor()
+                    .view_or_this(asker)
+                    .painted(&path, version, repaint)
+            },
         );
     }
 
@@ -1528,7 +1707,7 @@ impl Surface {
             self.paint(&doc);
             return;
         }
-        self.shade_follows(&doc);
+        self.follows(&doc, None);
         let showing = self.doc().is_some_and(|current| Rc::ptr_eq(&current, &doc));
         if showing {
             self.rows.changed(from, from + count);

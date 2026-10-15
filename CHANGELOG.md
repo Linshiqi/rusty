@@ -23,7 +23,10 @@ panel, the terminal, the memory and crates panels, the assistant, the
 math toolbox, Markdown pages, and the plot, waves and signal instruments.
 The editor has folding, sticky scroll, the minimap, indent guides, inlay
 hints in the line, the compiler's colours, test lenses with their
-results, Vim keys, and two editor groups side by side (`Ctrl+\`).
+results, Vim keys, and two editor groups side by side (`Ctrl+\`). A
+tab moves into a window of its own — Move into New Window in the
+palette, or drag it beyond the window's edge — and the same file open in
+both windows is one document: type in either and both show it.
 Settings ▸ Editor turns the minimap, sticky scroll, hints and guides on
 and off. rusty opens on the project you had open, with its tabs as you
 left them, and tabs that share a name say which directory each is in.
@@ -60,7 +63,7 @@ where that stands. Each download's signature is published beside it as a
 declares, and the finder's `@` (this file's symbols) and `#` (the
 workspace's). On the board: importing a KiCad or Wokwi schematic or an
 LCSC part, tidying the sheet, and the live readings under the pointer.
-Elsewhere: File ▸ New window, a file or a commit in a window of its own,
+Elsewhere: File ▸ New window, a commit in a window of its own,
 pictures compared in the Git panel, a failed test's message on its line,
 choosing the terminal's shell (it starts PowerShell on Windows and your
 `$SHELL` elsewhere), moving the data directory, removing a project from

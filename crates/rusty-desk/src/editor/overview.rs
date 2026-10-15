@@ -13,7 +13,7 @@
 use std::cell::{Cell, RefCell};
 
 use rusty_edit::{Line, Span, Token, guides::TAB_SIZE, minimap, sticky};
-use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
 use super::{Document, Surface, rows};
 use crate::{Code, Theme};
@@ -129,7 +129,7 @@ impl Surface {
 
     /// The minimap's slider and its image, painted again only when what it
     /// shows changed.
-    fn minimap(&self, window: &crate::AppWindow, code: &Code, doc: &Document) {
+    fn minimap(&self, window: &super::host::Strong, code: &Code, doc: &Document) {
         let on = self.overview.minimap.get();
         code.set_minimap_on(on);
         if !on {

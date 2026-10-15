@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::AppWindow;
+use super::host::Strong;
 
 pub const TAB_COLUMNS: f32 = 4.0;
 
@@ -21,7 +21,7 @@ pub struct Metrics {
 impl Metrics {
     /// The ASCII advance, measured over a run so rounding in one glyph does
     /// not multiply down a long line.
-    pub fn measure(window: &AppWindow) -> Metrics {
+    pub fn measure(window: &Strong) -> Metrics {
         const RUN: usize = 64;
         let ascii = width_of(window, &"M".repeat(RUN)) / RUN as f32;
         Metrics {
@@ -33,7 +33,7 @@ impl Metrics {
     /// Measure every character of `text` not yet known — over a run, as the
     /// ASCII width is: a width measured once is rounded, and the rounding of
     /// one glyph was eight pixels by the end of a line of Chinese.
-    pub fn learn(&mut self, window: &AppWindow, text: &str) {
+    pub fn learn(&mut self, window: &Strong, text: &str) {
         const RUN: usize = 16;
         for ch in text.chars() {
             if !ch.is_ascii() && !self.wide.contains_key(&ch) {
@@ -103,7 +103,6 @@ impl Metrics {
     }
 }
 
-fn width_of(window: &AppWindow, text: &str) -> f32 {
-    window.set_probe_text(text.into());
-    window.get_probe_width()
+fn width_of(window: &Strong, text: &str) -> f32 {
+    window.probe_width(text)
 }

@@ -29,6 +29,9 @@ component TabStrip inherits Rectangle {
     in property <bool> splits;
     callback pick(string);
     callback close(string);
+    // A tab let go of, where in the window: beyond its edge is a window of
+    // its own (`src/app/torn.rs`).
+    callback dropped(string, length, length);
     height: 36px;
     background: Theme.window;
     HorizontalLayout {
@@ -86,6 +89,9 @@ component TabStrip inherits Rectangle {
                 pointer-event(event) => {
                     if (event.kind == PointerEventKind.up && event.button == PointerEventButton.middle) {
                         root.close(tab.id);
+                    }
+                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                        root.dropped(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                     }
                 }
             }
@@ -631,6 +637,9 @@ export component EditorArea inherits Rectangle {
                         close(id) => {
                             Shell.close-tab(id);
                         }
+                        dropped(id, x, y) => {
+                            Shell.tab-dropped(id, x, y);
+                        }
                     }
                     Rectangle {
                         code := CodeView {
@@ -689,6 +698,9 @@ export component EditorArea inherits Rectangle {
                         }
                         close(id) => {
                             Shell.shade-close(id);
+                        }
+                        dropped(id, x, y) => {
+                            Shell.tab-dropped(id, x, y);
                         }
                     }
                     Rectangle {

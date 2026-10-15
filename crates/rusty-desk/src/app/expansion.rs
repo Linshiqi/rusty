@@ -22,7 +22,7 @@ impl App {
     /// The macro call at the caret, expanded all the way down, beside the
     /// code; nothing to expand says so.
     pub(super) fn expand_macro(self: &Rc<Self>) {
-        let Some((path, line, col, draft)) = self.editor.caret_question() else {
+        let Some((path, line, col, draft)) = self.keyed().caret_question() else {
             return;
         };
         // rust-analyzer's own request, and a macro call is Rust's.
