@@ -625,7 +625,7 @@ mod tests {
         );
         assert!(
             board.symbols.iter().any(|s| s.id() == "Device:LED"),
-            "with its symbol resolved for the frontend"
+            "with its symbol resolved"
         );
         assert!(
             plan.library.iter().any(|s| s.id() == "rusty:Pot"),

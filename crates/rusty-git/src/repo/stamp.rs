@@ -107,10 +107,6 @@ pub fn stamp(root: &Path) -> Result<GitStamp> {
     })
 }
 
-/// The largest integer a JavaScript number holds exactly, which is as wide
-/// as a stamp can be and still cross the wire — see [`GitStamp`].
-pub(super) const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
-
 /// FNV-1a over names, sizes and modification times.
 struct Fnv(u64);
 
@@ -119,10 +115,8 @@ impl Fnv {
         Fnv(0xcbf2_9ce4_8422_2325)
     }
 
-    /// The hash folded to 53 bits: the top eleven are mixed into the rest
-    /// rather than dropped.
     fn finish(&self) -> u64 {
-        (self.0 ^ (self.0 >> 53)) & MAX_SAFE_INTEGER
+        self.0
     }
 
     fn bytes(&mut self, bytes: &[u8]) {

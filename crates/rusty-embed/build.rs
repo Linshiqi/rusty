@@ -4,8 +4,8 @@
 //! order. Adding a template is adding a directory; no code names it.
 //!
 //! Two files in `OUT_DIR`: `templates.rs` (the files, through
-//! `include_str!`, for the backend) and `playgrounds.rs` (the list, which
-//! the wasm model reads too, since the window offers the same list).
+//! `include_str!`, which `playground` writes out) and `playgrounds.rs` (the
+//! list, which `model::playground` names, since the window offers it too).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

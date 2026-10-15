@@ -1,8 +1,8 @@
 //! Turning a stored provider profile into a live client, and checking one.
 //!
-//! The configuration *types* and the preset table live in [`crate::model`] so
-//! the settings screen can render them in wasm before any backend call. What
-//! remains here needs a socket.
+//! The configuration *types* and the preset table live in [`crate::model`]:
+//! they are plain data, which the settings page reads without building a
+//! client. What remains here needs a socket.
 //!
 //! The key is *passed in*, resolved by the host from the credential store. A
 //! keychain read is blocking IO and the host is the one with a blocking thread

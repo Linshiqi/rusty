@@ -8,11 +8,11 @@
 //! lane whose commit turns out to be one another lane also reached has
 //! converged, and is closed at that row.
 //!
-//! Computed here, on the backend, rather than in the view: the frontend
-//! draws rows and lines and never decides where they go, so the lane a commit
-//! sits in is one fact rather than two opinions. The whole thing is pure and
-//! the shapes that go wrong — a merge, two branches converging on one
-//! commit, a root — are each a test.
+//! Computed here rather than in the view: the window draws rows and lines
+//! and never decides where they go, so the lane a commit sits in is one fact
+//! rather than two opinions. The whole thing is pure and the shapes that go
+//! wrong — a merge, two branches converging on one commit, a root — are each
+//! a test.
 
 use crate::model::{Commit, Edge, GraphRow, History};
 

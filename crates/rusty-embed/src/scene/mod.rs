@@ -2,10 +2,10 @@
 //! shapes turned into paths sorted back to front. Pure and tested; the math
 //! toolbox's view only puts the paths on the page.
 //!
-//! No 3-D library: there is no npm here, and a WebGL context for a few
-//! dozen lines is more machinery than the lines. SVG draws them crisply at
-//! any zoom, takes the theme's colours through classes, and a path per
-//! shape is few enough that painting back to front is the whole of depth.
+//! No 3-D library: a GPU scene for a few dozen lines is more machinery than
+//! the lines. SVG path data draws them crisply at any zoom, each piece names
+//! an `Ink` the window colours from its theme, and a path per shape is few
+//! enough that painting back to front is the whole of depth.
 
 pub mod math;
 pub mod model;

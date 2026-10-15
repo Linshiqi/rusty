@@ -13,8 +13,8 @@
 //! time, encoded into the part's register block sample by sample.
 //!
 //! Pure, and every choice a run makes is a function here — the rate, the
-//! loop, the seed — so the frontend renders the signal it draws with exactly
-//! what the backend hands the emulator.
+//! loop, the seed — so the lab renders the signal the window draws with
+//! exactly what a run hands the emulator.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -119,8 +119,8 @@ pub fn rate_at(part: &Instance, key: &str, default: u32) -> Result<u32, String> 
 /// property the signal is kept in, so two generators given one signal do
 /// not hiss in unison and a sensor's three axes are not one axis three
 /// times over — mixed with the part's `seed`, when it states one, for
-/// another draw of the same noise. The frontend renders with the same
-/// seed, so the signal the panel draws is the one the firmware is fed.
+/// another draw of the same noise. The lab renders with the same seed, so
+/// the signal the panel draws is the one the firmware is fed.
 pub fn seed_of(part: &Instance, key: &str) -> u64 {
     // FNV-1a: rusty's own, so a seed means the same noise after an upgrade.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;

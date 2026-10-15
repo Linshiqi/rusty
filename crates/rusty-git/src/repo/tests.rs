@@ -2,7 +2,6 @@
 
 use std::process::{Command, Output};
 
-use super::stamp::MAX_SAFE_INTEGER;
 use super::*;
 
 /// A real repository, made for the test: two commits on `main`, a
@@ -240,27 +239,6 @@ fn a_local_branch_with_a_slash_is_a_branch_and_not_a_remote() {
         .expect("listed");
     assert!(!slashed.remote);
     assert_eq!(slashed.remote_name, None);
-}
-
-/// The stamp crosses the wire as JSON numbers, which JavaScript reads as
-/// doubles. A part wider than 53 bits was refused by the frontend, and
-/// every probe failed without a word while this crate's tests passed.
-#[test]
-fn every_part_of_the_stamp_fits_in_a_javascript_number() {
-    let Some(dir) = repository() else {
-        eprintln!("skipping: git is not available on this machine");
-        return;
-    };
-    let stamp = stamp(dir.path()).expect("stamp");
-    for part in [
-        stamp.head,
-        stamp.refs,
-        stamp.index,
-        stamp.stash,
-        stamp.config,
-    ] {
-        assert!(part <= MAX_SAFE_INTEGER, "{part} is past 2^53 - 1");
-    }
 }
 
 /// The stamp moves in the part that changed and only there: staging

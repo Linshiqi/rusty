@@ -271,9 +271,9 @@ fn live_rows_read_the_window_and_telemetry_wins() {
     assert!(bare["live"].as_str().unwrap().starts_with("none"));
 }
 
-/// The window's snapshot crosses to `ai_ask` as JSON — Tauri writes the
-/// channel map as an object, and each attitude's parts by name — and has
-/// to arrive as the values the panel read.
+/// The window's snapshot serializes with its channel map as an object and
+/// each attitude's parts by name, and reads back as the values the panel
+/// read.
 #[test]
 fn the_window_snapshot_survives_the_wire() {
     let mut live = Live::default();
@@ -286,7 +286,7 @@ fn the_window_snapshot_survives_the_wire() {
     assert_eq!(wire["truthRate"]["y"], -0.2);
     assert_eq!(serde_json::from_value::<Live>(wire).unwrap(), live);
 
-    // A window with no plant running sends the channels alone.
+    // With no plant running, a snapshot is the channels alone.
     let bare: Live = serde_json::from_value(json!({ "channels": { "gx": 1.5 } })).unwrap();
     assert_eq!(bare.channels["gx"], 1.5);
     assert!(bare.truth.is_none() && bare.truth_rate.is_none());

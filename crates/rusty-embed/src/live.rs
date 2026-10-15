@@ -231,7 +231,7 @@ impl Live {
     /// **The one place the two halves meet**, so the example that proves it
     /// and the app that ships it cannot drift about what the coupling
     /// means — the same rule that put the serial protocol's reading in one
-    /// `absorb` after telemetry worked in the simulator and vanished on
+    /// place after telemetry worked in the simulator and vanished on
     /// hardware.
     ///
     /// A `[rusty:gpio@…]` line is the firmware driving a pin, at the

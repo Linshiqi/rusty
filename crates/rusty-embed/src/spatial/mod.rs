@@ -29,7 +29,8 @@ mod frame;
 pub mod instrument;
 mod rotation;
 pub mod sheet;
-// The sheet in the project, read and written: files, so the backend's.
+// The sheet in the project, read and written: the one part of this module
+// that touches files.
 pub mod sheet_file;
 mod vector;
 

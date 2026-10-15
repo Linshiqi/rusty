@@ -3,7 +3,7 @@
 //! The UI thread never waits on the disk, a process, the network or a
 //! language server. What would make it wait runs here, on a thread of its
 //! own, and the answer is handed to the app on the UI thread through
-//! Slint's event loop — the whole of what the Tauri command layer did.
+//! Slint's event loop.
 
 use std::{cell::OnceCell, rc::Rc};
 

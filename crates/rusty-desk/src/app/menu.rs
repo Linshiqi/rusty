@@ -1,6 +1,6 @@
 //! A right-click menu: one for the window, filled by whichever surface was
-//! clicked, which also hears what was picked. The browser's own menu was
-//! always a bug in the old window; here there is none unless one is made.
+//! clicked, which also hears what was picked. There is no menu but the ones
+//! made here.
 
 use std::rc::Rc;
 

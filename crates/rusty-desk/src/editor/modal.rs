@@ -1,8 +1,8 @@
 //! Vim's keys in the code. The machine is `rusty_edit::vim` — a pure
-//! function of the key, the text and the cursor, under its own tests, one
-//! copy for both windows; this feeds it the keys and carries out what it
-//! says: the new text, where the cursor goes, what is selected, and the few
-//! things only the editor can do (save, find, scroll, undo).
+//! function of the key, the text and the cursor, under its own tests; this
+//! feeds it the keys and carries out what it says: the new text, where the
+//! cursor goes, what is selected, and the few things only the editor can do
+//! (save, find, scroll, undo).
 //!
 //! **The precedence is the whole design.** Normal and visual mode own the
 //! unmodified keys and five chords; insert mode claims only Escape, so
@@ -355,10 +355,10 @@ fn byte_of(text: &str, scalar: usize) -> usize {
         .map_or(text.len(), |(at, _)| at)
 }
 
-/// A key as the machine names it: a character, or the browser's name for a
-/// key that types none — what it was written against. `None` for a key it
-/// has no name for (a modifier alone, a function key), which is left to the
-/// editor and the window.
+/// A key as the machine names it: a character, or for a key that types none
+/// the `KeyboardEvent.key` name it was written against (`ArrowUp`,
+/// `Escape`). `None` for a key it has no name for (a modifier alone, a
+/// function key), which is left to the editor and the window.
 fn key_name(text: &str) -> Option<String> {
     use slint::platform::Key as K;
     let ch = text.chars().next()?;

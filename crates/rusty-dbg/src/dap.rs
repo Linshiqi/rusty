@@ -99,7 +99,7 @@ pub struct DapLaunch {
     /// Passed in rather than placed afterwards, because DAP only accepts
     /// breakpoints between `initialized` and `configurationDone` — after that
     /// the program is already running, and a breakpoint placed then is one the
-    /// test may have run past. The frontend holds the list, so it sends it.
+    /// test may have run past. The window holds the list, so it sends it.
     pub breakpoints: Vec<(String, u32)>,
     /// A board through probe-rs rather than a program on this machine.
     pub board: Option<Board>,

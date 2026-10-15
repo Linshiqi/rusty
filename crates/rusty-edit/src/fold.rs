@@ -1,24 +1,21 @@
 //! Code folding: which regions can collapse, and what the editor shows when
 //! they do.
 //!
-//! The whole difficulty of folding in this editor is one sentence: **the text
-//! on screen stops being the text in the file.** The editing surface is a
-//! transparent `<textarea>` over a highlighted `<pre>`, and they line up glyph
-//! for glyph — so hiding a region means removing it from the textarea too, and
-//! from that moment the caret, the selection, every diagnostic squiggle and
-//! every overlay is positioned in a coordinate system that is not the file's.
+//! The whole difficulty of folding is one sentence: **the rows on screen stop
+//! being the lines in the file.** Once a region is hidden, the caret, the
+//! selection, every diagnostic squiggle and every overlay stands on a row
+//! whose number is not its line's.
 //!
 //! So the mapping lives here, in one place, and it is pure:
 //!
 //! - [`regions`] says what *can* fold, from indentation alone.
-//! - [`Folded`] is a set of collapsed regions and the two conversions
-//!   ([`Folded::view_of_doc`], [`Folded::doc_of_view`]) everything that draws
-//!   must go through.
-//! - [`Folded::view_text`] is what the textarea holds, and [`splice`] turns an
-//!   edit made against that text back into an edit against the file.
+//! - [`Folded`] is a set of collapsed regions and the conversions
+//!   ([`Folded::row_for`], [`Folded::doc_of_view`], [`Folded::rows`])
+//!   everything that draws must go through, carried across edits by
+//!   [`Folded::follow`].
 //!
-//! Model-side and IO-free, so the frontend can ask these questions about the
-//! draft it is holding rather than about the copy the backend last read.
+//! IO-free, so the editor asks these questions about the draft it is holding
+//! rather than about the copy on disk.
 //!
 //! **Indentation, not syntax.** VSCode's default folding is indentation-based
 //! for the same reason: a file mid-edit does not parse, and a fold arrow that
@@ -94,11 +91,6 @@ pub fn regions(text: &str) -> Vec<Region> {
     close(&mut open, 0, last_content);
     found.sort_unstable();
     found
-}
-
-/// The region whose header is `line`, if any.
-pub fn region_at(text: &str, line: u32) -> Option<Region> {
-    regions(text).into_iter().find(|r| r.header == line)
 }
 
 /// Which regions are currently collapsed.
@@ -182,13 +174,11 @@ impl Folded {
         (0..total).filter(|line| !self.hides(*line)).collect()
     }
 
-    /// Where a document line is drawn, or `None` when it is hidden.
-    ///
-    /// Everything that positions itself by line — a squiggle, the caret, the
-    /// completion popup — has to come through here. A diagnostic drawn at its
-    /// document line while the text above it is folded lands on somebody
-    /// else's code, and a squiggle on the wrong line is worse than none.
-    pub fn view_of_doc(&self, line: u32) -> Option<u32> {
+    /// Where a document line is drawn, or `None` when it is hidden. The
+    /// tests' statement of the mapping, which [`Folded::row_for`] and
+    /// [`Folded::doc_of_view`] are held to.
+    #[cfg(test)]
+    fn view_of_doc(&self, line: u32) -> Option<u32> {
         if self.hides(line) {
             return None;
         }
@@ -239,34 +229,10 @@ impl Folded {
             .sum()
     }
 
-    /// What the textarea holds: the visible lines, joined.
-    ///
-    /// A trailing newline in the document is preserved, because the textarea's
-    /// value is compared against this to detect edits and a phantom newline
-    /// would read as one.
-    pub fn view_text(&self, text: &str) -> String {
-        if self.is_empty() {
-            return text.to_string();
-        }
-        let lines: Vec<&str> = text.lines().collect();
-        let kept: Vec<&str> = lines
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !self.hides(*index as u32))
-            .map(|(_, line)| *line)
-            .collect();
-        let mut out = kept.join("\n");
-        if text.ends_with('\n') {
-            out.push('\n');
-        }
-        out
-    }
-
     /// Drop folds the given document line range disturbed, and shift the rest.
     ///
-    /// Carry the folds across an edit made somewhere else — in the other view
-    /// of the same file — that replaced document lines `from..to` and moved
-    /// everything below them by `delta`. A fold the edit reached into opens,
+    /// Carry the folds across an edit that replaced document lines
+    /// `from..to` and moved everything below them by `delta`. A fold the edit reached into opens,
     /// since what it hid is not what it hides now; one wholly below moves with
     /// its lines, and one wholly above stays.
     pub fn follow(&mut self, from: u32, to: u32, delta: i64) {
@@ -278,143 +244,6 @@ impl Folded {
             }
         }
     }
-
-    /// Called after an edit. A fold whose hidden body was inside the replaced
-    /// range no longer describes anything, and keeping it would hide whatever
-    /// happens to be at those line numbers now.
-    fn adjust(&mut self, from_line: u32, to_line: u32, delta: i64) {
-        self.regions
-            .retain(|r| r.last < from_line || r.header > to_line);
-        for region in &mut self.regions {
-            if region.header > to_line {
-                region.header = (i64::from(region.header) + delta) as u32;
-                region.last = (i64::from(region.last) + delta) as u32;
-            }
-        }
-    }
-}
-
-/// Turn an edit made against the folded view back into the document.
-///
-/// The textarea only ever holds [`Folded::view_text`], so what comes out of an
-/// input event is the *view* after the edit. This finds what changed by common
-/// prefix and suffix — the same technique the undo history uses to place the
-/// caret — maps that span onto the document, and splices.
-///
-/// Deleting a selection that spanned a folded region deletes the hidden lines
-/// too, which is what every editor does and what the mapping produces for
-/// free: the document span between the two visible endpoints contains them.
-pub fn splice(doc: &str, folds: &Folded, old_view: &str, new_view: &str) -> (String, Folded) {
-    let mut folds = folds.clone();
-    if old_view == new_view {
-        return (doc.to_string(), folds);
-    }
-    if folds.is_empty() {
-        return (new_view.to_string(), folds);
-    }
-
-    let prefix = common_prefix(old_view, new_view);
-    let suffix = common_suffix(&old_view[prefix..], &new_view[prefix..]);
-    let old_end = old_view.len() - suffix;
-    let new_end = new_view.len() - suffix;
-
-    let from = doc_offset(doc, &folds, prefix);
-    let to = doc_offset(doc, &folds, old_end);
-
-    let mut out = String::with_capacity(doc.len() + new_view.len());
-    out.push_str(&doc[..from]);
-    out.push_str(&new_view[prefix..new_end]);
-    out.push_str(&doc[to..]);
-
-    let from_line = line_of(doc, from);
-    let to_line = line_of(doc, to);
-    let removed = doc[from..to].matches('\n').count() as i64;
-    let added = new_view[prefix..new_end].matches('\n').count() as i64;
-    folds.adjust(from_line, to_line, added - removed);
-    (out, folds)
-}
-
-/// The document byte offset that view byte offset `view` names.
-///
-/// One pass over the document's lines, each carrying its *own* terminator's
-/// length. The view is what [`Folded::view_text`] built — `lines()` joined
-/// with `\n` — so a visible line costs `content + 1` view bytes whatever the
-/// document's line ending is, while the document advances by what is really
-/// there. Counting `len + 1` for the document too put every splice in a CRLF
-/// file one byte early per preceding line, and re-walking `lines()` for each
-/// line made the arithmetic quadratic in the file on every keystroke.
-fn doc_offset(doc: &str, folds: &Folded, view: usize) -> usize {
-    let mut remaining = view;
-    let mut offset = 0usize;
-    for (line, raw) in doc.split_inclusive('\n').enumerate() {
-        let content = line_content(raw);
-        if folds.hides(line as u32) {
-            offset += raw.len();
-            continue;
-        }
-        if remaining <= content.len() {
-            return offset + remaining;
-        }
-        // The `\n` the view puts after this line costs one view byte.
-        remaining -= content.len() + 1;
-        offset += raw.len();
-    }
-    doc.len()
-}
-
-/// A line as `str::lines` would yield it: the terminator — `\n`, or `\r\n` —
-/// stripped, and nothing else. Both walkers must agree on what a line is,
-/// or the two texts drift apart by one byte per CRLF.
-fn line_content(raw: &str) -> &str {
-    let content = raw.strip_suffix('\n').unwrap_or(raw);
-    if raw.ends_with('\n') {
-        content.strip_suffix('\r').unwrap_or(content)
-    } else {
-        content
-    }
-}
-
-fn line_of(text: &str, offset: usize) -> u32 {
-    text[..offset.min(text.len())].matches('\n').count() as u32
-}
-
-/// Bytes shared at the start, never splitting a character.
-///
-/// Equal bytes up to `i` do not make `i` a boundary in either string — the
-/// differing byte decides. `中` and `世` share two of their three bytes, so
-/// replacing one with the other left the prefix mid-character and the slice
-/// that followed panicked, in the handler that runs on every keystroke under
-/// a fold. The same back-up `positions::content_change` does in the LSP
-/// client, for the same reason.
-fn common_prefix(a: &str, b: &str) -> usize {
-    let mut i = a
-        .as_bytes()
-        .iter()
-        .zip(b.as_bytes())
-        .take_while(|(x, y)| x == y)
-        .count();
-    while !(a.is_char_boundary(i) && b.is_char_boundary(i)) {
-        i -= 1;
-    }
-    i
-}
-
-/// Bytes shared at the end, never overlapping the prefix already taken and
-/// never splitting a character.
-fn common_suffix(a: &str, b: &str) -> usize {
-    let mut i = 0;
-    let (ab, bb) = (a.as_bytes(), b.as_bytes());
-    while i < ab.len()
-        && i < bb.len()
-        && ab[ab.len() - 1 - i] == bb[bb.len() - 1 - i]
-        // A byte boundary in both, or the splice cuts a character in half and
-        // the result is not valid UTF-8.
-        && a.is_char_boundary(a.len() - 1 - i)
-        && b.is_char_boundary(b.len() - 1 - i)
-    {
-        i += 1;
-    }
-    i
 }
 
 #[cfg(test)]
@@ -482,29 +311,6 @@ fn other() {
         assert!(!folds.hides(6));
     }
 
-    #[test]
-    fn the_view_text_is_the_visible_lines() {
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 5 });
-        assert_eq!(
-            folds.view_text(RUST),
-            "fn main() {\n\nfn other() {\n    ok();\n}\n"
-        );
-    }
-
-    /// The document's own trailing newline must survive, or every fold looks
-    /// like an edit that removed one.
-    #[test]
-    fn a_trailing_newline_survives_folding() {
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 5 });
-        assert!(folds.view_text(RUST).ends_with('\n'));
-        let no_newline = "fn f() {\n    a();\n}";
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 2 });
-        assert_eq!(folds.view_text(no_newline), "fn f() {");
-    }
-
     /// The conversion every overlay depends on. A squiggle drawn at its
     /// document line while text above it is folded lands on somebody else's
     /// code.
@@ -562,111 +368,6 @@ fn other() {
         folds.fold(Region { header: 2, last: 4 });
         folds.fold(Region { header: 0, last: 5 });
         assert_eq!(folds.regions(), &[Region { header: 0, last: 5 }]);
-    }
-
-    #[test]
-    fn typing_in_visible_text_lands_in_the_document() {
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 5 });
-        let view = folds.view_text(RUST);
-        let edited = view.replace("    ok();", "    ok(); // done");
-        let (doc, _) = splice(RUST, &folds, &view, &edited);
-        assert!(doc.contains("    ok(); // done"));
-        assert!(
-            doc.contains("println!(\"hi\");"),
-            "the folded body must survive: {doc}"
-        );
-    }
-
-    /// The line count changing is the case that breaks a naive mapping.
-    #[test]
-    fn adding_a_line_below_a_fold_keeps_the_fold_over_the_same_code() {
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 7, last: 9 });
-        let view = folds.view_text(RUST);
-        let edited = view.replace("fn main() {", "fn main() {\n    // new");
-        let (doc, folds) = splice(RUST, &folds, &view, &edited);
-        assert_eq!(
-            folds.regions(),
-            &[Region {
-                header: 8,
-                last: 10
-            }]
-        );
-        let lines: Vec<&str> = doc.lines().collect();
-        assert_eq!(lines[8], "fn other() {");
-    }
-
-    /// A fold whose body was edited no longer describes anything, and keeping
-    /// it would hide whatever now sits at those line numbers.
-    #[test]
-    fn an_edit_through_a_fold_drops_it() {
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 5 });
-        let view = folds.view_text(RUST);
-        // Select from inside the header line through the line after the fold
-        // and delete — the folded body goes with it, as in every editor.
-        let edited = view.replacen("fn main() {\n\nfn other", "fn gone", 1);
-        let (doc, folds) = splice(RUST, &folds, &view, &edited);
-        assert!(folds.is_empty(), "the fold cannot survive its own deletion");
-        assert!(!doc.contains("println!"), "the hidden body goes too: {doc}");
-        assert!(doc.contains("fn gone"));
-    }
-
-    #[test]
-    fn an_unfolded_document_splices_to_itself() {
-        let folds = Folded::default();
-        let (doc, _) = splice(RUST, &folds, RUST, "changed\n");
-        assert_eq!(doc, "changed\n");
-    }
-
-    /// Multibyte text must not be cut in half by the prefix/suffix scan.
-    #[test]
-    fn a_cjk_comment_survives_an_edit_under_a_fold() {
-        let text = "fn f() {\n    // 中文注释\n}\nfn g() {\n    ok();\n}\n";
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 2 });
-        let view = folds.view_text(text);
-        let edited = view.replace("    ok();", "    ok2();");
-        let (doc, _) = splice(text, &folds, &view, &edited);
-        assert!(doc.contains("// 中文注释"), "{doc}");
-        assert!(doc.contains("ok2();"));
-    }
-
-    /// `中` (E4 B8 AD) and `世` (E4 B8 96) share their first two bytes, so a
-    /// byte-wise common prefix stops *inside* the character. The suffix scan
-    /// guarded that boundary; the prefix scan did not, and the slice after
-    /// it panicked — in the input handler, under a fold, killing the app.
-    #[test]
-    fn replacing_one_cjk_character_with_a_similar_one_does_not_split_it() {
-        let text = "fn f() {\n    a();\n}\nlet s = \"中\";\n";
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 1 });
-        let view = folds.view_text(text);
-        assert_eq!(view, "fn f() {\n}\nlet s = \"中\";\n");
-        let edited = view.replace('中', "世");
-        let (doc, _) = splice(text, &folds, &view, &edited);
-        assert_eq!(doc, "fn f() {\n    a();\n}\nlet s = \"世\";\n");
-    }
-
-    /// The view is `lines()` joined with `\n`; the document may be CRLF. A
-    /// mapping that charged the document one byte per line ending landed the
-    /// splice one byte early for every CRLF line above it — three lines up,
-    /// the edit went into the middle of `\r\n`.
-    #[test]
-    fn an_edit_under_a_fold_lands_correctly_in_a_crlf_document() {
-        let text = "fn f() {\r\n    // 中文注释\r\n}\r\nfn g() {\r\n    ok();\r\n}\r\n";
-        let mut folds = Folded::default();
-        folds.fold(Region { header: 0, last: 2 });
-        let view = folds.view_text(text);
-        assert_eq!(view, "fn f() {\nfn g() {\n    ok();\n}\n");
-        let edited = view.replace("    ok();", "    ok2();");
-        let (doc, folds) = splice(text, &folds, &view, &edited);
-        assert_eq!(
-            doc, "fn f() {\r\n    // 中文注释\r\n}\r\nfn g() {\r\n    ok2();\r\n}\r\n",
-            "only the edited line changes, and every CRLF survives",
-        );
-        assert_eq!(folds.regions(), &[Region { header: 0, last: 2 }]);
     }
 
     /// An error inside a collapsed function has to mark the collapsed line —
@@ -807,7 +508,8 @@ fn other() {
         let mut folds = Folded::default();
         folds.fold(Region { header: 0, last: 5 });
         folds.unfold(0);
-        assert_eq!(folds.view_text(RUST), RUST);
+        assert!(folds.is_empty());
+        assert_eq!(folds.rows(11), 11);
         assert_eq!(folds.view_of_doc(3), Some(3));
     }
 }

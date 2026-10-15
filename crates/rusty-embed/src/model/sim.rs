@@ -9,7 +9,7 @@ use super::{CommandPlan, Emulation, Sheet, Symbol};
 /// that a hang or a silence is not blamed on the firmware.
 ///
 /// A stable `kind` beside the English, as a `Problem` carries one: the
-/// frontend says it in the reader's language, the CLI prints the English.
+/// window says it in the reader's language, the CLI prints the English.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimLimit {
@@ -234,12 +234,12 @@ impl Drive {
     }
 }
 
-/// Everything the frontend needs to attach a debugger to a frozen boot.
+/// Everything the window needs to attach a debugger to a frozen boot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimDebug {
     /// The full command line to type into the terminal: gdb, the ELF, and
-    /// `target remote` — composed here so the frontend never builds paths.
+    /// `target remote` — composed here so the window never builds paths.
     /// Kept for the terminal path, which is still the way to reach gdb's
     /// own REPL for anything the panel does not model.
     pub gdb_command: String,

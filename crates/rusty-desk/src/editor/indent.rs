@@ -1,13 +1,13 @@
 //! Tab and Shift+Tab over a selection: the lines it touches, moved a level.
 //!
-//! A textarea's Tab moves the focus, and the editor's typed four spaces —
-//! over whatever was selected, so two lines picked out to be pushed in a
-//! level were replaced by the indentation meant for them. VS Code's rule is
-//! the one here (`TypeOperations.tab`, and `outdentLines` for Shift+Tab):
+//! Four spaces typed over whatever is selected would replace two lines
+//! picked out to be pushed in a level with the indentation meant for them.
+//! VS Code's rule is the one here (`TypeOperations.tab`, and `outdentLines`
+//! for Shift+Tab):
 //!
 //! - **Tab** with a selection that reaches more than one line, or holds the
 //!   whole of one, indents every line it touches. A selection inside one
-//!   line is typed over, and a caret types, as before.
+//!   line is typed over, and a caret types four spaces.
 //! - **Shift+Tab** takes a level off every line the selection touches, or
 //!   off the caret's line.
 //!
@@ -17,8 +17,7 @@
 //! line is not given indentation to carry. The selection keeps what it held.
 //!
 //! Pure functions over the document and byte offsets, returning the one
-//! [`Edit`] that `apply_edit` puts through the same record / echo /
-//! `set_buffer` path as every other write.
+//! [`Edit`], which reaches the document the way every other write does.
 
 use super::metrics::TAB_COLUMNS as TAB_SIZE;
 use super::pairs::Edit;

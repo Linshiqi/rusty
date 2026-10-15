@@ -1,6 +1,6 @@
 //! Answers that change text: completions and the import an accepted one
 //! brings, quick fixes and refactorings, renames — and the writing of edits
-//! that land in files other than the one being edited, which the frontend
+//! that land in files other than the one being edited, which the editor
 //! holds no buffer for.
 
 use std::{
@@ -76,7 +76,7 @@ impl Kept {
 
 impl LspClient {
     /// What could complete at this position. Columns are scalars, as
-    /// everywhere on the frontend side.
+    /// everywhere on the editor's side.
     pub fn completion(&self, path: &str, line: u32, col: u32) -> Result<CompletionList> {
         let result = self.shared.request(
             "textDocument/completion",
@@ -229,7 +229,7 @@ impl LspClient {
 
     /// The part of an accepted fix that lands in other files, written there:
     /// the `index`th fix of answer `reply` for `path`, less its edits to
-    /// `path` itself, which the frontend has already spliced into its own
+    /// `path` itself, which the editor has already spliced into its own
     /// buffer. Written the way a rename is, and answering with the files
     /// that changed.
     ///

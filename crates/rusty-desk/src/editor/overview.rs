@@ -4,7 +4,7 @@
 //! they are on screen, folds and all, and are worked out again whenever the
 //! view moves, the text changes or a painting lands
 //! ([`Surface::view_changed`]); the arithmetic is `rusty_edit::sticky` and
-//! `rusty_edit::minimap`, one copy for both windows.
+//! `rusty_edit::minimap`.
 //!
 //! The minimap is an image painted here, two pixels a row and one a
 //! character, and only for the rows it shows: drawn as elements, a file of

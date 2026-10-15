@@ -3,9 +3,8 @@
 //! `git` speaks unified diff and nothing else; a side-by-side view is a
 //! *reading* of that text, not a second thing to ask for. The reading is done
 //! here, once, pure and under tests, and the view only decides what a row
-//! looks like. Pure so it compiles to wasm — the frontend does the reading as
-//! the patch arrives — and so the pairing rules are tests rather than
-//! something discovered by scrolling.
+//! looks like. Pure, so the pairing rules are tests rather than something
+//! discovered by scrolling.
 //!
 //! The pairing follows Fork: within a hunk, a run of removed lines and the run
 //! of added lines that follows it are laid side by side index for index, and

@@ -194,8 +194,8 @@ impl Default for ScanOptions {
     }
 }
 
-/// A scan: the report the frontend draws, and the paths behind its stale
-/// numbers, which only [`sweep`](fn@sweep) reads.
+/// A scan: the report the Disk section draws, and the paths behind its
+/// stale numbers, which only [`sweep`](fn@sweep) reads.
 pub struct Scan {
     pub report: DiskReport,
     stale: Vec<Stale>,

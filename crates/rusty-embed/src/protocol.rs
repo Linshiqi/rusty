@@ -4,12 +4,12 @@
 //! (`[rusty:gpio] 26=1,27=0`) and what it wants shown (`[rusty:disp] hello`);
 //! the panel injects presses (`B14=1`) and knob positions (`P34=128`) into
 //! the same serial line. Parsing lives here rather than in `model` because
-//! the wire types describe *what crosses the IPC boundary*, and this
-//! describes what crosses the *serial* one — a different contract, with a
-//! different audience: anyone writing firmware for the simulator.
+//! the model types are rusty's own, and this describes what crosses the
+//! *serial* line — a different contract, with a different audience: anyone
+//! writing firmware for the simulator.
 //!
-//! Compiled unconditionally: the frontend parses these lines as they stream
-//! past, so nothing here may touch IO.
+//! Nothing here may touch IO: the window parses these lines as they stream
+//! past.
 
 /// One `[rusty:gpio]` line, parsed: which pins changed, and — when the
 /// firmware stamped the line — the moment on its own clock.
@@ -440,8 +440,8 @@ pub fn parse_display_report(line: &str) -> Option<String> {
 pub fn parse_pin_source(line: &str) -> Option<PinSource> {
     let rest = line.trim().strip_prefix("[rusty:pins]")?;
     // The first word decides; the rest of the line is for whoever is reading
-    // the dock. An unknown word is not "firmware" — it is a newer rusty
-    // talking to an older frontend, and guessing would put a confident wrong
+    // the dock. An unknown word is not "firmware" — it is a newer emulator
+    // talking to an older rusty, and guessing would put a confident wrong
     // caption under the board.
     match rest.split_whitespace().next()? {
         "emulator" => Some(PinSource::Emulator),
@@ -1306,7 +1306,7 @@ mod tests {
             Some(PinSource::Firmware),
         );
 
-        // A word this frontend does not know is a *newer* rusty talking to it.
+        // A word this rusty does not know is a *newer* emulator talking to it.
         // Falling back to "firmware" would put a confident wrong caption under
         // the board, which is the failure this line exists to prevent.
         assert_eq!(parse_pin_source("[rusty:pins] something-new"), None);

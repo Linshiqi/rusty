@@ -1,4 +1,4 @@
-//! Replies as the wire model: `serde_json::Value` in, scalar-addressed types
+//! Replies as the model: `serde_json::Value` in, scalar-addressed types
 //! out.
 //!
 //! Every conversion here takes the document's text and the negotiated
@@ -212,8 +212,9 @@ pub(crate) fn hover_info(
 /// The parameter comes either as a substring of the label or as a pair of
 /// offsets — and the offsets are UTF-16 code units *regardless of the
 /// negotiated position encoding*, which governs document positions only.
-/// Both forms are resolved here, the second through the same arithmetic the
-/// editor uses at the DOM boundary rather than a private copy of it.
+/// Both forms are resolved here, the second through
+/// `positions::byte_of_character` rather than a private copy of its
+/// arithmetic.
 pub(crate) fn signature_info(result: &Value) -> Option<SignatureInfo> {
     let signatures = result["signatures"].as_array()?;
     let active = result["activeSignature"].as_u64().unwrap_or(0) as usize;
@@ -269,7 +270,7 @@ pub(crate) fn signature_info(result: &Value) -> Option<SignatureInfo> {
 /// The data is quintuples of u32 — deltaLine, deltaStart, length, type
 /// index, modifier bits — relative-encoded, in the negotiated position
 /// encoding. Decoded to absolute lines and Unicode-scalar columns, with the
-/// type index resolved against the server's legend, so the frontend sees
+/// type index resolved against the server's legend, so the editor sees
 /// names and scalars and nothing of the format.
 pub(crate) fn semantic_spans(
     data: &[u32],
@@ -313,7 +314,7 @@ pub(crate) fn semantic_spans(
     spans
 }
 
-/// LSP diagnostics as the wire model, columns already scalar, sorted by
+/// LSP diagnostics as the model, columns already scalar, sorted by
 /// position. `text` is the document as this client knows it — or `None`, in
 /// which case columns travel as the server sent them.
 pub(crate) fn diagnostics(
@@ -371,7 +372,7 @@ pub(crate) fn diagnostics(
     out
 }
 
-/// The LSP CompletionItemKind table, named so the frontend never holds a
+/// The LSP CompletionItemKind table, named so the editor never holds a
 /// second copy of these numbers.
 pub(crate) fn kind_name(kind: u64) -> &'static str {
     match kind {
@@ -428,7 +429,7 @@ pub(crate) fn split_edits(edit: &Value, ours: &str) -> Option<SplitEdits> {
     Some((mine, theirs))
 }
 
-/// Text edits as the frontend applies them: scalar ranges against `text`.
+/// Text edits as the editor applies them: scalar ranges against `text`.
 pub(crate) fn action_edits(
     edits: &[Value],
     text: &str,

@@ -693,8 +693,7 @@ pub(crate) mod bosch {
 
 // The declarations these hold to are the files rusty ships, read by the
 // reader every other part goes through — so a fixture cannot drift from
-// what a user's own part would get. That reader touches the disk, hence the
-// feature gate; the arithmetic below is wasm-safe and has no other door.
+// what a user's own part would get.
 #[cfg(test)]
 mod tests {
     use super::*;

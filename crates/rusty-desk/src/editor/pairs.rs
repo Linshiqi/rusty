@@ -1,7 +1,7 @@
 //! Bracket pairs, and the indentation that follows them.
 //!
-//! A textarea types what it is given and nothing more. Every editor since the
-//! nineties has done four things on top: an opener brings its closer and puts
+//! Plain typing puts in what is typed and nothing more. Every editor since
+//! the nineties has done four things on top: an opener brings its closer and puts
 //! the caret between them; a closer typed against the one already there steps
 //! over it instead of doubling it; Enter between the two puts the caret on an
 //! indented line of its own with the closer below; and a closer typed on a
@@ -10,9 +10,9 @@
 //! characters.
 //!
 //! Pure functions over the document text and byte offsets, so the rules are
-//! tests rather than something discovered by typing. The component applies
-//! the [`Edit`] each returns through the same pipeline as every other write,
-//! which is what keeps undo, the echo and the folds honest.
+//! tests rather than something discovered by typing. The editor applies the
+//! [`Edit`] each returns the way it applies every other write, which is what
+//! keeps undo and the folds honest.
 
 /// One replacement in the document, with where the caret goes afterwards.
 ///
@@ -63,7 +63,7 @@ fn opener(close: char) -> Option<char> {
 }
 
 /// What typing `key` should do with the caret at `from` (and a selection to
-/// `to` when they differ), or `None` to let the browser type it.
+/// `to` when they differ), or `None` to type it as it is.
 pub(super) fn on_type(text: &str, from: usize, to: usize, key: char) -> Option<Edit> {
     let (from, to) = (from.min(to).min(text.len()), from.max(to).min(text.len()));
     if !text.is_char_boundary(from) || !text.is_char_boundary(to) {
@@ -71,8 +71,7 @@ pub(super) fn on_type(text: &str, from: usize, to: usize, key: char) -> Option<E
     }
 
     // A selection typed over with an opener is wrapped, not replaced — the
-    // one case where the browser's own behaviour loses text the user meant to
-    // keep.
+    // one case where plain typing loses text the user meant to keep.
     if from < to {
         let close = closer(key)?;
         let inner = &text[from..to];
@@ -470,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn an_opener_in_front_of_a_word_is_left_to_the_browser() {
+    fn an_opener_in_front_of_a_word_is_typed_alone() {
         assert_eq!(typed("foo bar", 4, '('), None);
         assert_eq!(typed("xbar", 0, '{'), None);
     }
@@ -544,7 +543,7 @@ mod tests {
         let nested = "fn f() {\n    if x {\n    }\n    ";
         let (out, _) = typed(nested, nested.len(), '}').expect("outdents");
         assert_eq!(out, "fn f() {\n    if x {\n    }\n}");
-        // Already at the right indent: nothing to do, the browser types it.
+        // Already at the right indent: nothing to do, it is typed as it is.
         let aligned = "    if x {\n    ";
         assert_eq!(typed(aligned, aligned.len(), '}'), None);
         // A blank line with no opener to match is left alone.
@@ -619,8 +618,8 @@ mod tests {
         let text = "中文";
         assert_eq!(on_type(text, 1, 1, '('), None);
         assert_eq!(on_backspace(text, 1), None);
-        // Between the two characters the opener faces a word and is left to
-        // the browser; at the end it pairs, and the offsets are bytes.
+        // Between the two characters the opener faces a word and is typed
+        // as it is; at the end it pairs, and the offsets are bytes.
         assert_eq!(typed(text, 3, '('), None);
         assert_eq!(typed(text, 6, '('), Some(("中文()".into(), 7)));
     }

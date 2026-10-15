@@ -1,12 +1,11 @@
 //! Several cursors at once — VS Code's multi-cursor editing — as arithmetic
 //! over the text: where each cursor is, what one keystroke does at all of
-//! them, and where they are afterwards. The editor's textarea holds one
-//! selection, the first cursor's; the others are drawn beside it
-//! (`view/panels/files/multi.rs`).
+//! them, and where they are afterwards.
 //!
 //! Positions are document bytes on character boundaries. The first cursor of
-//! a list is the one the textarea shows, and every operation keeps it first:
-//! when two cursors run into each other it is the other one that goes.
+//! a list is the primary one, which a command for one cursor acts on, and
+//! every operation keeps it first: when two cursors run into each other it
+//! is the other one that goes.
 
 /// One cursor: where its selection was started and where it is now — the
 /// same place for a caret.

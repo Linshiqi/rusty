@@ -34,7 +34,7 @@ Two rules make this survivable:
 
 - **The file format is a separate type from the wire format.** `catalog.rs`
   parses into its own structs and converts. The file format is a public contract
-  with users; `model` is an internal contract with the frontend. Coupling them
+  with users; `model` is an internal contract with the window. Coupling them
   would mean a UI refactor silently breaking everybody's board files.
 - **A malformed file is reported, not swallowed and not fatal.** One bad file
   must not blank the catalogue, and ignoring it silently would leave the user
@@ -139,9 +139,9 @@ one consumer is what bought the extensibility; it was not a separate effort.
 
 ## Commitment 1 — everything crosses a JSON boundary
 
-No frontend or extension surface receives a Rust type it cannot also receive as
-JSON. The Tauri command layer never hands out `PackageGraph`, `PackageMetadata`,
-or any other guppy handle — only `model` types.
+No extension surface receives a Rust type it cannot also receive as JSON. The
+MCP server never hands out `PackageGraph`, `PackageMetadata`, or any other guppy
+handle — only `model` types, as the window and the CLI read them.
 
 This is what makes the in-process/out-of-process question a later decision
 rather than a foundational one.

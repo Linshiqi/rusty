@@ -7,7 +7,7 @@ That is unfriendly-sounding and it is meant kindly, so here is the reasoning.
 
 This is a one-person project maintained alongside other work. A patch costs
 its author an afternoon and costs the maintainer a review, a decision about
-whether it fits, and then years of keeping it working as `esp-hal`, Tauri and
+whether it fits, and then years of keeping it working as `esp-hal`, Slint and
 rust-analyzer all move underneath it. The second and third costs are the
 large ones, and they land on somebody who did not choose the feature.
 
@@ -52,13 +52,13 @@ open at all.
 
 If we do agree on one:
 
-- **`cargo test --workspace` and `cargo clippy --workspace --all-targets`
-  green**, plus the wasm check in `CLAUDE.md`. All three run in CI.
+- **`cargo fmt`, `cargo test --workspace` and `cargo clippy --workspace
+  --all-targets` green.** All three run in CI.
 - **A test that names the property**, not the number. `assert_eq!(crates, 8)`
   breaks when an upstream crate splits; a test called
   `disabling_defaults_removes_serde` does not.
-- **The `backend` feature split respected.** Anything that spawns a process
-  or reads a file stays out of the model layers, which compile to wasm.
+- **The model layers kept free of IO.** Anything that spawns a process or
+  reads a file stays out of a crate's `model`, which is data.
 - **Refuse rather than guess.** When a tool cannot answer, it says what is
   missing in terms the caller can act on. A plausible wrong answer costs
   somebody an hour.

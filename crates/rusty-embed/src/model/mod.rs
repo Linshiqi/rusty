@@ -55,9 +55,8 @@ pub use project::{
 };
 pub use registers::{Peripheral, Register, RegisterField, RegisterMap};
 pub use repo::{REPO, REPO_ISSUES, REPO_RELEASES};
-// Only the `.rusty/sim.toml` writer needs it, and that is backend-side; on
-// wasm the re-export would be an unused import.
 pub use sheet::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
+// Crate-private: only the `.rusty/sim.toml` writer needs it.
 pub(crate) use sim::is_upright;
 pub use sim::{Drive, Emulator, SimDebug, SimLimit, SimPlan, SimTool};
 pub use symbol::{Fill, Graphic, MM_PX, Pin, PinKind, Symbol};
@@ -70,5 +69,5 @@ pub use wizard::{
 };
 pub use workbench::{
     AssistantChoice, DockLayout, EditorView, ProjectTabs, RelocateReport, StorageLocation,
-    UpdateProgress, UpdateStatus, WindowLayout,
+    UpdateProgress, WindowLayout,
 };

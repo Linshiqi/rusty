@@ -173,7 +173,7 @@ impl Filter {
 /// ASCII letter, then ASCII letters and digits, and not `Self`. Anything
 /// else fails to compile or compiles with a warning — `non_camel_case_types`
 /// — that a `-D warnings` build turns into a failure somewhere else. For the
-/// frontend to say so beside the field, while it is typed.
+/// window to say so beside the field, while it is typed.
 pub fn check_name(name: &str) -> Result<(), Refusal> {
     let mut chars = name.chars();
     let first = chars.next().is_some_and(|c| c.is_ascii_uppercase());

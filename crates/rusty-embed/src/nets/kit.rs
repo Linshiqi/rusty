@@ -41,7 +41,7 @@ impl<'a> Pinout<'a> {
 ///
 /// The name is `GPIO<n>` for a GPIO row whatever the label says — the
 /// ESP32 devkit prints `RX` beside GPIO3 — and the label itself for a rail.
-/// Nothing here is geometry: where a row is drawn is the frontend's.
+/// Nothing here is geometry: where a row is drawn is `board::geometry`'s.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Row {

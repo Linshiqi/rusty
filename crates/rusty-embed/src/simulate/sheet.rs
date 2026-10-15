@@ -20,7 +20,7 @@ pub(crate) fn load_board_for_test(root: &Path, chip: &str) -> Option<Sheet> {
     })
 }
 
-/// Attach to the sheet every symbol its parts use, so the frontend draws
+/// Attach to the sheet every symbol its parts use, so the window draws
 /// without a second lookup. A part whose symbol no library has is kept —
 /// deleting somebody's part because a library file went missing is a loss,
 /// not a repair — and named in the sheet's notes; the editor draws it as
@@ -46,8 +46,8 @@ pub fn resolve_symbols(sheet: &mut Sheet, library: &Library) {
 }
 
 /// The devkit's header rows for the project's chip, from the catalogue —
-/// the same rows the frontend draws, so a button's GPIO is read off the
-/// same header on both sides.
+/// the same rows the board draws, so a button's GPIO is read off the same
+/// header by the board and by the run.
 pub fn kit_rows_for(root: &Path, chip: &str) -> Vec<Row> {
     let catalog = crate::catalog::Catalog::load(Some(root));
     match catalog.chip(chip) {

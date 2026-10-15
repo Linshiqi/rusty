@@ -404,7 +404,7 @@ fn sections_that_cannot_hold_their_design_are_refused() {
     ));
 }
 
-/// The wire form a stored design has: tagged by `design`, with the
+/// The form a stored design has: tagged by `design`, with the
 /// cookbook's kind, a band's shape and a window in kebab case.
 #[test]
 fn a_design_is_stored_as_it_reads() {

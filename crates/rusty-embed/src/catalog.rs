@@ -14,7 +14,7 @@
 //! | project | `.rusty/` in the open project | boards your team owns, checked in |
 //!
 //! The file format is a **public contract with users**; the types in
-//! [`crate::model`] are an internal contract with the frontend. They are kept
+//! [`crate::model`] are an internal contract with the window. They are kept
 //! separate on purpose — coupling them would mean a UI refactor silently
 //! breaking everybody's board files.
 
@@ -294,7 +294,7 @@ fn user_catalog_dir() -> Option<PathBuf> {
 // ─── file format ─────────────────────────────────────────────────────────────
 //
 // Separate from `model` on purpose. This is what users write; `model` is what
-// the frontend renders. Tying them together would mean a UI change breaking
+// the window draws. Tying them together would mean a UI change breaking
 // everyone's board files.
 
 // `deny_unknown_fields` on the file as well as on each entry: `[[boards]]`
@@ -649,7 +649,7 @@ struct UsbEntry {
 }
 
 // Kebab-case in files, because that is how these read as configuration; the
-// wire enums stay camelCase for the frontend.
+// model's enums keep the camelCase they serialise with everywhere else.
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]

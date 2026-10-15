@@ -14,19 +14,18 @@ use crate::{
 /// Files bigger than this are refused rather than shown.
 ///
 /// A linked ELF or a Wi-Fi blob sits in the same tree as the source, and
-/// sending one to the frontend would take the window down. The tree lists them;
+/// opening one as text would take the window down. The tree lists them;
 /// opening one says why it will not.
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Files bigger than this are not turned into a picture. Twenty megabytes is
-/// a photograph nobody put in a firmware repository on purpose, and base64 of
-/// anything larger crosses IPC as one string the window waits on.
+/// Files bigger than this are not read whole by [`read_bytes`]. Twenty
+/// megabytes is a photograph nobody put in a firmware repository on
+/// purpose, and a caller handed more holds all of it in memory at once.
 const MAX_BLOB_BYTES: u64 = 20 * 1024 * 1024;
 
-/// A file's bytes under `root`, untouched — for showing it as a picture: a
-/// figure in a page, an image opened from the tree. Bytes rather than text so
-/// a PNG is not refused as binary the way [`Files::open`] refuses it, under
-/// the same root confinement, and capped for the reason above.
+/// A file's bytes under `root`, untouched. Bytes rather than text so a PNG
+/// is not refused as binary the way [`Files::open`] refuses it, under the
+/// same root confinement, and capped for the reason above.
 pub fn read_bytes(root: &Path, relative: &str) -> Result<Vec<u8>> {
     let path = resolve(root, relative)?;
     let read = |source| Error::Read {
@@ -309,14 +308,15 @@ pub fn create(root: &Path, relative: &str, dir: bool) -> Result<()> {
     }
 }
 
-/// Turn a relative path from the frontend into a real one, refusing anything
+/// Turn a relative path from a caller into a real one, refusing anything
 /// that leaves the project.
 ///
-/// The frontend echoes back paths this crate gave it, so in normal use this
-/// never fires. It exists because "never in normal use" is not a security
-/// property: a `..` in one of them would read or overwrite anything the process
-/// can reach, and normalising it away would silently open a different file than
-/// the caller named.
+/// The window hands back paths this crate gave it, so from there this never
+/// fires. It exists because "never in normal use" is not a security
+/// property — and the assistant's file tools pass paths a model wrote: a `..`
+/// in one of them would read or overwrite anything the process can reach,
+/// and normalising it away would silently open a different file than the
+/// caller named.
 pub(crate) fn resolve(root: &Path, relative: &str) -> Result<PathBuf> {
     let candidate = Path::new(relative);
     let escapes = candidate.components().any(|component| {

@@ -1,10 +1,9 @@
-//! What the language server tells the frontend, on the wire.
+//! What the language server tells the editor, as plain data.
 //!
-//! Compiled unconditionally and free of IO, like every other `model` here.
-//! Positions in these types are **Unicode-scalar columns**, 0-based — the
-//! backend does all conversion from the protocol's negotiated encoding, so the
-//! frontend can slice a line with `chars()` and be right about CJK and emoji
-//! without knowing UTF-16 exists.
+//! Free of IO, like every other `model` here. Positions in these types are
+//! **Unicode-scalar columns**, 0-based — the client does all conversion from
+//! the protocol's negotiated encoding, so the editor can slice a line with
+//! `chars()` and be right about CJK and emoji without knowing UTF-16 exists.
 
 use serde::{Deserialize, Serialize};
 
@@ -81,7 +80,7 @@ impl ServerKind {
     }
 }
 
-/// What the server session tells the frontend as it runs.
+/// What the server session tells the window as it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "camelCase")]
 pub enum LspEvent {
@@ -163,8 +162,7 @@ pub enum HealthLevel {
 pub struct CompletionItem {
     pub label: String,
     /// `function`, `struct`, `field`… — the LSP kind, named rather than
-    /// numbered, because a number on the wire invites the frontend to keep its
-    /// own copy of the table.
+    /// numbered, so the editor never keeps its own copy of the table.
     pub kind: Option<String>,
     pub detail: Option<String>,
     /// What accepting this item inserts.
@@ -321,15 +319,15 @@ pub struct InlayHints {
     pub about: u64,
 }
 
-/// The editor's text of a file, sent with the question asked about it so the
-/// server is given the text and then asked in one turn of one command.
+/// The editor's text of a file, given with the question asked about it so
+/// the server is given the text and then asked in one turn on one thread.
 ///
-/// Sent as two calls, a change and then a question, the two were two tasks on
-/// the backend, and two flows' changes — a keystroke's completion and the
-/// pulse after an edit — could reach the server in the other order: the
-/// older text written over the newer. `seq` is when the editor took the text,
-/// counted up across every window of the instance (`controller::lsp`), and
-/// the client skips a draft older than the one it holds
+/// Sent apart, a change and a question run on two threads — the window's
+/// ordered queue and the question's own — and either can reach the server
+/// first; so can two flows' changes, a keystroke's completion and the pulse
+/// after an edit, the older text written over the newer. `seq` is when the
+/// editor took the text, counted up by the window (`Servers::draft` in
+/// rusty-desk), and the client skips a draft older than the one it holds
 /// (`LspClient::sync_draft`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -338,29 +336,15 @@ pub struct Draft {
     pub seq: u64,
 }
 
-/// What the pulse after an edit asks for in one command, after sending the
-/// edit: the semantic colours and, while they are shown, the inlay hints.
-/// `None` where it was not asked for or the server did not answer — the
-/// warm-up and a request an edit overtook both answer with an error, and
-/// what is on screen stays until an answer replaces it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Painted {
-    pub semantic: Option<Vec<SemanticSpan>>,
-    pub hints: Option<InlayHints>,
-}
-
-/// A number that stands for a text, for telling one text from another
-/// across the wire without sending either: FNV-1a, folded to 53 bits
-/// because it crosses as a JSON number and a full 64 is not an integer
-/// JavaScript can hold.
+/// A number that stands for a text, so an answer can say which text it
+/// was about without carrying it: FNV-1a over its UTF-8.
 pub fn text_mark(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    (hash >> 53) ^ (hash & ((1 << 53) - 1))
+    hash
 }
 
 /// What a macro call turns into, fully expanded.
@@ -396,7 +380,7 @@ pub struct ActionEdit {
 }
 
 /// A quick fix or refactoring the server offers at a position, with its
-/// edits for this file already resolved — the frontend applies text, it
+/// edits for this file already resolved — the editor applies text, it
 /// never negotiates.
 ///
 /// An action that also edits other files names them in `elsewhere`; those
@@ -437,10 +421,9 @@ pub struct CodeActions {
 /// One run of semantic colour, as rust-analyzer sees the code.
 ///
 /// The kind is the server's own legend name (`function`, `struct`,
-/// `parameter`…) — named rather than numbered, because a number on the wire
-/// invites the frontend to keep its own copy of the legend. Columns and
-/// length are Unicode scalars, converted at the boundary like every other
-/// position here.
+/// `parameter`…) — named rather than numbered, so the editor never keeps
+/// its own copy of the legend. Columns and length are Unicode scalars,
+/// converted at the boundary like every other position here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticSpan {
@@ -460,7 +443,7 @@ pub struct SignatureInfo {
     /// The whole signature as text, e.g. `fn set_gain(&mut self, db: i8)`.
     pub label: String,
     /// Byte range of the active parameter inside `label` — bytes, so the
-    /// frontend slices directly; the backend has already unwound the
+    /// editor slices directly; the client has already unwound the
     /// protocol's UTF-16 offsets.
     pub param_start: Option<u32>,
     pub param_end: Option<u32>,
@@ -476,7 +459,7 @@ pub struct SignatureInfo {
 #[serde(rename_all = "camelCase")]
 pub struct HoverInfo {
     pub text: String,
-    /// Scalar columns, like everything the frontend touches. Absent when the
+    /// Scalar columns, like every position here. Absent when the
     /// server did not say; the caller falls back to the queried cell.
     pub range: Option<EditRange>,
 }
@@ -485,19 +468,18 @@ pub struct HoverInfo {
 mod tests {
     use super::*;
 
-    /// The mark is compared across the wire, and `mock.js` computes it for
-    /// the answers it stands in for: the numbers here are the ones its
-    /// `textMark` gives, so the two cannot come to disagree unnoticed — a
-    /// disagreement is every hints answer refused as about another text.
-    /// Each fits the 53 bits a JSON number holds.
+    /// The client marks the text it sent and the editor the text it asked
+    /// over, and an answer is drawn only where the two agree: the numbers
+    /// are pinned so that a change to how a mark is computed is a
+    /// deliberate one, never a quiet one.
     #[test]
-    fn a_text_is_marked_the_same_on_both_sides_of_the_wire() {
-        assert_eq!(text_mark(""), 5_239_054_864_098_682);
-        assert_eq!(text_mark("fn main() {}\n"), 5_739_256_811_920_085);
-        assert_eq!(text_mark("let 名 = \"中文\";\r\n"), 1_981_000_941_703_271);
-        for text in ["", "fn main() {}\n", "let 名 = \"中文\";\r\n"] {
-            assert!(text_mark(text) < 1 << 53, "{text:?}");
-        }
+    fn a_text_is_marked_the_same_wherever_it_is_marked() {
+        assert_eq!(text_mark(""), 14_695_981_039_346_656_037);
+        assert_eq!(text_mark("fn main() {}\n"), 3_842_806_139_331_582_847);
+        assert_eq!(
+            text_mark("let 名 = \"中文\";\r\n"),
+            15_746_565_298_228_958_899
+        );
     }
 
     #[test]
@@ -506,7 +488,8 @@ mod tests {
         assert_ne!(text_mark("a\nb"), text_mark("a\n\nb"));
     }
 
-    /// The wire names, which the mock writes by hand.
+    /// A hints answer serializes under its camelCase names and reads back
+    /// as itself.
     #[test]
     fn a_hints_answer_crosses_the_wire_and_back() {
         let answer = InlayHints {

@@ -1,8 +1,8 @@
-//! The playground, as both sides of the wire name it.
+//! The playground, by the names everything that touches it uses.
 //!
-//! rusty keeps one project per chip for trying things (`crate::playground`,
-//! backend-side, writes them); the window offers them by these names and
-//! opens each on this file, so the list is spelled once.
+//! rusty keeps one project per chip for trying things (`crate::playground`
+//! writes them); the window offers them by these names and opens each on
+//! this file, so the list is spelled once.
 
 // The playgrounds, in the order they are offered: every template in
 // `data/templates/` whose `template.toml` gives it a `playground` place —

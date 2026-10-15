@@ -1,6 +1,6 @@
 //! Where a diagnostic's squiggle is drawn: the columns of a line it covers.
 //!
-//! One rule for the echo, which draws the red line, and for the hover card,
+//! One rule for the row, which draws the red line, and for the hover card,
 //! which has to find a problem where its red line is. Two readings of where
 //! a squiggle stands would be a card over nothing, or a red line nobody can
 //! ask about.
@@ -20,7 +20,7 @@ use crate::FileDiagnostic;
 /// The columns of line `index`, whose text is `text`, that `d`'s squiggle
 /// covers: half-open, in Unicode scalars, `None` where it draws nothing on
 /// this line. `to` is one past the line's end for a point at its end, which
-/// the echo draws as a cell after everything else on the line.
+/// the row draws as a cell after everything else on the line.
 pub fn drawn_on(d: &FileDiagnostic, index: u32, text: &str) -> Option<(u32, u32)> {
     if index < d.start_line || index > d.end_line {
         return None;

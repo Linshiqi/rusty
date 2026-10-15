@@ -1,5 +1,5 @@
 //! Pin waveforms: the trace a run's `[rusty:gpio]` reports make, and the
-//! arithmetic of drawing it — the Waves panel's, shared by both windows.
+//! arithmetic of drawing it — the Waves panel's.
 //!
 //! One clock per trace: the firmware's systimer when the first report was
 //! stamped, the host's arrival time when it was not, and never both,

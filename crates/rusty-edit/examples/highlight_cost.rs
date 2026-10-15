@@ -38,8 +38,8 @@ fn timed<T>(work: impl FnOnce() -> T) -> (T, Duration) {
 }
 
 fn report(what: &str, repaint: &rusty_edit::Repaint, took: Duration) {
-    // `{"text":"…","token":"keyword"},` — what a span costs on the wire,
-    // near enough.
+    // `{"text":"…","token":"keyword"},` — what a span weighs serialized as
+    // JSON, near enough: a size for the answer, beside its time.
     let wire: usize = repaint
         .lines
         .iter()
@@ -47,7 +47,7 @@ fn report(what: &str, repaint: &rusty_edit::Repaint, took: Duration) {
         .map(|span| span.text.len() + 32)
         .sum();
     println!(
-        "{what}: {} lines from line {} in {took:?}, about {} KB to send",
+        "{what}: {} lines from line {} in {took:?}, about {} KB of spans",
         repaint.lines.len(),
         repaint.from + 1,
         wire / 1024

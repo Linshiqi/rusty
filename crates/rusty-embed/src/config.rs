@@ -164,19 +164,19 @@ pub struct WorkbenchState {
     pub keybinds: std::collections::BTreeMap<String, String>,
     /// Modal editing in the editor.
     ///
-    /// A file rather than the WebView's storage by this project's own rule: a
-    /// second window boots the same frontend, and someone who edits in Vim
-    /// keys wants both windows in the same mode. Landing in the wrong one is
-    /// not a shrug — the next twenty keystrokes do something else entirely.
+    /// A file by this project's own rule: a second window reads the same
+    /// file, and someone who edits in Vim keys wants both windows in the same
+    /// mode. Landing in the wrong one is not a shrug — the next twenty
+    /// keystrokes do something else entirely.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vim: bool,
     /// Write the file a beat after typing stops, instead of waiting for
     /// Ctrl+S — VS Code's `files.autoSave: afterDelay`.
     ///
-    /// A file rather than the WebView's storage for `vim`'s reason: a second
-    /// window that did not auto-save would be a window whose work is lost on
-    /// the assumption that it was. Off by default, because writing somebody's
-    /// file without being asked is not a default.
+    /// A file for `vim`'s reason: a second window that did not auto-save
+    /// would be a window whose work is lost on the assumption that it was.
+    /// Off by default, because writing somebody's file without being asked
+    /// is not a default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_save: bool,
     /// Sweep stale build artifacts after every successful cargo command run
@@ -188,10 +188,9 @@ pub struct WorkbenchState {
     /// Display language, as a BCP-47 tag. `None` means follow the system,
     /// which is what a first run gets.
     ///
-    /// Here rather than in the WebView's storage for the same reason `vim`
-    /// is: a second window opening in a different language is not a shrug,
-    /// and the WebView's storage is not carried when the data directory is
-    /// relocated.
+    /// A file for the same reason `vim` is: a second window opening in a
+    /// different language is not a shrug. And the choice goes with the data
+    /// directory when it is relocated.
     #[serde(default)]
     pub locale: Option<String>,
     /// Terminal shell: absent = auto (rusty's own built-in shell); "system" =
@@ -215,29 +214,26 @@ pub struct WorkbenchState {
     /// The assistant profile last chosen — never the key, which lives in the
     /// OS credential store and never enters the window at all.
     ///
-    /// A file rather than the WebView's storage because a second window boots
-    /// the same frontend and the backend reads it at the moment of a request:
-    /// by this project's own rule, anything the backend or another window
-    /// could care about is a file.
+    /// A file because a second window must agree with the first and the
+    /// assistant reads it at the moment of a request: by this project's own
+    /// rule, anything the libraries, the CLI or another window could care
+    /// about is a file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant: Option<AssistantChoice>,
     /// Editor tabs per project, newest project first — what reopens when a
     /// project is opened again.
     ///
     /// Here rather than in the project's `.rusty/` because which files *you*
-    /// have open is not your team's business and has no place in a diff, and
-    /// here rather than in the WebView because it is the one piece of this
-    /// that is genuinely missed when it vanishes. Capped, for the reason
-    /// `recent_projects` is.
+    /// have open is not your team's business and has no place in a diff.
+    /// Capped, for the reason `recent_projects` is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_tabs: Vec<ProjectTabs>,
     /// A version the user asked not to be prompted about again. The
     /// automatic check at launch stays quiet about it; the next release, or
     /// a check asked for by hand, is offered as usual.
     ///
-    /// A file rather than the WebView's storage because the backend is what
-    /// decides whether to prompt, and a second window must not re-ask what
-    /// the first was told.
+    /// A file because a second window must not re-ask what the first was
+    /// told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_update: Option<String>,
     /// What the editor draws around the code — inlay hints, the minimap,
@@ -270,9 +266,9 @@ fn push_tabs(list: &mut Vec<ProjectTabs>, tabs: ProjectTabs) {
 
 /// What a project had open last time, if anything.
 ///
-/// Matched by [`same_dir`], so `E:\x` finds what `E:/x` saved — the trap the
-/// WebView copy fell into, where a different spelling of the same directory
-/// silently had no tabs.
+/// Matched by [`same_dir`], so `E:\x` finds what `E:/x` saved: keyed on the
+/// path as typed, a different spelling of the same directory would silently
+/// have no tabs.
 pub fn tabs_for(root: &str) -> Option<ProjectTabs> {
     workbench()
         .open_tabs
@@ -284,11 +280,11 @@ fn workbench_path() -> Option<PathBuf> {
     Some(data_dir()?.join("workbench.toml"))
 }
 
-/// The file's own records, kept apart from the wire types by the rule that
+/// The file's own records, kept apart from the model types by the rule that
 /// keeps `catalog.rs` apart from `model`: `workbench.toml` is a contract with
 /// every installed copy of rusty, and `AssistantChoice` and `ProjectTabs` are
-/// contracts with this build's frontend. When the two were one struct, a
-/// field renamed for the frontend's sake would have silently dropped that key
+/// contracts with this build's window. When the two were one struct, a
+/// field renamed for the window's sake would have silently dropped that key
 /// from everybody's file — read as absent, written back without it.
 ///
 /// Unknown fields survive a round trip *by being ignored on read and absent on
@@ -799,9 +795,6 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 mod tests {
     use super::*;
 
-    /// The two properties the WebView's storage did not have: a different
-    /// spelling of the same directory finds its tabs, and the list cannot
-    /// grow without bound.
     /// The failure this is written against: a workbench.toml that does not
     /// parse used to read back as an empty state, and the next save — which
     /// every writer here does as read-modify-write — wrote that emptiness
@@ -870,7 +863,7 @@ mod tests {
         assert!(workbench_at(&path).vim, "and it landed once it could");
     }
 
-    /// The file records and the wire types are different structs now, and a
+    /// The file records and the model types are different structs now, and a
     /// round trip through the file must lose nothing. Every field is set to
     /// something that is not its default, per the fixture rule: a field the
     /// writer forgot and the reader defaulted would otherwise agree perfectly.
@@ -979,6 +972,8 @@ mod tests {
         assert!(!written.contains("[editor]"), "{written}");
     }
 
+    /// The two properties the tab strips need: a different spelling of the
+    /// same directory finds its tabs, and the list cannot grow without bound.
     #[test]
     fn tabs_are_kept_per_directory_and_the_list_is_capped() {
         let strip = |root: &str, file: &str| ProjectTabs {
@@ -991,9 +986,9 @@ mod tests {
         let mut list = Vec::new();
         push_tabs(&mut list, strip("E:/work/blinky", "src/main.rs"));
 
-        // The trap the WebView copy fell into: it keyed on the path as typed,
-        // so opening the same project by another spelling silently had no
-        // tabs. `recent_projects` learned this already; this shares the fix.
+        // The trap of keying on the path as typed: opening the same project
+        // by another spelling would silently have no tabs. `recent_projects`
+        // learned this already; this shares the fix.
         push_tabs(&mut list, strip("E:\\work\\blinky", "src/lib.rs"));
         assert_eq!(list.len(), 1, "a different spelling is the same project");
         assert_eq!(

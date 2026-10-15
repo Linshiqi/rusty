@@ -9,7 +9,7 @@
 
 use rusty_embed::screen::{Panel, Screen};
 
-/// Feed a capture into a screen, exactly as the frontend does: a `w` starts
+/// Feed a capture into a screen, exactly as the window does: a `w` starts
 /// a message and a `w+` is more of the one before it.
 fn play(capture: &str) -> Screen {
     let mut screen = Screen::of(Panel::Ssd1306);

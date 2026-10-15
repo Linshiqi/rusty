@@ -1,7 +1,7 @@
 //! Reading a part's declaration: `data/parts/*.toml` and anybody else's.
 //!
 //! The file format is a public contract with whoever writes a board's
-//! parts; [`sensor::Spec`] is an internal one with the frontend. They are
+//! parts; [`sensor::Spec`] is an internal one with the window. They are
 //! different types on purpose (rule 2), so a field renamed for a slider
 //! cannot drop a key out of everybody's file.
 //!

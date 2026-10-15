@@ -110,7 +110,7 @@ fn pull(shared: &Shared, path: &str) -> Result<Vec<FileDiagnostic>> {
     ))
 }
 
-/// What the frontend is shown for a file: rust-analyzer's own diagnostics
+/// What the window is shown for a file: rust-analyzer's own diagnostics
 /// and the check's, together, with exact repeats dropped. The check reports
 /// a crate once for every workspace that builds it — a `core` shared by the
 /// host workspace and the firmware's is every error twice — and a list of

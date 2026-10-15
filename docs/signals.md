@@ -86,8 +86,8 @@ incommensurate tone loops after its table's length, which the interface shows.
 
 ### `rusty_embed::dsp` — what a filter does, and what a spectrum says
 
-Pure and compiled to wasm, so the frontend's filter lab and the backend's
-measurements are one implementation:
+Pure, so the window's filter lab and the measurements a run makes are one
+implementation:
 
 - a spectrum (radix-2 FFT, Hann/Blackman/rectangular windows, amplitude
   corrected so a sine of amplitude A reads A);
@@ -138,7 +138,7 @@ sensor's burst read is always one sample whole.
   is the pin's voltage over time, through whatever the sheet puts between
   them, in the converter's counts at the pin's `fullscale`
   (`rusty_embed::generator`). What a run chooses is a function there, so the
-  frontend renders with exactly what the emulator is handed:
+  lab renders exactly what the emulator is handed:
   - the **rate** is the part's `rate`, 20 000 samples a second when absent — the
     generator's bandwidth, and its noise's — and every generator on a sheet is
     stepped at the fastest any of them asks for;
@@ -193,7 +193,7 @@ In one dock tab:
   running anything; its response; its `no_std` code to copy.
 
 Every instrument reads a **record** — evenly spaced samples at a known rate
-(`crate::lab::record` in the frontend). A telemetry channel is one already,
+(`rusty_embed::lab::record`). A telemetry channel is one already,
 its rate read off the firmware's stamps. A converter's reports are one with the
 repeats left out, since the emulator reports a conversion only when it changed,
 and they are put back by holding each value on the interval the reports keep.

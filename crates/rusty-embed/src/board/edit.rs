@@ -21,7 +21,7 @@ use super::layout;
 ///
 /// Bounded because each snapshot is a whole copy of the sheet and a long
 /// session would otherwise grow without limit; sixty-four is more than a
-/// hand undoes in one go and far less than a browser tab minds.
+/// hand undoes in one go and far less than the window minds.
 const HISTORY_CAP: usize = 64;
 
 /// Push a snapshot, dropping the oldest once the cap is reached.

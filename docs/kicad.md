@@ -383,8 +383,8 @@ Two things the coupling has to get right, and both are tests:
 
 `Live::absorb` is where the two halves meet, and the same function is used
 by the app and by the gate that proves it — one reading of the coupling, for
-the reason the serial protocol has one `absorb`. The backend's pin-channel
-reader calls it on every line and sends back what the converter should read;
+the reason the serial protocol has one `absorb`. The pin channel's reader
+calls it on every line and sends back what the converter should read;
 a circuit that stops having an answer stops answering and says so once,
 because a failure repeated at the emulator's rate is a log nobody can read.
 

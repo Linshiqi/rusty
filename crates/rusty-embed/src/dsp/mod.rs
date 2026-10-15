@@ -18,8 +18,8 @@
 //! is checked against. A response that is roughly right is how somebody
 //! tunes a notch to the wrong hum.
 //!
-//! Compiled unconditionally and free of IO, like `signal` beside it: the
-//! frontend draws what this computes, on the one thread it has.
+//! Free of IO, like `signal` beside it: the window draws what this
+//! computes.
 
 mod code;
 mod design;

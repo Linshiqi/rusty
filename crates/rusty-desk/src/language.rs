@@ -3,9 +3,8 @@
 //! server that reads it and what formats it on save.
 //!
 //! Rust, C and C++ are the languages rusty is for, and they are rows of the
-//! same table rather than a `match` per feature — a feature that asked
-//! `ends_with(".rs")` was a feature C did not have, and sixteen such places
-//! were once the whole of what kept the old editor Rust-only.
+//! same table rather than a `match` per feature — a feature that asks
+//! `ends_with(".rs")` is a feature C does not have.
 
 use rusty_lsp::ServerKind;
 

@@ -4,7 +4,7 @@
 //! the things VS Code's explorer does with a file. Every one takes paths
 //! relative to the project root and refuses anything that leaves it, like
 //! every other write in this crate, and every one answers with the relative
-//! path it produced, because the frontend has tabs to move along with the
+//! path it produced, because the window has tabs to move along with the
 //! file.
 //!
 //! What is refused rather than guessed: a move or rename onto a name that

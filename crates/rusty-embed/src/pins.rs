@@ -697,10 +697,7 @@ macro_rules! for_each_analog_function {
             vec![5, 21],
             "the comment and the string are not claims: {found:?}",
         );
-        assert_eq!(
-            found[0].line, 1,
-            "zero-based, like every line that crosses the wire"
-        );
+        assert_eq!(found[0].line, 1, "zero-based");
         assert!(found[0].text.starts_with("let led ="));
     }
 

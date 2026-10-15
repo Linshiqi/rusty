@@ -1,7 +1,7 @@
 //! Undo and redo: the text and the cursors as they were before each step.
 //!
-//! A step is a snapshot of the whole text, as the WebView editor's was —
-//! simple to get right, and cheap next to everything else an edit costs.
+//! A step is a snapshot of the whole text — simple to get right, and cheap
+//! next to everything else an edit costs.
 //! Keystrokes of one kind close together are one step (typing a word is
 //! one undo, not five), anything else is a step of its own, and the
 //! cursors come back with the text, selections included. Two hundred

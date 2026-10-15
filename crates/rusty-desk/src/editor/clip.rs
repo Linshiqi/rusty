@@ -4,16 +4,14 @@
 //! habit it teaches: Ctrl+C on a line copies the line, Ctrl+X takes it out,
 //! and Ctrl+V of a line copied that way puts it back *as a line* — above the
 //! caret's line, wherever in that line the caret is — instead of splicing it
-//! into the middle of whatever is there. The browser's own copy and cut do
-//! nothing without a selection, so in this editor the keys did nothing at
-//! all. With a selection they act on the selection, in every mode, Vim's
-//! included — that half is `edits::clipboard_key`, and needs nothing here.
+//! into the middle of whatever is there. With a selection they act on the
+//! selection — that half is `cursors::copied` and `cursors::cut`, and needs
+//! nothing here.
 //!
 //! Pure, over the document and a byte offset into it, and every answer that
-//! changes the text is a [`pairs::Edit`] — so it reaches the buffer through
-//! the same `apply_edit` as a bracket pair, and undo, the echo and the folds
-//! cannot disagree with it. The caller maps the caret through the fold table
-//! first.
+//! changes the text is a [`pairs::Edit`] — so it reaches the document the
+//! same way a bracket pair does, and undo and the folds cannot disagree
+//! with it.
 
 use super::pairs::Edit;
 

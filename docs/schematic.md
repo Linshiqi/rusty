@@ -35,7 +35,7 @@ importer remembering to. A symbol carries:
 - `reference`: the prefix a placed instance is numbered with — `R`, `C`,
   `D`, `SW`, or `LED` as LCSC's library has it.
 
-`rusty_embed::Symbol` is the wire model, wasm-safe, in `model/symbol.rs`.
+`rusty_embed::Symbol` is the drawing as data, in `model/symbol.rs`.
 Two importers produce it, both in `rusty_embed::schematic`:
 
 - **`.kicad_sym`** (`kicad_sym`): the S-expression library format of KiCad
@@ -147,7 +147,7 @@ GPIO levels; the rails are fixed; everything else follows:
 - **A switch** joins its pins while pressed (a four-pin tactile switch has
   its pairs joined always). `button_drives` reads what a press does — the
   GPIO on one side, the rail on the other — and both the sheet and the
-  backend's pin channel read it, so the emulator is driven to the level the
+  pin channel read it, so the emulator is driven to the level the
   wiring means. A switch that reaches no GPIO, or no rail, is
   `SwitchDrivesNothing`.
 - **A rail symbol** (`rusty:GND`, `rusty:Supply`) puts its net at that
@@ -188,7 +188,7 @@ GPIO levels; the rails are fixed; everything else follows:
   `IN2`.
 
 Every rule is under a test that names the circuit it checks, and the
-findings are `Warning`s with a stable kind: the frontend translates them,
+findings are `Warning`s with a stable kind: the window translates them,
 the CLI prints them.
 
 `Evaluation` also carries the nets themselves — which pins the current

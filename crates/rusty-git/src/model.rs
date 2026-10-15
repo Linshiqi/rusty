@@ -1,14 +1,14 @@
-//! What the panel draws. Wire types, `wasm32`-clean.
+//! What the panel draws. Plain data, no IO.
 
 use serde::{Deserialize, Serialize};
 
 /// How many commits the log is cut at. Enough for the shape of a project;
 /// few enough that the request is a fraction of a second on a large one.
 /// Here rather than beside the `git` call because the panel names the number
-/// in its "showing the newest…" line, and the panel compiles without `git`.
+/// in its "showing the newest…" line.
 ///
-/// It was 400 while every row was a DOM node: the log draws only the rows on
-/// screen now, so what bounds it is `git log` and the wire, not the page.
+/// The log draws only the rows on screen, so what bounds it is `git log`,
+/// not the page.
 pub const LIMIT: usize = 1000;
 
 /// What a decoration on a commit is.
@@ -287,10 +287,7 @@ pub enum GitOperation {
 /// processes and the history redrawn — while a commit made in a terminal,
 /// which touches nothing the file watcher sees, was never noticed at all.
 ///
-/// Each part fits in 53 bits, because it crosses the wire as a JSON number
-/// and a JavaScript number holds no more: a full 64-bit hash is not a safe
-/// integer there, the frontend's deserialiser refused every stamp, and every
-/// probe failed without a word.
+/// Each part is an FNV-1a hash of the names, sizes and times it covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStamp {

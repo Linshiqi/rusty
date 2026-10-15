@@ -13,8 +13,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 # `portable-pty` is wezterm's; on Windows it drives ConPTY, which is what makes
 # an interactive shell work at all rather than a pipe that no prompt appears on.
 portable-pty = "0.9.0"
-# Terminal emulation. Doing this in Rust rather than shipping xterm.js is what
-# keeps the promise of no npm in this repository.
+# Terminal emulation: what a program writes, read into the screen the window
+# draws.
 vt100 = "0.16.2"
 thiserror = "2.0.20"
 # The built-in shell's bash engine: a POSIX/bash-compatible shell in Rust.
@@ -41,10 +41,10 @@ windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Fou
 libc = "0.2"
 
 # The built-in shell as a console program of its own. On Windows a release
-# build of the app is a GUI-subsystem executable, and a pseudoconsole hosts
-# only console programs: started as the terminal's shell, the app had no
-# standard handles, read end-of-input at once and exited 0 having printed
-# nothing (`src/bin/rusty-shell.rs`). The release workflow ships this beside it.
+# build of the window is a GUI-subsystem executable, and a pseudoconsole
+# hosts only console programs: started as a terminal's shell, a window
+# program has no standard handles, reads end-of-input at once and exits 0
+# having printed nothing (`src/bin/rusty-shell.rs`).
 [[bin]]
 name = "rusty-shell"
 path = "src/bin/rusty-shell.rs"
