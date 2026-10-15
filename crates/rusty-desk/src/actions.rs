@@ -96,6 +96,21 @@ pub const ALL: &[Action] = &[
         Some("Shift+F8"),
     ),
     action("tab.close", "desk.close-tab", Some("Ctrl+W")),
+    // A tab's right-click menu (`app/tab_menu.rs`); from the palette, for
+    // the tab in front.
+    action("tab.close-others", "strip.close-others", None),
+    action("tab.close-right", "strip.close-right", None),
+    action("tab.close-saved", "strip.close-saved", None),
+    action("tab.close-all", "strip.close-all", None),
+    // The tree's words for the same verbs (`app/tree.rs`), and its way of
+    // doing them.
+    action("tab.copy-path", "context.tree-copy-path", None),
+    action(
+        "tab.copy-relative-path",
+        "context.tree-copy-relative-path",
+        None,
+    ),
+    action("tab.reveal", crate::reveal::label_key(), None),
     action("dock.left", "desk.dock-left", Some("Ctrl+B")),
     action("dock.bottom", "desk.dock-bottom", Some("Ctrl+J")),
     action("dock.right", "desk.dock-right", Some("Ctrl+Alt+B")),
@@ -157,6 +172,14 @@ pub const ALL: &[Action] = &[
     Action {
         id: "git.branches",
         title: "panel.git",
+        chord: None,
+        listed: false,
+    },
+    // A tab's file opened in the group to its right; the palette has Split
+    // editor for the tab in front.
+    Action {
+        id: "tab.split-right",
+        title: "strip.split-right",
         chord: None,
         listed: false,
     },

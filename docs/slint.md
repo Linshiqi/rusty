@@ -72,7 +72,7 @@ is happening; **Wokwi** for the board beside the code.
 
 ```
 ┌ title bar ────────────────────────────────────────────────────────────────┐
-│ rustfly ▾  ⎇ main ▾              [▶ │ ▣ ▾]                             ⌕ ≡  ─ □ ✕ │
+│ ◉ rustfly ▾  ⎇ main ▾            [▶ │ ▣ ▾]                             ⌕ ≡  ─ □ ✕ │
 ├ left dock ┬ editor ──────────────────────────────────────┬ right dock ────┤
 │ Project   │ main.rs   estimator.rs ×                     │ Board          │
 │ Search    │                                              │ Assistant      │
@@ -84,7 +84,9 @@ is happening; **Wokwi** for the board beside the code.
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **The title bar is the run loop.** On the left, which project (its menu
+- **The title bar is the run loop.** On the left, rusty's mark — the
+  window's icon, which opens the window's menu as a Windows app's icon does
+  — then which project (its menu
   is recents, open, new, clone, the playgrounds) and which branch. In the
   middle, Xcode's shape: the run button, *where* it runs — the simulator, a
   serial port, a probe or a USB bootloader, one list — and stop; the button
@@ -544,6 +546,18 @@ tests green, and CLAUDE.md saying how it works.
    where its view was scrolled, so a tab comes back where it was left. The
    probe splits `lib.rs`, opens `Cargo.toml` on the right and types there,
    presses in the left view to move the keys, and types there.
+
+   Then VS Code's strip and divider, after v0.7.0-rc.1 drew the split
+   button over the last tab and left the divider fixed at half: each strip's
+   tabs sit in a lane ending where its buttons begin, scrolled sideways by
+   the wheel, with the tab in front brought into view as it changes; the
+   divider drags, keeps each group 220 px wide, goes back to half on a
+   double-click and is kept in `workbench.toml` with the docks' sizes; and a
+   tab's right-click menu has VS Code's rows — the closes, the paths, Reveal
+   and Split right (`app/tab_menu.rs`), each an action the palette also
+   offers for the tab in front. `RUSTY_PROBE_TABS` opens a book's chapters
+   until the strip overflows, wheels it, drags and double-clicks the
+   divider, and uses the menu on both strips.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 

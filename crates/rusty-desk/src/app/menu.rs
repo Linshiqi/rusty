@@ -72,9 +72,21 @@ impl App {
             ids.extend(["", "editor.rename", "editor.quick-fix", ""]);
         }
         ids.push("palette.open");
+        self.open_action_menu("editor", &ids, x, y);
+    }
+
+    /// A menu of actions by their ids, each row named and keyed as the
+    /// palette names and keys it; an empty id is a divider.
+    pub(super) fn open_action_menu(
+        self: &Rc<Self>,
+        owner: &'static str,
+        ids: &[&str],
+        x: f32,
+        y: f32,
+    ) {
         let rows = ids
-            .into_iter()
-            .map(|id| {
+            .iter()
+            .map(|&id| {
                 let action = actions::by_id(id);
                 MenuItem {
                     id: id.into(),
@@ -87,7 +99,7 @@ impl App {
                 }
             })
             .collect();
-        self.show_menu("editor", rows, x, y);
+        self.show_menu(owner, rows, x, y);
     }
 
     pub(super) fn menu_picked(self: &Rc<Self>, id: &str) {
@@ -103,6 +115,10 @@ impl App {
                 self.front_focus();
                 self.act(id);
             }
+            Some("tab") => {
+                self.front_focus();
+                self.tab_menu_picked(id);
+            }
             _ => {}
         }
     }
@@ -113,6 +129,10 @@ impl App {
             Some("editor") => self.front_focus(),
             // The keys back in the tree, its menu gone.
             Some("tree") => self.tree_menu_dismissed(),
+            Some("tab") => {
+                self.state.borrow_mut().tab_menu = None;
+                self.front_focus();
+            }
             _ => {}
         }
     }

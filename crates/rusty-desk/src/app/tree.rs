@@ -717,7 +717,7 @@ impl App {
 
     /// Explorer, Finder or the desktop's file manager, with the entry
     /// selected (`crate::reveal`).
-    fn tree_reveal(self: &Rc<Self>, path: String) {
+    pub(super) fn tree_reveal(self: &Rc<Self>, path: String) {
         let Some(root) = self.root() else { return };
         work::spawn(
             move || {
@@ -734,7 +734,7 @@ impl App {
 
     /// The path onto the clipboard, written the way this system writes
     /// one — VS Code's: backslashes on Windows, the relative one too.
-    fn tree_copy_path(&self, path: &str, relative: bool) {
+    pub(super) fn tree_copy_path(&self, path: &str, relative: bool) {
         let Some(root) = self.root() else { return };
         let joined = if relative {
             path.to_string()
@@ -928,7 +928,7 @@ impl App {
             {
                 self.keeper.remove(root, file);
             }
-            self.drop_tab(&id);
+            self.drop_tab_anywhere(&id);
         }
         let mut state = self.state.borrow_mut();
         if let Some(project) = state.project.as_mut() {
