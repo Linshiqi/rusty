@@ -4,7 +4,8 @@
 //! project's own views; bottom, what the work prints and what a run
 //! brings; right, the board and the assistant, so the board stands beside
 //! the code. Which are open, how big they are and which panel is in front
-//! live in `workbench.toml` (`rusty_embed::WindowLayout`).
+//! live in `workbench.toml` (`rusty_embed::WindowLayout`), with the panels
+//! somebody took off a strip, which come back when they are shown.
 
 use rusty_embed::{DockLayout, WindowLayout};
 
@@ -69,17 +70,44 @@ impl Dock {
         }
     }
 
-    /// The panel in front: the one remembered when it still exists, the
-    /// first otherwise.
+    /// The panel in front: the one remembered when it still exists and is
+    /// on the strip, the first on it otherwise.
     pub fn front(self, layout: &WindowLayout) -> &'static str {
         let panels = self.panels();
-        self.of(layout)
-            .front
+        let dock = self.of(layout);
+        let shown = |id: &str| !dock.hidden.iter().any(|hidden| hidden == id);
+        dock.front
             .as_deref()
-            .and_then(|front| panels.iter().find(|(id, ..)| *id == front))
+            .and_then(|front| panels.iter().find(|(id, ..)| *id == front && shown(id)))
+            .or_else(|| panels.iter().find(|(id, ..)| shown(id)))
             .unwrap_or(&panels[0])
             .0
     }
+
+    /// A panel's name, for a menu that names it.
+    pub fn title(self, panel: &str) -> Option<&'static str> {
+        self.panels()
+            .iter()
+            .find(|(id, ..)| *id == panel)
+            .map(|(_, title, _)| *title)
+    }
+}
+
+/// `panel` taken off its dock's strip, VS Code's *Hide 'Output'*; the one
+/// in front of it when it was in front. Refused — `false` — for the last
+/// panel `listed` on the strip, which would leave a dock with no tab to
+/// open anything from.
+pub fn hide(dock: &mut DockLayout, panel: &str, listed: &[&str]) -> bool {
+    let Some(next) = listed.iter().find(|id| **id != panel) else {
+        return false;
+    };
+    if !dock.hidden.iter().any(|hidden| hidden == panel) {
+        dock.hidden.push(panel.to_string());
+    }
+    if dock.front.as_deref().is_none_or(|front| front == panel) {
+        dock.front = Some((*next).to_string());
+    }
+    true
 }
 
 /// The icons a dock's tab can wear, by the name `ui/icons.slint` gives them.
@@ -106,8 +134,16 @@ pub enum Glyph {
 /// Whether a panel is on its dock's strip: the pinned ones always, the
 /// ones a run or a question brings once there is something in them — or
 /// while they are in front, so a panel somebody is reading does not vanish
-/// under them.
-pub fn listed(id: &str, has_content: impl Fn(&str) -> bool, front: &str) -> bool {
+/// under them — and none somebody took off it, until it is shown again.
+pub fn listed(
+    id: &str,
+    has_content: impl Fn(&str) -> bool,
+    front: &str,
+    hidden: &[String],
+) -> bool {
+    if hidden.iter().any(|hidden| hidden == id) {
+        return false;
+    }
     match id {
         "plot" | "waves" | "draw" | "flight" | "signals" | "debug" | "registers" | "calls" => {
             has_content(id) || front == id
@@ -119,6 +155,32 @@ pub fn listed(id: &str, has_content: impl Fn(&str) -> bool, front: &str) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A panel taken off the strip leaves it, the one in front moves to
+    /// the next, the last on the strip cannot go, and a dock whose first
+    /// panel is hidden fronts the next rather than one with no tab.
+    #[test]
+    fn a_hidden_panel_leaves_the_strip_but_never_the_last() {
+        let mut layout = WindowLayout::default();
+        layout.left.front = Some("project".into());
+        assert!(hide(
+            &mut layout.left,
+            "project",
+            &["project", "search", "git"]
+        ));
+        assert_eq!(layout.left.hidden, ["project"]);
+        assert_eq!(Dock::Left.front(&layout), "search");
+        assert!(!listed("project", |_| true, "search", &layout.left.hidden));
+        assert!(listed("git", |_| true, "search", &layout.left.hidden));
+        // Somebody else in front stays in front.
+        assert!(hide(&mut layout.left, "git", &["search", "git"]));
+        assert_eq!(Dock::Left.front(&layout), "search");
+        assert!(!hide(&mut layout.left, "search", &["search"]));
+        assert_eq!(layout.left.hidden, ["project", "git"]);
+        // Remembered in front but hidden: the first on the strip instead.
+        layout.left.front = Some("git".into());
+        assert_eq!(Dock::Left.front(&layout), "search");
+    }
 
     #[test]
     fn a_remembered_panel_that_no_longer_exists_falls_back_to_the_first() {

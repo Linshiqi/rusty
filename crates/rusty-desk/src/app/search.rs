@@ -25,6 +25,13 @@ pub(super) struct Search {
     error: Option<String>,
 }
 
+impl Search {
+    /// The line a hit is on, as it reads, for a menu to copy.
+    pub(super) fn line_of(&self, hit: usize) -> Option<String> {
+        Some(self.hits.get(hit)?.text.trim().to_string())
+    }
+}
+
 impl App {
     /// The query or a switch changed: searched a moment after the typing
     /// stops.

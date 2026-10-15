@@ -161,7 +161,9 @@ impl Surface {
 
     /// The hints or the colours of the document on screen changed: every
     /// row is drawn again, the view is as wide as its widest line with its
-    /// hints, and the caret stands where its column now is.
+    /// hints, and the caret stands where its column now is — where the view
+    /// is: a long file's answer arrives because the view moved away from
+    /// the caret, and scrolling back to it took the wheel's work away.
     pub(super) fn hints_changed(&self) {
         let Some(doc) = self.doc() else { return };
         let widest = {
@@ -182,7 +184,9 @@ impl Surface {
             }
         }
         self.rows.reset();
-        self.show_caret();
+        if self.place_caret().is_some() {
+            self.tell_caret();
+        }
         self.overview
             .paintings
             .set(self.overview.paintings.get() + 1);

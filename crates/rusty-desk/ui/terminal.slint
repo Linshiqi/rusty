@@ -8,15 +8,28 @@ import { Shell } from "shell.slint";
 import { IconButton } from "widgets.slint";
 
 export component TerminalPanel inherits Rectangle {
-    // One cell of the grid, measured off the font.
-    property <length> font-size: 13px;
+    // One cell of the grid, measured off the font, whose size Ctrl and the
+    // wheel choose; a new size is a new count of cells.
+    property <length> font-size: Shell.term-font-size;
     property <length> cell-w: measure.preferred-width / 10;
     property <length> cell-h: round(root.font-size * 1.35 / 1px) * 1px;
+    changed cell-w => {
+        Shell.term-resized(floor(keys.width / root.cell-w), floor(keys.height / root.cell-h));
+    }
+    changed cell-h => {
+        Shell.term-resized(floor(keys.width / root.cell-w), floor(keys.height / root.cell-h));
+    }
     measure := Text {
         visible: false;
         text: "MMMMMMMMMM";
         font-family: Theme.mono;
         font-size: root.font-size;
+    }
+
+    // The keys back here once its menu is put away.
+    property <int> focus-tick: Shell.term-focus;
+    changed focus-tick => {
+        keys.focus();
     }
 
     // Shown: a shell if there is none. The theme changed: its colours.
@@ -50,10 +63,30 @@ export component TerminalPanel inherits Rectangle {
             reject
         }
         TouchArea {
+            mouse-cursor: text;
             clicked => {
                 keys.focus();
             }
+            // A press starts a selection and a drag carries it, cell by
+            // cell; the right button opens the terminal's menu.
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    Shell.term-select(0, floor(self.mouse-x / root.cell-w + 0.5), floor(self.mouse-y / root.cell-h));
+                } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                    keys.focus();
+                    Shell.surface-menu("terminal", "", -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    Shell.term-select(1, floor(self.mouse-x / root.cell-w + 0.5), floor(self.mouse-y / root.cell-h));
+                }
+            }
             scroll-event(event) => {
+                if (event.modifiers.control) {
+                    Shell.content-zoom("terminal", event.delta-y);
+                    return accept;
+                }
                 Shell.term-scroll(event.delta-y > 0 ? 3 : -3);
                 accept
             }
@@ -82,6 +115,13 @@ export component TerminalPanel inherits Rectangle {
                     height: 1px;
                     background: label.color;
                 }
+            }
+            // The selection, over the text and see-through, so a span with
+            // a background of its own is selected as visibly as one without.
+            if Shell.term-selected && index >= Shell.term-sel-row && index <= Shell.term-sel-end-row: Rectangle {
+                x: (index == Shell.term-sel-row ? Shell.term-sel-col : 0) * root.cell-w;
+                width: max(0px, index == Shell.term-sel-end-row ? Shell.term-sel-end-col * root.cell-w - self.x : parent.width - self.x);
+                background: Theme.text-selection.with-alpha(0.55);
             }
         }
         // The cursor, a block while the terminal has the keyboard.

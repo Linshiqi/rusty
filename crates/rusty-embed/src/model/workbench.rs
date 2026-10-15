@@ -82,8 +82,16 @@ impl Default for EditorView {
 pub struct WindowLayout {
     /// `system`, `dark` or `light`.
     pub theme: String,
-    /// The interface's scale, 1.0 as designed.
+    /// The interface's scale, 1.0 as designed: Ctrl+= and Ctrl+-.
     pub zoom: f32,
+    /// The editor's text, 1.0 as designed: Ctrl and the wheel over the
+    /// code, VS Code's `editor.mouseWheelZoom`.
+    pub editor_zoom: f32,
+    /// A Markdown page's text, apart from the editor's: prose and a
+    /// listing are read at different sizes.
+    pub page_zoom: f32,
+    /// The terminal's text.
+    pub terminal_zoom: f32,
     pub left: DockLayout,
     pub bottom: DockLayout,
     pub right: DockLayout,
@@ -93,13 +101,15 @@ pub struct WindowLayout {
 }
 
 /// One dock: whether it is open, how wide (or for the bottom one, how tall)
-/// in logical pixels, and which of its panels was in front.
+/// in logical pixels, which of its panels was in front, and which were
+/// taken off its strip (VS Code's *Hide 'Output'*), until they are shown.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockLayout {
     pub open: bool,
     pub size: f32,
     pub front: Option<String>,
+    pub hidden: Vec<String>,
 }
 
 impl Default for WindowLayout {
@@ -107,20 +117,26 @@ impl Default for WindowLayout {
         WindowLayout {
             theme: "system".into(),
             zoom: 1.0,
+            editor_zoom: 1.0,
+            page_zoom: 1.0,
+            terminal_zoom: 1.0,
             left: DockLayout {
                 open: true,
                 size: 260.0,
                 front: None,
+                hidden: Vec::new(),
             },
             bottom: DockLayout {
                 open: false,
                 size: 240.0,
                 front: None,
+                hidden: Vec::new(),
             },
             right: DockLayout {
                 open: false,
                 size: 420.0,
                 front: None,
+                hidden: Vec::new(),
             },
             split: 0.5,
         }
