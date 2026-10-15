@@ -51,7 +51,22 @@
 //! window and undoes it from the other (one history), saves from the
 //! window of its own, closes it and types in the main window again; then
 //! drags `Cargo.toml`'s tab out beyond the main window's edge and moves it
-//! back — on a copy, since it saves.
+//! back; then moves a new file there from its tab's menu, renames it in the
+//! tree and deletes it there — on a copy, since it saves and deletes.
+//! With `RUSTY_PROBE_TREE`, on a copy of a project with a `src/`, it works
+//! the file tree by its pointer and its keys: a file made in `src` from the
+//! folder's menu (a taken name refused under the box first), a folder made
+//! from the root's menu below the rows, a rename, Ctrl+C and Ctrl+V beside
+//! the original, an edited file dragged into the new folder — its tab and
+//! draft going with it — a cut pasted, a delete to the recycle bin, the
+//! arrows and F2 — photographing each and printing the tree as drawn.
+//! With `RUSTY_PROBE_TABS`, on a project with a `book/` of files, it opens
+//! every one until the strip overflows, wheels the strip back to its start
+//! and brings the tab in front into view again, splits, drags the divider
+//! and double-clicks it, right-clicks a tab on each strip and uses a few of
+//! its menu's rows — Split right, Copy path, the closes — and clicks the
+//! logo, photographing each; `RUSTY_PROBE_REVEAL` with it also reveals a
+//! file in the file manager, which opens a window of the system's.
 
 use std::{
     cell::{Cell, RefCell},
@@ -61,8 +76,8 @@ use std::{
 };
 
 use slint::{
-    ComponentHandle, Model, RenderingState, Timer, TimerMode,
-    platform::{Key, WindowEvent},
+    ComponentHandle, LogicalPosition, Model, RenderingState, Timer, TimerMode,
+    platform::{Key, PointerEventButton, WindowEvent},
 };
 
 use crate::{AppWindow, Code, Find, Shell, work};
@@ -123,10 +138,15 @@ pub fn start(window: &AppWindow) {
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
     let tearing = std::env::var_os("RUSTY_PROBE_TORN").is_some();
+    let exploring = std::env::var_os("RUSTY_PROBE_TREE").is_some();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
     let strip = std::env::var_os("RUSTY_PROBE_STRIP").is_some();
+    let tabbing = std::env::var_os("RUSTY_PROBE_TABS").is_some();
+    let revealing = std::env::var_os("RUSTY_PROBE_REVEAL").is_some();
+    // How many tabs the strip is to hold once every file has opened.
+    let tab_goal = Rc::new(Cell::new(0usize));
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -296,11 +316,17 @@ pub fn start(window: &AppWindow) {
                 if strip {
                     step.set(2900);
                 }
+                if tabbing {
+                    step.set(3700);
+                }
                 if marking {
                     step.set(3000);
                 }
                 if tearing {
                     step.set(3600);
+                }
+                if exploring {
+                    step.set(4100);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -1086,6 +1112,264 @@ pub fn start(window: &AppWindow) {
                 );
                 app.act("app.exit");
             }
+            // The strip, the split and a tab's menu: every file under `book/`
+            // opened until the strip overflows, the lane wheeled back to its
+            // start and the front tab brought into view again; the editor
+            // split, its divider dragged and double-clicked; each strip's tab
+            // menu opened by a right-click and a few of its rows used; and
+            // the logo clicked.
+            3700 if tabbing => {
+                // The layout told the window's size as the window has it,
+                // so what is measured here is where things are drawn: a
+                // scale changed after the window was laid out can leave the
+                // two apart.
+                let size = window
+                    .window()
+                    .size()
+                    .to_logical(window.window().scale_factor());
+                pointer(&window, WindowEvent::Resized { size });
+                let root = app.root_path().unwrap_or_default();
+                let mut names: Vec<String> = std::fs::read_dir(root.join("book"))
+                    .map(|entries| {
+                        entries
+                            .filter_map(Result::ok)
+                            .map(|e| format!("book/{}", e.file_name().to_string_lossy()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                names.sort();
+                eprintln!("tabs: opening {} files", names.len());
+                tab_goal.set(names.len() + shell.get_tabs().row_count());
+                for name in names {
+                    app.open_file(name);
+                }
+            }
+            3701 if tabbing => {
+                if shell.get_tabs().row_count() < tab_goal.get() {
+                    step.set(3701);
+                }
+            }
+            3706 if tabbing => {
+                eprintln!(
+                    "tabs: {} open, {:?} in front",
+                    shell.get_tabs().row_count(),
+                    shell.get_active_tab()
+                );
+                snapshot(&window, &dir.join("tabs-overflow.png"));
+                // The wheel over the strip, turned towards its start.
+                let (left, _) = editor_span(&window, &shell);
+                let at = LogicalPosition::new(left + 200.0, STRIP_Y);
+                pointer(&window, WindowEvent::PointerMoved { position: at });
+                pointer(
+                    &window,
+                    WindowEvent::PointerScrolled {
+                        position: at,
+                        delta_x: 0.0,
+                        delta_y: 4000.0,
+                    },
+                );
+            }
+            3709 if tabbing => {
+                snapshot(&window, &dir.join("tabs-wheel.png"));
+                let first = shell.get_tabs().row_data(0).map(|t| t.id).unwrap_or_default();
+                shell.invoke_pick_tab(first);
+            }
+            3711 if tabbing => {
+                // The last tab picked from out of view: brought back into it.
+                let count = shell.get_tabs().row_count();
+                let last = shell
+                    .get_tabs()
+                    .row_data(count.saturating_sub(1))
+                    .map(|t| t.id)
+                    .unwrap_or_default();
+                shell.invoke_pick_tab(last);
+            }
+            3715 if tabbing => {
+                snapshot(&window, &dir.join("tabs-reveal.png"));
+                app.act("editor.split");
+            }
+            3719 if tabbing => {
+                let (left, width) = editor_span(&window, &shell);
+                let share = shell.get_split_share();
+                eprintln!(
+                    "split: share {share}, the divider at {}",
+                    left + divider_at(width, share)
+                );
+                snapshot(&window, &dir.join("split-half.png"));
+                // The divider taken hold of a pixel beside its line and
+                // dragged 250 px to the left.
+                let x = left + divider_at(width, share) + 2.0;
+                let from = LogicalPosition::new(x, 300.0);
+                let to = LogicalPosition::new(x - 250.0, 300.0);
+                pointer(&window, WindowEvent::PointerMoved { position: from });
+                pointer(
+                    &window,
+                    WindowEvent::PointerPressed {
+                        position: from,
+                        button: PointerEventButton::Left,
+                    },
+                );
+                pointer(&window, WindowEvent::PointerMoved { position: to });
+                pointer(
+                    &window,
+                    WindowEvent::PointerReleased {
+                        position: to,
+                        button: PointerEventButton::Left,
+                    },
+                );
+            }
+            3722 if tabbing => {
+                eprintln!(
+                    "split: dragged: share {:.3}, kept as {:.3}",
+                    shell.get_split_share(),
+                    rusty_embed::config::workbench().layout.split
+                );
+                snapshot(&window, &dir.join("split-dragged.png"));
+                // A double-click on the divider where it now is.
+                let (left, width) = editor_span(&window, &shell);
+                let at = LogicalPosition::new(
+                    left + divider_at(width, shell.get_split_share()) - 2.0,
+                    300.0,
+                );
+                pointer(&window, WindowEvent::PointerMoved { position: at });
+                for _ in 0..2 {
+                    pointer(
+                        &window,
+                        WindowEvent::PointerPressed {
+                            position: at,
+                            button: PointerEventButton::Left,
+                        },
+                    );
+                    pointer(
+                        &window,
+                        WindowEvent::PointerReleased {
+                            position: at,
+                            button: PointerEventButton::Left,
+                        },
+                    );
+                }
+            }
+            3725 if tabbing => {
+                eprintln!(
+                    "split: double-clicked: share {:.3}, kept as {:.3}",
+                    shell.get_split_share(),
+                    rusty_embed::config::workbench().layout.split
+                );
+                snapshot(&window, &dir.join("split-reset.png"));
+                // A right-click on a tab of the left strip, the group
+                // without the keys.
+                let (left, _) = editor_span(&window, &shell);
+                right_click(&window, LogicalPosition::new(left + 40.0, STRIP_Y));
+            }
+            3728 if tabbing => {
+                eprintln!(
+                    "menu: open {} for {:?}: {:?}",
+                    shell.get_menu_open(),
+                    app.tab_menu_for(),
+                    menu_rows(&shell)
+                );
+                snapshot(&window, &dir.join("tab-menu-left.png"));
+                shell.invoke_menu_picked("tab.split-right".into());
+            }
+            3731 if tabbing => {
+                eprintln!("split right: {}", groups(&shell));
+                snapshot(&window, &dir.join("tab-split-right.png"));
+                // And on the right strip, the group with the keys.
+                let (left, width) = editor_span(&window, &shell);
+                let x = left + divider_at(width, shell.get_split_share()) + 1.0 + 40.0;
+                right_click(&window, LogicalPosition::new(x, STRIP_Y));
+            }
+            3734 if tabbing => {
+                eprintln!(
+                    "menu: open {} for {:?}: {:?}",
+                    shell.get_menu_open(),
+                    app.tab_menu_for(),
+                    menu_rows(&shell)
+                );
+                snapshot(&window, &dir.join("tab-menu-right.png"));
+                shell.invoke_menu_picked("tab.copy-path".into());
+            }
+            3735 if tabbing => {
+                eprintln!("copy path: {:?}", clipboard());
+                let id = shell.get_active_tab();
+                shell.invoke_tab_menu(id, false, 400.0, 80.0);
+                shell.invoke_menu_picked("tab.copy-relative-path".into());
+            }
+            3736 if tabbing => {
+                eprintln!("copy relative path: {:?}", clipboard());
+                // Close to the right of the left group's fourth tab.
+                let id = shell.get_shade_tabs().row_data(3).map(|t| t.id).unwrap_or_default();
+                shell.invoke_tab_menu(id, true, 100.0, 80.0);
+                shell.invoke_menu_picked("tab.close-right".into());
+            }
+            3738 if tabbing => {
+                eprintln!("close to the right: {}", groups(&shell));
+                // Something typed in the group's Rust file, then Close saved
+                // on the group: every tab but that one goes, and nothing
+                // asks.
+                let rust = shell
+                    .get_tabs()
+                    .iter()
+                    .find(|t| t.title == "lib.rs")
+                    .map(|t| t.id)
+                    .unwrap_or_default();
+                shell.invoke_pick_tab(rust);
+            }
+            3739 if tabbing => key("x".into()),
+            3740 if tabbing => {
+                let id = shell.get_tabs().row_data(0).map(|t| t.id).unwrap_or_default();
+                shell.invoke_tab_menu(id, false, 100.0, 80.0);
+                shell.invoke_menu_picked("tab.close-saved".into());
+            }
+            3741 if tabbing => {
+                eprintln!("close saved: {}", groups(&shell));
+                // Close all on the other group: the split ends.
+                let id = shell.get_shade_tabs().row_data(0).map(|t| t.id).unwrap_or_default();
+                shell.invoke_tab_menu(id, true, 600.0, 80.0);
+                shell.invoke_menu_picked("tab.close-all".into());
+            }
+            3743 if tabbing => {
+                eprintln!("close all on the other group: {}", groups(&shell));
+                snapshot(&window, &dir.join("tabs-closed.png"));
+                chord(&[Key::Control], "z".into());
+                if revealing {
+                    let id = shell.get_active_tab();
+                    shell.invoke_tab_menu(id, false, 100.0, 80.0);
+                    shell.invoke_menu_picked("tab.reveal".into());
+                    eprintln!("reveal: asked for {:?}", shell.get_active_tab());
+                }
+            }
+            3745 if tabbing => {
+                // The logo at the title bar's far left: the window's menu.
+                let at = LogicalPosition::new(21.0, 20.0);
+                pointer(&window, WindowEvent::PointerMoved { position: at });
+                pointer(
+                    &window,
+                    WindowEvent::PointerPressed {
+                        position: at,
+                        button: PointerEventButton::Left,
+                    },
+                );
+                pointer(
+                    &window,
+                    WindowEvent::PointerReleased {
+                        position: at,
+                        button: PointerEventButton::Left,
+                    },
+                );
+            }
+            3748 if tabbing => {
+                eprintln!(
+                    "logo: the picker open {}, saying {:?}, {} rows",
+                    shell.get_picker_open(),
+                    shell.get_picker_hint(),
+                    shell.get_picker_rows().row_count()
+                );
+                snapshot(&window, &dir.join("logo-menu.png"));
+                shell.set_picker_open(false);
+                shell.invoke_picker_pick(-1);
+            }
+            3750 if tabbing => app.act("app.exit"),
             // Check for updates by hand, download what the feed offers, and
             // stop at the restart: what Settings says at each step.
             2800 if updating => app.act("update.check"),
@@ -1541,9 +1825,9 @@ pub fn start(window: &AppWindow) {
                     torn_chord(&torn, &[], &ch.to_string());
                 }
                 waited.set(0);
-                step.set(3620);
+                step.set(3680);
             }
-            3620 if tearing => {
+            3680 if tearing => {
                 let Some((torn, surface)) = app.torn_windows().into_iter().next() else {
                     return;
                 };
@@ -1557,7 +1841,7 @@ pub fn start(window: &AppWindow) {
                 if squiggled.is_empty() {
                     waited.set(waited.get() + 1);
                     if waited.get() < 1500 {
-                        step.set(3620);
+                        step.set(3680);
                         return;
                     }
                 }
@@ -1581,7 +1865,7 @@ pub fn start(window: &AppWindow) {
                 surface.hover_caret();
                 waited.set(0);
             }
-            3621 if tearing => {
+            3681 if tearing => {
                 let Some((torn, _)) = app.torn_windows().into_iter().next() else {
                     return;
                 };
@@ -1591,7 +1875,7 @@ pub fn start(window: &AppWindow) {
                 if !answered {
                     waited.set(waited.get() + 1);
                     if waited.get() < 750 {
-                        step.set(3621);
+                        step.set(3681);
                         return;
                     }
                 }
@@ -1636,13 +1920,17 @@ pub fn start(window: &AppWindow) {
             }
             3611 if tearing => key("M".into()),
             3612 if tearing => {
-                if let Some((torn, _)) = app.torn_windows().first() {
-                    let row = torn.global::<Code>().get_rows().row_data(0).map(|row| {
-                        row.pieces.iter().map(|p| p.text.to_string()).collect::<String>()
-                    });
+                if let Some((torn, surface)) = app.torn_windows().first() {
+                    let line = surface.status().map_or(1, |s| s.0);
+                    let row = torn
+                        .global::<Code>()
+                        .get_rows()
+                        .iter()
+                        .find(|row| row.number == line as i32)
+                        .map(|row| row.pieces.iter().map(|p| p.text.to_string()).collect::<String>());
                     eprintln!(
-                        "torn: typed in the main window, the other's row 1 {row:?}, its caret {:?}",
-                        app.torn_windows()[0].1.status().map(|s| (s.0, s.1))
+                        "torn: typed in the main window, the other's row {line} {row:?}, its caret {:?}",
+                        surface.status().map(|s| (s.0, s.1))
                     );
                     snapshot_of(torn.window(), &dir.join("torn-window-follows.png"));
                     // Undone from the window of its own: one history.
@@ -1655,11 +1943,12 @@ pub fn start(window: &AppWindow) {
             }
             3613 if tearing => {
                 let path = start_path.borrow().clone();
-                let first = app
-                    .editor()
-                    .draft_of(&path)
-                    .and_then(|(text, ..)| text.lines().next().map(str::to_string));
-                eprintln!("torn: Ctrl+Z in the window of its own: line 1 {first:?}");
+                let typed = app.editor().draft_of(&path).and_then(|(text, ..)| {
+                    text.lines()
+                        .find(|line| line.contains("torn_probe"))
+                        .map(str::to_string)
+                });
+                eprintln!("torn: Ctrl+Z in the window of its own: the line typed there {typed:?}");
                 // Saved from there.
                 if let Some((torn, _)) = app.torn_windows().first() {
                     let send = |event| torn.window().dispatch_event(event);
@@ -1748,7 +2037,100 @@ pub fn start(window: &AppWindow) {
                 );
                 snapshot(&window, &dir.join("torn-back.png"));
             }
-            3655 if tearing => app.act("app.exit"),
+            // A file in a window of its own follows the tree: renamed there,
+            // it is the renamed file; deleted there, its window closes.
+            3653 if tearing => {
+                if let Some(root) = app.root_path() {
+                    let _ = std::fs::write(root.join("notes.txt"), "a note\n");
+                }
+                app.open_file("notes.txt".into());
+                waited.set(0);
+            }
+            3654 if tearing => {
+                if shell.get_active_tab() != "file:notes.txt" || app.tree_row_of("notes.txt").is_none() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(3654);
+                    }
+                    return;
+                }
+                // From the tab's own menu, as a right-click there offers it.
+                shell.invoke_tab_menu("file:notes.txt".into(), false, 450.0, 58.0);
+            }
+            3655 if tearing => {
+                eprintln!(
+                    "torn: the tab's menu offers {:?}",
+                    shell.get_menu_items().iter().map(|i| i.id.to_string()).collect::<Vec<_>>()
+                );
+                shell.invoke_menu_picked("editor.detach".into());
+            }
+            3656 if tearing => {
+                let torn = app.torn_windows();
+                eprintln!(
+                    "torn: notes.txt from its tab's menu: {} window(s) of its own, its tab {:?}, main strip {:?}",
+                    torn.len(),
+                    torn.first().map(|(w, _)| w.get_name().to_string()),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                );
+                if let Some(row) = app.tree_row_of("notes.txt") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            3657 if tearing => shell.invoke_menu_picked("rename".into()),
+            3658 if tearing => {
+                if shell.get_tree_name_row() < 0 {
+                    step.set(3658);
+                    return;
+                }
+                for c in "moved".chars() {
+                    key(c.to_string().into());
+                }
+                key(Key::Return.into());
+                waited.set(0);
+            }
+            3659 if tearing => {
+                let torn = app.torn_windows();
+                let named = torn.first().map(|(w, _)| w.get_name().to_string());
+                if named.as_deref() != Some("moved.txt") {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(3659);
+                    }
+                    return;
+                }
+                if let Some((torn, surface)) = torn.first() {
+                    torn_chord(torn, &[], "x");
+                    eprintln!(
+                        "torn: renamed in the tree: its tab {named:?}, its title {:?}, its file {:?}, the draft {:?}, notes.txt open {}",
+                        torn.get_caption().to_string(),
+                        surface.current_path(),
+                        app.editor().draft_of("moved.txt").map(|(text, ..)| text),
+                        app.editor().holds("notes.txt"),
+                    );
+                    snapshot_of(torn.window(), &dir.join("torn-renamed.png"));
+                }
+                if let Some(row) = app.tree_row_of("moved.txt") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            3660 if tearing => shell.invoke_menu_picked("delete".into()),
+            3661 if tearing => {
+                if !app.torn_windows().is_empty() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(3661);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "torn: deleted in the tree: {} window(s) of its own, moved.txt open {}, main strip {:?}",
+                    app.torn_windows().len(),
+                    app.editor().holds("moved.txt"),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                );
+                snapshot(&window, &dir.join("torn-deleted.png"));
+            }
+            3665 if tearing => app.act("app.exit"),
             // Where the caret rests: the brace beside it and its partner
             // outlined; the name under it washed where else it occurs, and
             // the washes gone at the next key; a problem's fixes listed on
@@ -2645,6 +3027,343 @@ pub fn start(window: &AppWindow) {
                     }
                 );
             }
+            // The tree's own verbs, on a copy of a project with `src/`: a
+            // file made in `src` from its menu (a taken name refused first),
+            // a folder at the root from the space below the rows, a rename,
+            // a copy pasted beside its original, a file with an open,
+            // edited tab dragged into the folder — the tab and its draft
+            // go with it — a cut pasted, a delete, and the arrows and F2.
+            // Clicks, right-clicks and the drag are pointer events at the
+            // rows, so the view's own hit-testing is what is driven.
+            4100 if exploring => {
+                shell.invoke_show_panel("left".into(), "project".into());
+            }
+            4101 if exploring => {
+                eprintln!("tree: opened: {}", tree_said(&shell));
+                match app.tree_row_of("src") {
+                    Some(row) => tree_click(&window, row, PointerEventButton::Right),
+                    None => {
+                        eprintln!("tree: no src/ to work in");
+                        app.act("app.exit");
+                    }
+                }
+            }
+            4102 if exploring => {
+                eprintln!("tree: src's menu: {}", menu_said(&shell));
+                snapshot(&window, &dir.join("tree-menu-folder.png"));
+                shell.invoke_menu_picked("new-file".into());
+            }
+            4103 if exploring => {
+                if shell.get_tree_name_row() < 0 {
+                    step.set(4103);
+                    return;
+                }
+                for c in "lib.rs".chars() {
+                    key(c.to_string().into());
+                }
+            }
+            4104 if exploring => {
+                eprintln!(
+                    "tree: typed lib.rs into the box on row {}: {:?}",
+                    shell.get_tree_name_row(),
+                    shell.get_tree_name_problem()
+                );
+                snapshot(&window, &dir.join("tree-name-taken.png"));
+                chord(&[Key::Control], "a".into());
+                for c in "probe.rs".chars() {
+                    key(c.to_string().into());
+                }
+            }
+            4105 if exploring => {
+                eprintln!("tree: then probe.rs: {:?}", shell.get_tree_name_problem());
+                snapshot(&window, &dir.join("tree-name-new.png"));
+                key(Key::Return.into());
+                waited.set(0);
+            }
+            4106 if exploring => {
+                if shell.get_active_tab() != "file:src/probe.rs" {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4106);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "tree: made src/probe.rs, on disk {}, open {:?}: {}",
+                    app.root_path().is_some_and(|r| r.join("src/probe.rs").is_file()),
+                    shell.get_active_tab(),
+                    tree_said(&shell)
+                );
+                snapshot(&window, &dir.join("tree-new-file.png"));
+                // Below the last row: the root's menu.
+                let below = shell.get_tree().row_count() as i32 + 2;
+                tree_click(&window, below, PointerEventButton::Right);
+            }
+            4107 if exploring => {
+                eprintln!("tree: the root's menu: {}", menu_said(&shell));
+                snapshot(&window, &dir.join("tree-menu-root.png"));
+                shell.invoke_menu_picked("new-folder".into());
+            }
+            4108 if exploring => {
+                if shell.get_tree_name_row() < 0 {
+                    step.set(4108);
+                    return;
+                }
+                for c in "docs".chars() {
+                    key(c.to_string().into());
+                }
+                key(Key::Return.into());
+                waited.set(0);
+            }
+            4109 if exploring => {
+                if app.tree_row_of("docs").is_none() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4109);
+                    }
+                    return;
+                }
+                eprintln!("tree: made docs/: {}", tree_said(&shell));
+                if let Some(row) = app.tree_row_of("src/probe.rs") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            4110 if exploring => shell.invoke_menu_picked("rename".into()),
+            4111 if exploring => {
+                if shell.get_tree_name_row() < 0 {
+                    step.set(4111);
+                    return;
+                }
+                // The name before `.rs` is selected: typing replaces it.
+                for c in "renamed".chars() {
+                    key(c.to_string().into());
+                }
+                snapshot(&window, &dir.join("tree-rename.png"));
+                key(Key::Return.into());
+                waited.set(0);
+            }
+            4112 if exploring => {
+                if shell.get_active_tab() != "file:src/renamed.rs" {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4112);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "tree: renamed — the tab followed: {:?}; {}",
+                    shell.get_tabs().iter().map(|t| t.id.to_string()).collect::<Vec<_>>(),
+                    tree_said(&shell)
+                );
+                snapshot(&window, &dir.join("tree-renamed.png"));
+                // A left click selects it and keeps the keys in the tree;
+                // then the clipboard's keys.
+                if let Some(row) = app.tree_row_of("src/renamed.rs") {
+                    tree_click(&window, row, PointerEventButton::Left);
+                }
+            }
+            4114 if exploring => {
+                chord(&[Key::Control], "c".into());
+                chord(&[Key::Control], "v".into());
+                waited.set(0);
+            }
+            4115 if exploring => {
+                if app.tree_row_of("src/renamed copy.rs").is_none() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4115);
+                    }
+                    return;
+                }
+                eprintln!("tree: Ctrl+C, Ctrl+V beside it: {}", tree_said(&shell));
+                snapshot(&window, &dir.join("tree-pasted.png"));
+                // Edited, and not saved: the draft is to go with the move.
+                app.open_file("src/renamed.rs".into());
+            }
+            4116 if exploring => {
+                for c in "// moved with me".chars() {
+                    key(c.to_string().into());
+                }
+                key(Key::Return.into());
+            }
+            4117 if exploring => {
+                eprintln!(
+                    "tree: typed into renamed.rs, dirty {}",
+                    app.editor().is_dirty("src/renamed.rs")
+                );
+                // Carried by the pointer onto docs/.
+                let (Some(from), Some(to)) = (app.tree_row_of("src/renamed.rs"), app.tree_row_of("docs")) else {
+                    eprintln!("tree: rows to drag between are missing");
+                    return;
+                };
+                let send = |event| window.window().dispatch_event(event);
+                let (x, y0, y1) = (90.0, tree_row_y(from), tree_row_y(to));
+                send(WindowEvent::PointerMoved { position: LogicalPosition::new(x, y0) });
+                send(WindowEvent::PointerPressed {
+                    position: LogicalPosition::new(x, y0),
+                    button: PointerEventButton::Left,
+                });
+                for i in 1..=8 {
+                    let y = y0 + (y1 - y0) * i as f32 / 8.0;
+                    send(WindowEvent::PointerMoved { position: LogicalPosition::new(x + 2.0, y) });
+                }
+            }
+            4118 if exploring => {
+                eprintln!("tree: carried over docs/: {}", tree_said(&shell));
+                snapshot(&window, &dir.join("tree-drag.png"));
+                if let Some(to) = app.tree_row_of("docs") {
+                    window.window().dispatch_event(WindowEvent::PointerReleased {
+                        position: LogicalPosition::new(92.0, tree_row_y(to)),
+                        button: PointerEventButton::Left,
+                    });
+                }
+                waited.set(0);
+            }
+            4119 if exploring => {
+                if !shell.get_tabs().iter().any(|t| t.id == "file:docs/renamed.rs") {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4119);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "tree: dropped — tabs {:?}, in front {:?}, its first line {:?}, dirty {}, on disk {}: {}",
+                    shell.get_tabs().iter().map(|t| t.id.to_string()).collect::<Vec<_>>(),
+                    shell.get_active_tab(),
+                    draft().and_then(|t| t.lines().next().map(str::to_string)),
+                    app.editor().is_dirty("docs/renamed.rs"),
+                    app.root_path().is_some_and(|r| r.join("docs/renamed.rs").is_file()),
+                    tree_said(&shell)
+                );
+                snapshot(&window, &dir.join("tree-moved.png"));
+                if let Some(row) = app.tree_row_of("src/renamed copy.rs") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            4120 if exploring => shell.invoke_menu_picked("cut".into()),
+            4121 if exploring => {
+                eprintln!("tree: cut, drawn faint: {}", tree_said(&shell));
+                snapshot(&window, &dir.join("tree-cut.png"));
+                if let Some(row) = app.tree_row_of("docs") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            4122 if exploring => {
+                eprintln!("tree: docs' menu with something cut: {}", menu_said(&shell));
+                shell.invoke_menu_picked("paste".into());
+                waited.set(0);
+            }
+            4123 if exploring => {
+                if app.tree_row_of("docs/renamed copy.rs").is_none() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4123);
+                    }
+                    return;
+                }
+                eprintln!("tree: pasted into docs/: {}", tree_said(&shell));
+                if let Some(row) = app.tree_row_of("docs/renamed.rs") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            4124 if exploring => {
+                eprintln!("tree: a file's menu: {}", menu_said(&shell));
+                snapshot(&window, &dir.join("tree-menu-file.png"));
+                shell.invoke_menu_picked("delete".into());
+                waited.set(0);
+            }
+            4125 if exploring => {
+                if app.tree_row_of("docs/renamed.rs").is_some() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4125);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "tree: deleted — tabs {:?}, selected {:?}: {}",
+                    shell.get_tabs().iter().map(|t| t.id.to_string()).collect::<Vec<_>>(),
+                    app.tree_selected(),
+                    tree_said(&shell)
+                );
+                snapshot(&window, &dir.join("tree-deleted.png"));
+                key(Key::UpArrow.into());
+            }
+            4126 if exploring => {
+                eprintln!("tree: Up: {:?}", app.tree_selected());
+                key(Key::LeftArrow.into());
+            }
+            4127 if exploring => {
+                eprintln!("tree: Left: {:?} {}", app.tree_selected(), tree_said(&shell));
+                key(Key::LeftArrow.into());
+            }
+            4128 if exploring => {
+                eprintln!("tree: Left again: {:?} {}", app.tree_selected(), tree_said(&shell));
+                key(Key::RightArrow.into());
+            }
+            4129 if exploring => {
+                eprintln!("tree: Right: {}", tree_said(&shell));
+                key(Key::DownArrow.into());
+            }
+            4130 if exploring => {
+                eprintln!("tree: Down: {:?}", app.tree_selected());
+                key(Key::F2.into());
+            }
+            4131 if exploring => {
+                eprintln!(
+                    "tree: F2: box on row {}, {:?}",
+                    shell.get_tree_name_row(),
+                    shell.get_tree_name()
+                );
+                snapshot(&window, &dir.join("tree-f2.png"));
+                key(Key::Escape.into());
+            }
+            4132 if exploring => {
+                eprintln!("tree: Escape: box on row {}: {}", shell.get_tree_name_row(), tree_said(&shell));
+                if let Some(row) = app.tree_row_of("docs/renamed copy.rs") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            4133 if exploring => shell.invoke_menu_picked("copy-relative-path".into()),
+            4134 if exploring => {
+                let copied = arboard::Clipboard::new().and_then(|mut c| c.get_text());
+                eprintln!("tree: Copy relative path: {copied:?}");
+                if let Some(row) = app.tree_row_of("docs/renamed copy.rs") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            4135 if exploring => shell.invoke_menu_picked("copy-path".into()),
+            4136 if exploring => {
+                let copied = arboard::Clipboard::new().and_then(|mut c| c.get_text());
+                eprintln!("tree: Copy path: {copied:?}");
+                if let Some(row) = app.tree_row_of("docs/renamed copy.rs") {
+                    tree_click(&window, row, PointerEventButton::Right);
+                }
+            }
+            4137 if exploring => {
+                shell.invoke_menu_picked("open-side".into());
+                waited.set(0);
+            }
+            4138 if exploring => {
+                if !shell.get_split() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(4138);
+                    }
+                    return;
+                }
+                eprintln!(
+                    "tree: Open to the side: split {}, keys on group {}, front {:?} of {:?}, beside {:?}",
+                    shell.get_split(),
+                    shell.get_focus_group(),
+                    shell.get_active_tab(),
+                    shell.get_tabs().iter().map(|t| t.id.to_string()).collect::<Vec<_>>(),
+                    shell.get_shade_tabs().iter().map(|t| t.id.to_string()).collect::<Vec<_>>()
+                );
+                snapshot(&window, &dir.join("tree-open-side.png"));
+                app.act("app.exit");
+            }
             2210 => {
                 app.act("app.exit");
                 let kept = rusty_embed::config::data_dir()
@@ -2725,6 +3444,74 @@ fn calls_said(shell: &Shell) -> String {
     }
 }
 
+/// The project tree as drawn: each row indented by its depth, a folder
+/// with its chevron, and what marks it — selected, cut, lit for a drop, or
+/// the box a name is typed in.
+fn tree_said(shell: &Shell) -> String {
+    shell
+        .get_tree()
+        .iter()
+        .map(|r| {
+            let mut marks = String::new();
+            if r.selected {
+                marks.push_str(" [selected]");
+            }
+            if r.cut {
+                marks.push_str(" [cut]");
+            }
+            if r.drop {
+                marks.push_str(" [drop]");
+            }
+            let name = if r.naming {
+                format!("[box {:?}]", shell.get_tree_name().as_str())
+            } else {
+                r.name.to_string()
+            };
+            let chevron = match (r.dir, r.open) {
+                (true, true) => "▾ ",
+                (true, false) => "▸ ",
+                _ => "",
+            };
+            format!("{}{chevron}{name}{marks}", "  ".repeat(r.depth as usize))
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// The right-click menu's rows, with their keys.
+fn menu_said(shell: &Shell) -> String {
+    shell
+        .get_menu_items()
+        .iter()
+        .map(|item| {
+            if item.id.is_empty() {
+                "—".to_string()
+            } else if item.chord.is_empty() {
+                item.label.to_string()
+            } else {
+                format!("{} ({})", item.label, item.chord)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// The middle of the tree's row `row`, in the window: under the title bar,
+/// the left dock's tabs and the hairlines between them, 22 pixels a row.
+fn tree_row_y(row: i32) -> f32 {
+    40.0 + 1.0 + 34.0 + 1.0 + row as f32 * 22.0 + 11.0
+}
+
+/// A press and a release on the tree's row `row` (past the last: the
+/// space below the rows).
+fn tree_click(window: &AppWindow, row: i32, button: PointerEventButton) {
+    let position = LogicalPosition::new(90.0, tree_row_y(row));
+    let send = |event| window.window().dispatch_event(event);
+    send(WindowEvent::PointerMoved { position });
+    send(WindowEvent::PointerPressed { position, button });
+    send(WindowEvent::PointerReleased { position, button });
+}
+
 /// What the terminal shows, a line a row.
 fn screen_text(shell: &Shell) -> String {
     shell
@@ -2756,6 +3543,96 @@ fn torn_chord(torn: &crate::TornWindow, held: &[Key], text: &str) {
             text: (*key).into(),
         });
     }
+}
+
+/// The middle of the tab strips across the window: under the title bar and
+/// its line, half a strip down.
+const STRIP_Y: f32 = 41.0 + 18.0;
+
+/// Where the editor area is across the window, in logical pixels: its left
+/// edge and its width, from the docks either side.
+fn editor_span(window: &AppWindow, shell: &Shell) -> (f32, f32) {
+    let size = window
+        .window()
+        .size()
+        .to_logical(window.window().scale_factor());
+    let left = if shell.get_left_open() {
+        shell.get_left_size() + 1.0
+    } else {
+        0.0
+    };
+    let right = if shell.get_right_open() {
+        shell.get_right_size() + 1.0
+    } else {
+        0.0
+    };
+    (left, size.width - left - right)
+}
+
+/// Where the editor groups part, from the editor area's left edge: the
+/// arithmetic `ui/pages.slint` places the divider by.
+fn divider_at(width: f32, share: f32) -> f32 {
+    let least = 220f32.min((width - 1.0) / 2.0);
+    (width * share).round().clamp(least, width - 1.0 - least)
+}
+
+/// A pointer event, as the platform would deliver it.
+fn pointer(window: &AppWindow, event: WindowEvent) {
+    window.window().dispatch_event(event);
+}
+
+fn right_click(window: &AppWindow, at: LogicalPosition) {
+    pointer(window, WindowEvent::PointerMoved { position: at });
+    pointer(
+        window,
+        WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Right,
+        },
+    );
+    pointer(
+        window,
+        WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Right,
+        },
+    );
+}
+
+/// The open menu's rows as they read, a divider as `—`.
+fn menu_rows(shell: &Shell) -> Vec<String> {
+    shell
+        .get_menu_items()
+        .iter()
+        .map(|item| {
+            if item.id.is_empty() {
+                "—".to_string()
+            } else if item.chord.is_empty() {
+                item.label.to_string()
+            } else {
+                format!("{} ({})", item.label, item.chord)
+            }
+        })
+        .collect()
+}
+
+/// Both groups' strips and what each has in front.
+fn groups(shell: &Shell) -> String {
+    let titles = |tabs: slint::ModelRc<crate::DocTab>| {
+        tabs.iter().map(|t| t.title.to_string()).collect::<Vec<_>>()
+    };
+    format!(
+        "split {} | keys {:?} front {:?} | other {:?} front {:?}",
+        shell.get_split(),
+        titles(shell.get_tabs()),
+        shell.get_active_tab(),
+        titles(shell.get_shade_tabs()),
+        shell.get_shade_active()
+    )
+}
+
+fn clipboard() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok()
 }
 
 fn snapshot(window: &AppWindow, path: &Path) {
