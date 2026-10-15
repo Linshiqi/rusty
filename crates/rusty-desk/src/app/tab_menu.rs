@@ -48,8 +48,9 @@ pub(super) fn rows_for(
     count: usize,
     has_right_group_to_open: bool,
 ) -> Vec<&'static str> {
-    let on_disk = matches!(tab, Tab::File(path) if !rusty_edit::is_expansion(path));
-    let file = matches!(tab, Tab::File(_));
+    let on_disk = matches!(tab, Tab::File(path) if !rusty_edit::is_expansion(path))
+        || matches!(tab, Tab::Picture(_));
+    let file = matches!(tab, Tab::File(_) | Tab::Picture(_));
     let kept: Vec<&'static str> = ROWS
         .iter()
         .copied()
@@ -153,7 +154,7 @@ impl App {
                 self.close_around(verb, other, id);
             }
             "tab.copy-path" | "tab.copy-relative-path" | "tab.reveal" => {
-                let Tab::File(path) = &tab else {
+                let (Tab::File(path) | Tab::Picture(path)) = &tab else {
                     return self.not_on_disk(&tab);
                 };
                 if rusty_edit::is_expansion(path) {
@@ -166,7 +167,7 @@ impl App {
                 }
             }
             "tab.split-right" => {
-                if let Tab::File(path) = tab {
+                if let Tab::File(path) | Tab::Picture(path) = tab {
                     self.split_right(other, path);
                 }
             }
@@ -226,7 +227,7 @@ impl App {
             state.split && state.focus == 1
         };
         if keys_on_right {
-            self.open_tab(Tab::File(path));
+            self.open_tab(Tab::of(path));
         } else {
             self.open_to_side(path);
         }
@@ -287,6 +288,14 @@ mod tests {
         assert!(!rows.contains(&"tab.copy-path") && !rows.contains(&"tab.reveal"));
         assert_eq!(rows.last(), Some(&"tab.split-right"));
         assert!(!rows.windows(2).any(|pair| pair == ["", ""]));
+    }
+
+    /// A picture is a file on disk like any other: its path is copied,
+    /// revealed and opened beside.
+    #[test]
+    fn a_picture_tab_has_the_file_rows() {
+        let picture = Tab::Picture("book/src/figures/fig.png".into());
+        assert_eq!(rows_for(&picture, 1, 3, true), ROWS);
     }
 
     #[test]

@@ -866,7 +866,7 @@ impl App {
             let mut state = self.state.borrow_mut();
             let state = &mut *state;
             for tab in state.tabs.iter_mut().chain(state.other.iter_mut()) {
-                if let Tab::File(path) = tab {
+                if let Tab::File(path) | Tab::Picture(path) = tab {
                     mv(path);
                 }
             }
@@ -930,7 +930,9 @@ impl App {
                 .tabs
                 .iter()
                 .chain(&state.other)
-                .filter(|tab| matches!(tab, Tab::File(p) if rusty_edit::is_within(p, path)))
+                .filter(|tab| {
+                    matches!(tab, Tab::File(p) | Tab::Picture(p) if rusty_edit::is_within(p, path))
+                })
                 .map(Tab::id)
                 .collect()
         };
@@ -969,29 +971,36 @@ impl App {
     /// gives them; a macro's expansion opened beside (`open_beside`) leaves
     /// them in the code it was asked from.
     pub(super) fn open_to_side(self: &Rc<Self>, path: String) {
-        self.hold_then(path, |app, path| {
-            if app.state.borrow().split {
-                app.swap_groups();
-                app.open_tab(Tab::File(path));
-                return;
-            }
-            if app.state.borrow().tabs.is_empty() {
-                app.open_tab(Tab::File(path));
-                return;
-            }
-            let scroll = app.editor.scroll();
-            {
-                let mut state = app.state.borrow_mut();
-                state.other = std::mem::take(&mut state.tabs);
-                state.other_active = state.active.take();
-                state.tabs = vec![Tab::File(path)];
-                state.active = Some(0);
-                state.split = true;
-                state.focus = 1;
-            }
-            app.editor.show_shade(app.shade_file().as_deref(), scroll);
-            app.front_tab();
-        });
+        // A picture is no document to hold: it goes beside as it is.
+        if let tab @ Tab::Picture(_) = Tab::of(path.clone()) {
+            self.place_to_side(tab);
+            return;
+        }
+        self.hold_then(path, |app, path| app.place_to_side(Tab::File(path)));
+    }
+
+    fn place_to_side(self: &Rc<Self>, tab: Tab) {
+        if self.state.borrow().split {
+            self.swap_groups();
+            self.open_tab(tab);
+            return;
+        }
+        if self.state.borrow().tabs.is_empty() {
+            self.open_tab(tab);
+            return;
+        }
+        let scroll = self.editor.scroll();
+        {
+            let mut state = self.state.borrow_mut();
+            state.other = std::mem::take(&mut state.tabs);
+            state.other_active = state.active.take();
+            state.tabs = vec![tab];
+            state.active = Some(0);
+            state.split = true;
+            state.focus = 1;
+        }
+        self.editor.show_shade(self.shade_file().as_deref(), scroll);
+        self.front_tab();
     }
 
     // ---- drawing -------------------------------------------------------------
@@ -1075,7 +1084,7 @@ impl App {
         let mut state = self.state.borrow_mut();
         let state = &mut *state;
         let active = match state.active.and_then(|at| state.tabs.get(at)) {
-            Some(Tab::File(path)) => Some(path.clone()),
+            Some(Tab::File(path) | Tab::Picture(path)) => Some(path.clone()),
             _ => None,
         };
         if state.tree.followed == active {

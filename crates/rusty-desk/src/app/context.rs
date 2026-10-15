@@ -32,6 +32,9 @@ use crate::{ProblemRow, Shell, docks::Dock};
 pub(super) enum Target {
     /// A Markdown file read as a page.
     Page(String),
+    /// A picture shown as one: a picture file, or an SVG's picture over its
+    /// source.
+    Picture(String),
     /// Output, and the line under the pointer when there was one.
     Output(Option<usize>),
     /// A row of Problems.
@@ -219,6 +222,28 @@ impl App {
                 }
                 Some((Target::Page(path), items))
             }
+            // VS Code's image preview: the file's own rows — its paths and
+            // where it is — and an SVG's source, which it also is.
+            "picture" => {
+                let path = match self.active_tab() {
+                    Some(Tab::Picture(path)) => path,
+                    Some(Tab::File(path)) if crate::picture::is_svg(&path) => path,
+                    _ => return None,
+                };
+                let mut items = Vec::new();
+                if crate::picture::is_svg(&path) {
+                    items.push(item("source", t!("markdown.show-source")));
+                    items.push(divider());
+                }
+                items.push(item("copy-path", t!("context.tree-copy-path")));
+                items.push(item("copy-relative", t!("context.tree-copy-relative-path")));
+                items.push(divider());
+                items.push(item(
+                    "reveal",
+                    rusty_i18n::lookup(crate::reveal::label_key()),
+                ));
+                Some((Target::Picture(path), items))
+            }
             "output" => {
                 let lines = self.window()?.global::<Shell>().get_output();
                 if lines.row_count() == 0 {
@@ -375,6 +400,13 @@ impl App {
                 "copy-path" => self.tree_copy_path(&path, false),
                 "copy-relative" => self.tree_copy_path(&path, true),
                 "zoom-reset" => self.text_zoom("page", None),
+                _ => {}
+            },
+            Target::Picture(path) => match id {
+                "source" => self.markdown_toggle(),
+                "copy-path" => self.tree_copy_path(&path, false),
+                "copy-relative" => self.tree_copy_path(&path, true),
+                "reveal" => self.tree_reveal(path),
                 _ => {}
             },
             Target::Output(line) => {
