@@ -3,21 +3,13 @@
 //! keeps, and putting the kept drafts back. `editor/backup.rs` is the file
 //! format and the thread that writes it.
 
-use std::{
-    path::{Path, PathBuf},
-    rc::Rc,
-    time::Duration,
-};
+use std::{path::PathBuf, rc::Rc, time::Duration};
 
-use rusty_edit::text_file::{self, TextFile};
 use rusty_i18n::t;
 use slint::TimerMode;
 
-use super::{App, Tab};
-use crate::{
-    editor::{Document, backup::Backup},
-    work,
-};
+use super::{App, strip::Back};
+use crate::work;
 
 /// How long after the last keystroke a draft is backed up.
 pub(super) const BACKUP_AFTER: Duration = Duration::from_secs(1);
@@ -68,59 +60,16 @@ impl App {
         }
     }
 
-    /// Put back the drafts kept for the project at `root`, each over the
-    /// disk's text so that it is unsaved, marked so, and one undo from it.
-    pub(super) fn bring_back_drafts(self: &Rc<Self>, root: PathBuf) {
+    /// Put back the project's strip and the drafts kept for it, each draft
+    /// over the disk's text so that it is unsaved, marked so, and one undo
+    /// from it. Read after every backup asked before (`Keeper::read`).
+    pub(super) fn bring_back(self: &Rc<Self>, root: PathBuf) {
+        self.strip_opening();
         let asked = root.clone();
         self.keeper.read(&asked.clone(), move |kept| {
-            let found: Vec<(Backup, String)> = kept
-                .into_iter()
-                .map(|draft| {
-                    // A file gone or no longer text has nothing under the
-                    // draft: saving it writes the draft whole.
-                    let disk = match text_file::read_text(&asked, &draft.path) {
-                        Ok(TextFile::Text { text, .. }) => text,
-                        _ => String::new(),
-                    };
-                    (draft, disk)
-                })
-                .collect();
-            work::deliver(found, move |app, found| app.drafts_back(&root, found));
+            let back = Back::read(&asked, kept);
+            work::deliver(back, move |app, back| app.came_back(&root, back));
         });
-    }
-
-    pub(super) fn drafts_back(self: &Rc<Self>, root: &Path, found: Vec<(Backup, String)>) {
-        // Another project opened meanwhile: these stay kept for next time.
-        if found.is_empty() || self.root().as_deref() != Some(root) {
-            return;
-        }
-        let mut first = None;
-        for (draft, disk) in found {
-            let path = draft.path.clone();
-            if !self.editor.holds(&path) {
-                let document = Document::new(path.clone(), disk, draft.charset, draft.ending);
-                self.editor.add(document);
-            }
-            self.editor.restore(&path, draft.text);
-            let mut state = self.state.borrow_mut();
-            let tab = Tab::File(path);
-            if !state.tabs.contains(&tab) {
-                state.tabs.push(tab.clone());
-            }
-            first.get_or_insert(tab);
-        }
-        // In front only when nothing else is: a file opened meanwhile stays
-        // where it is, caret and scroll included.
-        let on_a_page = !matches!(self.active_tab(), Some(Tab::File(_)));
-        if on_a_page {
-            let mut state = self.state.borrow_mut();
-            state.active = first.and_then(|tab| state.tabs.iter().position(|t| *t == tab));
-        }
-        if on_a_page {
-            self.front_tab();
-        } else {
-            self.sync_tabs();
-        }
     }
 
     pub(super) fn backup_failed(self: &Rc<Self>, reason: String) {

@@ -29,7 +29,10 @@
 //! channel reported before stopping it. With `RUSTY_PROBE_EDIT` it edits
 //! the board as a hand would — drags the first part, turns it, adds an LED
 //! from the library, wires it to the devkit, undoes and redoes the wire,
-//! deletes the LED — and prints the sheet file after each save.
+//! deletes the LED — and prints the sheet file after each save. With
+//! `RUSTY_PROBE_STRIP` and no project named it waits for the last project
+//! to come back, prints its tabs as the strips show them, and opens its
+//! README before leaving.
 
 use std::{
     cell::{Cell, RefCell},
@@ -98,6 +101,8 @@ pub fn start(window: &AppWindow) {
     let modal = std::env::var_os("RUSTY_PROBE_VIM").is_some();
     let splitting = std::env::var_os("RUSTY_PROBE_SPLIT").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
+    // Started with no project: the last one comes back with its strip.
+    let strip = std::env::var_os("RUSTY_PROBE_STRIP").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -249,6 +254,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if updating {
                     step.set(2800);
+                }
+                if strip {
+                    step.set(2900);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -1067,6 +1075,38 @@ pub fn start(window: &AppWindow) {
                 snapshot(&window, &dir.join("update.png"));
                 app.act("app.exit");
             }
+            // What came back: each strip's tabs with what they say beside
+            // their names, then one more file opened, so the strip the
+            // exit leaves in workbench.toml can be read against it.
+            2900 if strip => {
+                if shell.get_active_kind() != "file" && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(2900);
+                    return;
+                }
+                let said = |tabs: slint::ModelRc<crate::DocTab>| -> Vec<String> {
+                    tabs.iter()
+                        .map(|tab| {
+                            if tab.hint.is_empty() {
+                                tab.title.to_string()
+                            } else {
+                                format!("{} [{}]", tab.title, tab.hint)
+                            }
+                        })
+                        .collect()
+                };
+                eprintln!(
+                    "strip: {:?} in front {:?}; split {} beside {:?} in front {:?}",
+                    said(shell.get_tabs()),
+                    shell.get_active_title(),
+                    shell.get_split(),
+                    said(shell.get_shade_tabs()),
+                    shell.get_shade_title(),
+                );
+                snapshot(&window, &dir.join("strip.png"));
+                app.open_file("README.md".into());
+            }
+            2910 if strip => app.act("app.exit"),
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(

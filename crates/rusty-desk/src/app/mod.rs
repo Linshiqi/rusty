@@ -50,6 +50,7 @@ mod search;
 mod servers;
 mod sheet;
 mod sim;
+mod strip;
 mod terminal;
 mod testing;
 mod updating;
@@ -222,6 +223,11 @@ pub struct App {
     started: std::time::Instant,
     /// Ticks while something runs, so the view's clock moves.
     clock: slint::Timer,
+    /// The project's remembered strip has been put back, and changes to
+    /// the strip are written from now on (`strip.rs`).
+    strip_back: Cell<bool>,
+    /// The strip as it was last written.
+    strip_saved: RefCell<Option<rusty_embed::model::ProjectTabs>>,
 }
 
 impl App {
@@ -258,6 +264,8 @@ impl App {
             plant_clock: slint::Timer::default(),
             started: std::time::Instant::now(),
             clock: slint::Timer::default(),
+            strip_back: Cell::new(false),
+            strip_saved: RefCell::default(),
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 view: saved.editor,
@@ -847,7 +855,7 @@ impl App {
         self.watch_project();
         self.probe_environment();
         self.load_board(None);
-        self.bring_back_drafts(opened);
+        self.bring_back(opened);
     }
 
     fn tree_click(self: &Rc<Self>, index: usize) {
@@ -1147,6 +1155,7 @@ impl App {
             _ => self.editor.show_nothing(),
         }
         self.sync_tabs();
+        self.strip_changed();
         self.sync_tree();
         self.sync_status();
         self.sync_markdown();
@@ -1667,10 +1676,11 @@ impl App {
         let state = self.state.borrow();
         let strip = |tabs: &[Tab]| -> Vec<DocTab> {
             tabs.iter()
-                .map(|tab| DocTab {
+                .zip(strip::strip_hints(tabs))
+                .map(|(tab, hint)| DocTab {
                     id: tab.id().into(),
                     title: tab.title().into(),
-                    hint: SharedString::new(),
+                    hint: hint.into(),
                     dirty: matches!(tab, Tab::File(path) if self.editor.is_dirty(path)),
                     kind: tab.kind().into(),
                 })

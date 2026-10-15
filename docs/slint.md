@@ -572,11 +572,27 @@ tests green, and CLAUDE.md saying how it works.
    macOS and Linux packaging is the release workflow's, and is proven by
    its first run.
 
-Then `rusty-ui`, `rusty-app` and `rusty-ipc` are deleted, and with them the
-`backend` feature split, which existed for the wasm frontend.
+   Then `rusty-ui`, `rusty-app` and `rusty-ipc` were deleted, in v0.7.0.
+   The `backend` feature split, which existed for the wasm frontend, is
+   still there and still held by CI; it goes once nothing is moving under
+   it. The tab strip came back with them: what each project had open, in
+   which group, is `workbench.toml`'s `open_tabs` as the Tauri window wrote
+   it, put back when the project opens — and the window, started with no
+   project, opens the last one (`strip.rs`). What the Tauri window had and
+   this one does not yet, as v0.7.0's notes say: the call hierarchy, macro
+   expansion, the finder's `@` and `#`, New window, a file or a commit in a
+   window of its own, and a choice of the terminal's shell.
 
 ## Decided
 
+- **Shipping is our own, not a packager's.** `cargo-packager` was the
+  plan; what decided against it is that the copies of rusty already
+  installed update by running whatever installer their feed names with
+  the Tauri installer's switches, and from the per-user place the Tauri
+  installer chose. An installer of our own answers both exactly, and the
+  three others (a bundle, an AppImage, a `.deb`) are a directory layout
+  each, which a workflow step writes. The updater key carries over:
+  checked before the first release.
 - **The licence is GPLv3**, for rusty and for Slint, which it uses under
   its GPLv3 option — rusty was PolyForm Noncommercial, which that option
   cannot be combined with. Every dependency was checked against it (all
@@ -595,7 +611,3 @@ Then `rusty-ui`, `rusty-app` and `rusty-ipc` are deleted, and with them the
   image) is the fallback if raw HTML in documents turns out to matter more
   than that. Neither draws MathML; formulas show as their source until a
   math renderer is chosen, as a formula the parser refuses does today.
-- **Shipping without Tauri**: `cargo-packager` builds the same installers
-  (NSIS, DMG, AppImage, deb) and its updater checks signed releases; whether
-  the existing updater key carries over is to be checked before the first
-  release from this branch.
