@@ -489,6 +489,67 @@ impl Surface {
         self.analyse_soon();
     }
 
+    /// The text drawn at `scale` of its own size — Ctrl and the wheel over
+    /// the code. The font, the one row height and the margin change
+    /// together, every character is measured again at the new size and
+    /// every row placed again, and the view keeps the line at its top.
+    pub fn set_scale(&self, scale: f32) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let code = window.global::<Code>();
+        let (font, row, gutter) = metrics::text_size(scale);
+        let before = code.get_row_height().max(1.0);
+        if code.get_font_size() == font && before == row && code.get_gutter() == gutter {
+            return;
+        }
+        // What is drawn over the text was placed at the old size.
+        self.hide_hover();
+        self.close_completion();
+        self.close_signature();
+        code.set_font_size(font);
+        code.set_row_height(row);
+        code.set_gutter(gutter);
+        let mut metrics = Metrics::measure(&window);
+        for doc in self.open.borrow().values() {
+            let d = doc.borrow();
+            metrics.learn(&window, &d.text);
+            let labels: String = d.hints.iter().map(|h| h.label.as_str()).collect();
+            metrics.learn(&window, &labels);
+        }
+        *self.metrics.borrow_mut() = metrics;
+        // Every view keeps its top line and how far across it was.
+        let across = |x: f32| x * row / before;
+        for doc in self.open.borrow().values() {
+            let mut d = doc.borrow_mut();
+            d.scroll = (across(d.scroll.0), across(d.scroll.1));
+        }
+        code.set_scroll_y(across(code.get_scroll_y()));
+        code.set_scroll_x(across(code.get_scroll_x()));
+        let shade = window.global::<crate::Shade>();
+        shade.set_scroll_y(across(shade.get_scroll_y()));
+        shade.set_scroll_x(across(shade.get_scroll_x()));
+        let widths = |doc: &Shared| {
+            doc.borrow()
+                .as_ref()
+                .map(|doc| self.metrics.borrow().widest(&doc.borrow()))
+        };
+        if let Some(widest) = widths(&self.current) {
+            self.widest.set(widest);
+            code.set_content_width(widest + 200.0);
+        }
+        if let Some(widest) = widths(&self.shade.doc) {
+            shade.set_content_width(widest + 200.0);
+        }
+        self.overview.forget_stuck();
+        self.rows.reset();
+        self.shade.rows.reset();
+        if self.doc().is_some() {
+            self.hints_changed();
+        }
+        self.view_changed();
+    }
+
     pub fn show_nothing(&self) {
         *self.current.borrow_mut() = None;
         self.rest_nowhere();
@@ -1475,10 +1536,19 @@ impl Surface {
     }
 
     fn show_caret(&self) {
-        let Some(window) = self.window.upgrade() else {
-            return;
-        };
-        let Some(doc) = self.doc() else { return };
+        if let Some((line, x)) = self.place_caret() {
+            self.scroll_to(line, x);
+            self.tell_caret();
+        }
+    }
+
+    /// The caret drawn where its column now is — the text's size, or the
+    /// hints before it, moved it — without the view moving to it: an
+    /// answer from the server landing while the caret is scrolled out of
+    /// view is no reason to scroll back to it. Its line and x.
+    pub(super) fn place_caret(&self) -> Option<(usize, f32)> {
+        let window = self.window.upgrade()?;
+        let doc = self.doc()?;
         // In Vim's command modes the caret is a block on the character the
         // cursor stands on, which in visual mode is not the selection's head.
         let (line, x, block) = {
@@ -1496,8 +1566,7 @@ impl Surface {
         code.set_caret_x(x);
         code.set_block_caret(block.is_some());
         code.set_caret_width(block.unwrap_or(2.0));
-        self.scroll_to(line, x);
-        self.tell_caret();
+        Some((line, x))
     }
 
     fn scroll_to(&self, line: usize, x: f32) {
@@ -1516,7 +1585,7 @@ impl Surface {
         }
         // Sideways: keep the caret a few characters in from either edge,
         // past the gutter.
-        let gutter = 64.0;
+        let gutter = code.get_gutter();
         let margin = 4.0 * self.metrics.borrow().ascii();
         let (width, across) = (code.get_view_width(), -code.get_scroll_x());
         if width > 0.0 {

@@ -205,6 +205,23 @@ impl Terminal {
         }
     }
 
+    /// Blank the screen and forget its history, as a terminal's Clear does,
+    /// then send the form feed that is the program's own Ctrl+L, so a shell
+    /// draws its prompt again at the top. Both halves: blanked here alone,
+    /// the screen ConPTY keeps and the one drawn here would disagree about
+    /// where the cursor is, and the next absolute move would put text back
+    /// where the old screen had it; asked of the shell alone, the history
+    /// would stay.
+    pub fn clear(&self) -> Result<()> {
+        {
+            let mut emulator = self.emulator.lock().expect("terminal emulator");
+            let (rows, cols) = emulator.parser.screen().size();
+            emulator.parser = vt100::Parser::new(rows, cols, SCROLLBACK);
+            emulator.scrollback = 0;
+        }
+        self.write(b"\x0c")
+    }
+
     /// The current screen, ready to send.
     pub fn screen(&self) -> Screen {
         let emulator = self.emulator.lock().expect("terminal emulator");

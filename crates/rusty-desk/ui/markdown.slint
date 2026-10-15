@@ -7,17 +7,29 @@ import { Theme } from "theme.slint";
 import { Shell, MdBlock, MdLine } from "shell.slint";
 import { Tip } from "widgets.slint";
 
-// Says `tip` when the pointer rests on what it covers.
+// Where the pointer is over a Markdown page read as a page. The touch laid
+// over that page (`pages.slint`) hears Ctrl and the wheel and the right
+// button, and so takes every move: nothing under it is hovered, and a tip
+// there asks this instead.
+export global PagePointer {
+    in-out property <bool> inside;
+    in-out property <length> x;
+    in-out property <length> y;
+}
+
+// Says `tip` when the pointer rests on what it covers — hovered itself, or
+// under the page's pointer.
 component TipArea inherits TouchArea {
     in property <string> tip;
-    changed has-hover => {
-        if (!self.has-hover) {
+    property <bool> pointed: self.has-hover || (PagePointer.inside && PagePointer.x >= self.absolute-position.x && PagePointer.x < self.absolute-position.x + self.width && PagePointer.y >= self.absolute-position.y && PagePointer.y < self.absolute-position.y + self.height);
+    changed pointed => {
+        if (!self.pointed) {
             Tip.shown = false;
         }
     }
     Timer {
         interval: 600ms;
-        running: root.has-hover && root.tip != "" && !Tip.shown;
+        running: root.pointed && root.tip != "" && !Tip.shown;
         triggered => {
             Tip.text = root.tip;
             Tip.x = root.absolute-position.x;

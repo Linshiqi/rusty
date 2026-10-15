@@ -112,6 +112,7 @@ impl App {
         }
         match owner {
             Some("git") => self.git_menu_picked(id),
+            Some("surface") => self.surface_menu_picked(id),
             Some("tree") => self.tree_menu_picked(id),
             // The keys back in the code, then what was picked.
             Some("editor") => {
@@ -130,6 +131,7 @@ impl App {
         let owner = self.menu_close();
         match owner {
             Some("editor") => self.front_focus(),
+            Some("surface") => self.surface_menu_dismissed(),
             // The keys back in the tree, its menu gone.
             Some("tree") => self.tree_menu_dismissed(),
             Some("tab") => {

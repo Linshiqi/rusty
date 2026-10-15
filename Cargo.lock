@@ -6295,6 +6295,7 @@ dependencies = [
  "rusty-i18n",
  "rusty-lsp",
  "rusty-term",
+ "serde_json",
  "slint",
  "slint-build",
  "sys-locale",
