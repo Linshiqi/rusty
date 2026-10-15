@@ -102,6 +102,27 @@ impl Surface {
         self.research(None);
     }
 
+    /// Vim's `*` and `#`: the word under the cursor as the query, whole,
+    /// and the next or the previous one selected — the keys stay in the
+    /// code, where `n` goes on from it.
+    pub(super) fn find_word(&self, word: &str, forward: bool) {
+        let Some(doc) = self.doc() else { return };
+        {
+            let mut f = self.finding.borrow_mut();
+            f.query.text = word.to_string();
+            f.query.word = true;
+            f.open = true;
+            f.start = doc.borrow().primary().start();
+        }
+        if let Some(window) = self.window.upgrade() {
+            let bar = window.global::<Find>();
+            bar.set_query(SharedString::from(word));
+            bar.set_open(true);
+        }
+        self.research(None);
+        self.find_step(forward);
+    }
+
     /// F3 and Shift+F3 with the bar closed open it first, as the next step
     /// needs a query.
     pub fn find_next(&self, forward: bool) {

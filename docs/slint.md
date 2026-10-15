@@ -512,6 +512,19 @@ tests green, and CLAUDE.md saying how it works.
    the root is made absolute now. The probe waits for rust-analyzer's
    answer on `draw-vectors` (261 colours, 23 hints), clicks just past a
    hint and lands on its column, and types there to see it carried along.
+
+   Vim's keys: the machine moved to `rusty_edit::vim` as it was, and the
+   window feeds it (`editor/modal.rs`) after the completion popup and
+   before the editor's own keys, so insert mode leaves every shortcut
+   where it was. Normal and visual mode draw a block over the character
+   the cursor is on, which in visual mode is not the selection's head, so
+   the cursor the machine set is remembered while the selection is the one
+   it set. Undo is Vim's: the history holds one step from a command into
+   insert mode until Escape. Found on the way, in the shared machine: `cw`
+   on a one-letter word ran on to the next word's end, as `ce` does from
+   there — `let a =` lost its `=`. The probe switches Vim on in
+   `draw-vectors`, changes `a` to `first` with `cw` and takes it back with
+   one `u`, then deletes two lines with `Vjd` and puts them back.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 

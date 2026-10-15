@@ -452,6 +452,16 @@ impl Vim {
     }
 
     fn operate(&mut self, op: Op, target: Target, count: usize, text: &str, cursor: usize) -> Step {
+        // On a word's last character — a one-letter word, the `a` of
+        // `let a =` — `ce` runs on to the next word's end, and Vim's `cw`
+        // changes that character alone.
+        let one_character = op == Op::Change
+            && count == 1
+            && match target {
+                Target::Motion(Motion::WordForward) => motion::ends_word(text, cursor, false),
+                Target::Motion(Motion::BigWordForward) => motion::ends_word(text, cursor, true),
+                _ => false,
+            };
         // `cw` is `ce`, which is Vim's one deliberate inconsistency and one
         // every user relies on: changing a word must not eat the space after
         // it, or every rename needs a space typed back.
@@ -466,6 +476,12 @@ impl Vim {
         };
 
         let range = match target {
+            _ if one_character => Span {
+                start: cursor,
+                end: cursor + 1,
+                cursor,
+                linewise: false,
+            },
             Target::Motion(motion) => {
                 let Some(span) = motion::apply(motion, text, cursor, count, &self.last_find) else {
                     return self.consumed(text, cursor);

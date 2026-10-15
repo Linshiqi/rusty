@@ -800,9 +800,11 @@ kind, an emulator's peripherals.
 
 ## Modal editing
 
-Vim keys in the editor, off by default, switched on from View. `vim/` is a
-pure state machine — `(keys, text, cursor) -> Step`, no DOM — under sixty tests
-that name the property a Vim user would notice missing. The editor reads
+Vim keys in the editor, off by default, switched on from View.
+`rusty_edit::vim` is a pure state machine — `(keys, text, cursor) -> Step`,
+no DOM — under sixty tests that name the property a Vim user would notice
+missing, one copy for both windows (the Slint window's half is
+`rusty-desk/src/editor/modal.rs`). The editor reads
 `Step` and does only the three things a browser forces on it: set `value`,
 set the selection, `preventDefault`.
 

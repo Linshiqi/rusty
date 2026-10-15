@@ -273,6 +273,22 @@ fn change_leaves_you_in_insert_mode() {
     assert_eq!(vim.mode, Mode::Insert, "`c` ends in insert mode");
 }
 
+/// `cw` on a one-letter word changes the letter: `ce` from it would run on
+/// to the next word's end, and renaming `a` in `let a = 1` ate the `=`.
+#[test]
+fn change_word_on_a_one_letter_word_changes_the_letter() {
+    let mut vim = Vim::default();
+    let (text, at) = run_at(&mut vim, "cw", "a = 1", 0);
+    assert_eq!(text, " = 1");
+    assert_eq!(at, 0);
+    let mut vim = Vim::default();
+    assert_eq!(
+        run_at(&mut vim, "cw", "foo.bar", 2).0,
+        "fo.bar",
+        "a word's last letter"
+    );
+}
+
 #[test]
 fn d_and_c_to_the_line_end_have_their_shorthands() {
     assert_eq!(go("llD", "foo bar").0, "fo");

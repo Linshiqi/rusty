@@ -27,7 +27,8 @@ mod state;
 mod testrun;
 mod theme;
 mod view;
-mod vim;
+// Modal editing's machine lives in rusty-edit, one copy for both windows.
+use rusty_edit::vim;
 
 use leptos::prelude::*;
 

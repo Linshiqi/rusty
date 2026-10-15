@@ -1336,4 +1336,10 @@ export global Shell {
     in property <bool> view-sticky: true;
     in property <bool> view-guides: true;
     callback set-view(string, bool);
+    // Vim's keys: on or off, and the mode of the document on screen with
+    // what is pending or refused — empty while off.
+    in property <bool> vim-on;
+    in property <string> vim-mode;
+    in property <string> vim-hint;
+    callback set-vim(bool);
 }

@@ -82,6 +82,10 @@ export global Code {
     in property <[Row]> rows;
     in property <int> caret-line;
     in property <length> caret-x;
+    // Vim's command modes: the caret is a block over the character the
+    // cursor stands on, this wide.
+    in property <bool> block-caret;
+    in property <length> caret-width: 2px;
     in property <bool> has-document;
     in property <length> content-width: 2000px;
     in property <length> row-height: 19px;
@@ -935,11 +939,12 @@ export component CodeView inherits Rectangle {
     // Where the next key lands. Drawn here rather than by the TextInput, whose
     // own caret sits after whatever it is composing.
     Rectangle {
-        x: root.gutter + Code.caret-x + list.content-x - 1px;
+        x: root.gutter + Code.caret-x + list.content-x - (Code.block-caret ? 0px : 1px);
         y: Code.caret-line * Code.row-height + list.content-y + 2px;
-        width: 2px;
+        width: Code.block-caret ? Code.caret-width : 2px;
         height: Code.row-height - 4px;
-        background: Theme.rust;
+        // Translucent, so the character under the block still shows.
+        background: Code.block-caret ? Theme.rust.with-alpha(0.45) : Theme.rust;
         visible: Code.has-document && sink.preedit-text == "" && sink.has-focus;
     }
 

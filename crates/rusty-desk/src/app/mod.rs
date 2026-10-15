@@ -135,6 +135,8 @@ struct State {
     layout: WindowLayout,
     /// What the editor draws around the code (Settings ▸ Editor).
     view: rusty_embed::EditorView,
+    /// Vim's keys in the editor.
+    vim: bool,
     project: Option<Project>,
     recents: Vec<String>,
     tabs: Vec<Tab>,
@@ -249,6 +251,7 @@ impl App {
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 view: saved.editor,
+                vim: saved.vim,
                 recents: saved.recent_projects.clone(),
                 tabs: vec![Tab::Page("welcome")],
                 active: Some(0),
@@ -257,6 +260,7 @@ impl App {
         });
         app.wire(window);
         app.editor.set_view(saved.editor);
+        app.editor.set_vim(saved.vim);
         app.sync_all();
         app
     }
@@ -524,6 +528,7 @@ impl App {
         on!(on_set_language, |app, tag| app.set_language(&tag));
         on!(on_set_zoom, |app, zoom| app.set_zoom(zoom));
         on!(on_set_view, |app, which, on| app.set_view(&which, on));
+        on!(on_set_vim, |app, on| app.set_vim(on));
         let weak = Rc::downgrade(self);
         shell.on_board_key(move |event| {
             weak.upgrade().is_some_and(|app| {
@@ -634,6 +639,10 @@ impl App {
             "editor.unfold" => self.editor.fold_at_caret(false),
             "editor.fold-all" => self.editor.fold_all(true),
             "editor.unfold-all" => self.editor.fold_all(false),
+            "editor.vim" => {
+                let on = !self.state.borrow().vim;
+                self.set_vim(on);
+            }
             "nav.back" => self.walk(true),
             "nav.forward" => self.walk(false),
             "problem.next" => self.next_problem(true),
@@ -1060,6 +1069,17 @@ impl App {
         self.editor.set_view(view);
         self.sync_settings();
         let _ = rusty_embed::config::update(move |saved| saved.editor = view);
+    }
+
+    /// Vim's keys on or off: at once, and in `workbench.toml`, so a second
+    /// window boots into the same mode — landing in the wrong one is twenty
+    /// keystrokes doing something else.
+    fn set_vim(self: &Rc<Self>, on: bool) {
+        self.state.borrow_mut().vim = on;
+        self.editor.set_vim(on);
+        self.sync_settings();
+        self.sync_status();
+        let _ = rusty_embed::config::update(move |saved| saved.vim = on);
     }
 
     fn zoom(&self) -> f32 {
@@ -1558,6 +1578,13 @@ impl App {
             None => (String::new(), "", ""),
         };
         shell.set_caret(caret.into());
+        let (mode, pending) = self
+            .editor
+            .vim_status()
+            .filter(|_| file)
+            .unwrap_or_default();
+        shell.set_vim_mode(mode.into());
+        shell.set_vim_hint(pending.into());
         shell.set_encoding(encoding.into());
         shell.set_eol(eol.into());
         let language = match self.active_tab() {
@@ -1606,6 +1633,7 @@ impl App {
         shell.set_view_minimap(state.view.minimap);
         shell.set_view_sticky(state.view.sticky_scroll);
         shell.set_view_guides(state.view.indent_guides);
+        shell.set_vim_on(state.vim);
     }
 }
 

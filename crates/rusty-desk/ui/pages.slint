@@ -358,6 +358,18 @@ component SettingsPage inherits Rectangle {
                 }
             }
             Group {
+                title: @tr("settings.editor.vim");
+                Setting {
+                    label: @tr("settings.editor.vim-detail");
+                    Switch {
+                        checked: Shell.vim-on;
+                        toggled => {
+                            Shell.set-vim(self.checked);
+                        }
+                    }
+                }
+            }
+            Group {
                 title: @tr("settings.editor.view");
                 Setting {
                     label: @tr("settings.editor.inlay-hints");
