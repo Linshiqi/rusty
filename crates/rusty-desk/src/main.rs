@@ -20,6 +20,7 @@ mod markdown;
 mod picker;
 mod picture;
 mod probe;
+mod probe_surfaces;
 mod project;
 mod reveal;
 mod run;

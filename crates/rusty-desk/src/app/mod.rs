@@ -25,6 +25,7 @@ mod board;
 mod build;
 mod calls;
 mod clone;
+mod context;
 mod crates;
 mod debug;
 mod device;
@@ -204,6 +205,8 @@ struct State {
     search: search::Search,
     git: git::Git,
     menu: Option<&'static str>,
+    /// What a surface's menu was opened on, and the wheel's travel.
+    context: context::Context,
     /// The tab a right-click menu is open for: whether it is the other
     /// group's, and its id.
     tab_menu: Option<(bool, String)>,
@@ -514,6 +517,27 @@ impl App {
         on!(on_term_resized, |app, cols, rows| app
             .term_resized(cols, rows));
         on!(on_term_scroll, |app, lines| app.term_scroll(lines));
+        on!(on_term_select, |app, kind, col, row| app
+            .term_select(kind, col, row));
+        on!(on_content_zoom, |app, what, delta| app
+            .content_zoom(&what, delta));
+        on!(on_page_click, |app, x, y| app.page_click(x, y));
+        on!(on_surface_menu, |app, surface, what, row, x, y| app
+            .surface_menu(&surface, &what, row, x, y));
+        let weak = Rc::downgrade(self);
+        window.on_resized(move || {
+            if let Some(app) = weak.upgrade()
+                && let Some(window) = app.window()
+            {
+                crate::zoom::apply(&window, app.zoom());
+            }
+        });
+        let weak = Rc::downgrade(self);
+        window.global::<crate::Code>().on_zoom(move |delta| {
+            if let Some(app) = weak.upgrade() {
+                app.content_zoom("editor", delta);
+            }
+        });
         on!(on_git_file, |app, verb, path, staged| app.git_file(
             &verb,
             path.to_string(),
@@ -821,6 +845,9 @@ impl App {
             "view.zoom-in" => self.set_zoom(self.zoom() + 0.1),
             "view.zoom-out" => self.set_zoom(self.zoom() - 0.1),
             "view.zoom-reset" => self.set_zoom(1.0),
+            "editor.zoom-reset" => self.text_zoom("editor", None),
+            "page.zoom-reset" => self.text_zoom("page", None),
+            "terminal.zoom-reset" => self.text_zoom("terminal", None),
             "theme.system" => self.set_theme("system"),
             "theme.dark" => self.set_theme("dark"),
             "theme.light" => self.set_theme("light"),
@@ -1345,6 +1372,8 @@ impl App {
             let layout = dock.of_mut(&mut state.layout);
             layout.open = true;
             layout.front = Some(panel.to_string());
+            // Shown is back on the strip, wherever it was taken off.
+            layout.hidden.retain(|hidden| hidden != panel);
         }
         self.sync_docks();
         self.save_layout();
@@ -1804,30 +1833,14 @@ impl App {
             }
         };
         let state = self.state.borrow();
-        let has_content = |id: &str| match id {
-            "plot" => !state.sim.plot.channels.is_empty() || !state.sim.params.is_empty(),
-            "waves" => !state.sim.trace.events.is_empty(),
-            "draw" => !state.draw.is_empty(),
-            "flight" => !state.sim.sensors.is_empty(),
-            "debug" | "registers" => state.debug.state.is_some(),
-            "calls" => !state.calls.is_idle(),
-            "signals" => {
-                state.lab.has_signals()
-                    || state
-                        .sim
-                        .plan
-                        .as_ref()
-                        .and_then(|plan| plan.board.as_ref())
-                        .is_some_and(|sheet| !rusty_embed::lab::sources_of(sheet).is_empty())
-            }
-            _ => true,
-        };
+        let has_content = |id: &str| has_content(&state, id);
         let panels = |dock: Dock| -> ModelRc<PanelTab> {
             let front = dock.front(&state.layout);
+            let hidden = &dock.of(&state.layout).hidden;
             let tabs: Vec<PanelTab> = dock
                 .panels()
                 .iter()
-                .filter(|(id, ..)| crate::docks::listed(id, has_content, front))
+                .filter(|(id, ..)| crate::docks::listed(id, has_content, front, hidden))
                 .map(|(id, title, glyph)| PanelTab {
                     id: (*id).into(),
                     title: rusty_i18n::lookup(title).into(),
@@ -1968,11 +1981,37 @@ impl App {
         shell.set_language_choice(rusty_i18n::locale().tag().into());
         shell.set_zoom(state.layout.zoom);
         crate::zoom::apply(&window, state.layout.zoom);
+        shell.set_page_zoom(state.layout.page_zoom);
+        shell.set_term_font_size(terminal::FONT * state.layout.terminal_zoom);
+        self.editor.set_scale(state.layout.editor_zoom);
         shell.set_view_hints(state.view.inlay_hints);
         shell.set_view_minimap(state.view.minimap);
         shell.set_view_sticky(state.view.sticky_scroll);
         shell.set_view_guides(state.view.indent_guides);
         shell.set_vim_on(state.vim);
+    }
+}
+
+/// Whether a dock's panel has something to show: a run's panels arrive
+/// with what they read.
+fn has_content(state: &State, id: &str) -> bool {
+    match id {
+        "plot" => !state.sim.plot.channels.is_empty() || !state.sim.params.is_empty(),
+        "waves" => !state.sim.trace.events.is_empty(),
+        "draw" => !state.draw.is_empty(),
+        "flight" => !state.sim.sensors.is_empty(),
+        "debug" | "registers" => state.debug.state.is_some(),
+        "calls" => !state.calls.is_idle(),
+        "signals" => {
+            state.lab.has_signals()
+                || state
+                    .sim
+                    .plan
+                    .as_ref()
+                    .and_then(|plan| plan.board.as_ref())
+                    .is_some_and(|sheet| !rusty_embed::lab::sources_of(sheet).is_empty())
+        }
+        _ => true,
     }
 }
 

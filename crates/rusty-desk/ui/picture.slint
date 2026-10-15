@@ -2,8 +2,10 @@
 // picture over its source. Centred and fitted to the pane when it is larger
 // — never enlarged past its own size until asked — on a checkerboard, so
 // what is transparent reads as transparent. The wheel zooms about the
-// pointer, a drag moves it, a double-click fits it again. What it is and how
-// large stands under it; a picture that would not decode says why instead.
+// pointer, with Ctrl or without — the picture's own zoom, never the page
+// text's — a drag moves it, a double-click fits it again, and the right
+// button opens the file's menu. What it is and how large stands under it;
+// a picture that would not decode says why instead.
 
 import { Theme } from "theme.slint";
 import { Shell } from "shell.slint";
@@ -94,7 +96,9 @@ export component PictureView inherits Rectangle {
         property <length> grab-y;
         mouse-cursor: root.zoom > 0 ? MouseCursor.grab : MouseCursor.default;
         pointer-event(event) => {
-            if (event.kind == PointerEventKind.down) {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                Shell.surface-menu("picture", "", -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            } else if (event.kind == PointerEventKind.down) {
                 self.grab-x = self.mouse-x - root.at-x;
                 self.grab-y = self.mouse-y - root.at-y;
             }

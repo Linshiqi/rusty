@@ -1253,9 +1253,36 @@ export global Shell {
     in property <int> term-cursor-row;
     in property <int> term-cursor-col;
     in property <string> term-exited;
+    // Its text's size: Ctrl and the wheel over it.
+    in property <length> term-font-size: 13px;
+    // What is selected, in cells: from a row and column up to a row and
+    // the column after the last; a press (0) or a drag (1) at a cell makes
+    // it.
+    in property <bool> term-selected;
+    in property <int> term-sel-row;
+    in property <int> term-sel-col;
+    in property <int> term-sel-end-row;
+    in property <int> term-sel-end-col;
+    callback term-select(int, int, int);
+    // Moves when the keys go back to the terminal: its menu is put away.
+    in property <int> term-focus;
     callback term-key(KeyEvent) -> bool;
     callback term-resized(int, int);
     callback term-scroll(int);
+
+    // Ctrl and the wheel over what is read rather than the chrome — "page"
+    // or "terminal" (the editor's is `Code.zoom`) — by how far, up being
+    // larger. A Markdown page's text has its own scale.
+    callback content-zoom(string, length);
+    in property <float> page-zoom: 1;
+    // A click on the page, made again underneath with the page's own touch
+    // stepped aside, so a link hears it: the text takes every press, so
+    // nothing under it could hear the right button.
+    in property <bool> page-through;
+    callback page-click(length, length);
+    // A right-click on a surface with a menu of its own (`app/context.rs`):
+    // which surface, what on it, which row, and where in the window.
+    callback surface-menu(string, string, int, length, length);
 
     // The Search panel.
     in property <bool> search-case;
