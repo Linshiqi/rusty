@@ -3,17 +3,15 @@
 //! Usage: cargo run -p rusty-term --example pty_probe
 
 fn main() {
-    // Default: the built-in shell. Any argv can be passed instead —
+    // Default: the built-in shell, as `rusty-shell` (`cargo build -p
+    // rusty-term` first). Any argv can be passed instead —
     // `--example pty_probe -- powershell.exe` probes that shell.
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.is_empty() {
         let exe = std::env::current_dir()
             .unwrap()
-            .join("target/debug/rusty-app.exe");
-        argv = vec![
-            exe.to_string_lossy().into_owned(),
-            "--builtin-shell".to_string(),
-        ];
+            .join("target/debug/rusty-shell.exe");
+        argv = vec![exe.to_string_lossy().into_owned()];
     }
     // RUSTY_PROBE_CWD reproduces the app's working-directory choice.
     let cwd = std::env::var("RUSTY_PROBE_CWD")

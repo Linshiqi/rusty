@@ -395,7 +395,7 @@ mod tests {
     /// a thing every `cargo test` should have to download.
     #[test]
     fn the_shipped_bundle_answers_for_every_tool_it_carries() {
-        let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rusty-app/bundled");
+        let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/bundled");
         if !platform_matches(&bundle) {
             eprintln!(
                 "skipping: no bundle for this machine at {} — run scripts/bundle-tools.sh",

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/rusty-app", "crates/rusty-embed", "crates/rusty-ui", "crates/rusty-i18n", "crates/rusty-ipc", "crates/rusty-term", "crates/rusty-edit", "crates/rusty-lsp", "crates/rusty-dbg", "crates/rusty-git", "crates/rusty-draw", "crates/rusty-mcu", "crates/rusty-desk", "crates/rusty-setup", "crates/rusty-release"]
+members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/rusty-embed", "crates/rusty-i18n", "crates/rusty-term", "crates/rusty-edit", "crates/rusty-lsp", "crates/rusty-dbg", "crates/rusty-git", "crates/rusty-draw", "crates/rusty-mcu", "crates/rusty-desk", "crates/rusty-setup", "crates/rusty-release"]
 # Test fixtures are real, standalone workspaces that rusty-core analyzes at test
 # time. They must not join this workspace or their deps would unify with ours
 # and the numbers under test would drift with our own dependency changes.
@@ -9,10 +9,10 @@ exclude = ["crates/rusty-core/tests/fixtures"]
 [workspace.package]
 # The released version, bumped in every release commit, and what a
 # development build calls itself. The release workflow also stamps the tag
-# into it, so a forgotten bump cannot ship the wrong number — but a
-# `cargo tauri dev` at HEAD would still call itself the old one and be
-# offered its own release as an update. `tests/version_sync.rs` in rusty-app
-# holds this, tauri.conf.json and the newest CHANGELOG heading to one number.
+# into it, so a forgotten bump cannot ship the wrong number — but a build at
+# HEAD would still call itself the old one and be offered its own release as
+# an update. `rusty-release`'s tests hold this and the newest CHANGELOG
+# heading to one number.
 version = "0.6.77"
 edition = "2024"
 # 1.89 for `File::lock`: rusty windows are separate processes sharing one
