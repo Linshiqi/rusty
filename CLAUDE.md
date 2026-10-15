@@ -1473,6 +1473,18 @@ Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
   Ctrl over a name draws the link there, and a click follows it as a
   definition found from there goes (`App::follow_link` takes the asking
   surface): in the same file, in that window.
+- **The editor's text is one size in every window.** Ctrl and the wheel
+  over the code there are `content_zoom("editor")`, the main window's, and
+  `Surface::set_scale` sizes every live view: the windows measure their
+  characters into one table and keep one place per document, both in
+  pixels of the size the text is drawn at, so a window at a size of its
+  own would be measured wrong by the others. The table and the places are
+  done once (`set_scale`), each view is drawn again (`fit_text`, `refit`),
+  and a new window takes the size before it shows its file (`take_scale`).
+  Its rows take the wheel as the main window's do — the same `CodeView`.
+  The interface's zoom is worked out per window by the main window's rule
+  (`zoom::apply_to`, with what that window last asked for), again whenever
+  it takes a new size, since it may be on another display.
 - **It belongs to its process.** New Window is a second process with its
   own `App` and main window, sharing no memory; a window a tab was moved
   into is the `App`'s it was moved out of, Move into Main Window means that
@@ -1541,6 +1553,13 @@ cursor — VS Code's, each but the cursors switchable in Settings ▸ Editor
   it writes go in one order*), and an answer about another text is asked
   for again rather than drawn; the hints already there have followed every
   edit and are left standing meanwhile.
+- **An answer places the caret; it never moves the view** (`place_caret`,
+  `editor/mod.rs`). Colours and hints landing redrew the caret through
+  `show_caret`, which also scrolls to it — and a long file's answer is
+  asked for *because* the view moved away from the caret, so the wheel's
+  work was taken back the moment it was answered. Found by the zoom
+  probe's plain wheel, which scrolled and then read the view back at the
+  top whenever rust-analyzer happened to answer in between.
 - **Sticky scroll is the fold regions read the other way**
   (`rusty_edit::sticky`, pure and tested; drawn by `editor/overview.rs`): the
   headers of the regions holding the line under the stuck rows, outermost
@@ -2519,6 +2538,15 @@ margin, VS Code's default, and always where a block is collapsed.
   Rust reads the same one (`get_row_height`) for a click, the hover and a
   scroll. Two layers that each rounded a fractional line height their own way
   were once a whole line apart by row eighty, invisible on any one row.
+- **The text's size, the row height and the margin's width are set
+  together, by Rust** (`Surface::set_scale` over `metrics::text_size`: 12.5
+  pixels on rows of 19 and a margin of 64 at the size as designed, the row
+  always whole pixels). Ctrl and the wheel over the code move the scale a
+  tenth a notch, VS Code's `editor.mouseWheelZoom`, between half and three
+  times; every character is measured again at the new size, every row
+  placed again, and each view keeps the line at its top. The margin was a
+  64 in the `.slint` and another 64 in Rust's sideways scroll, which a
+  larger text would have overrun: it is `Code.gutter`, read by both.
 - **The icons scale with the row** (`min(12px, row-height - 6px)` in
   `ui/editor.slint`). A fixed icon taller than the row once the editor is
   zoomed out pushes every number below it down.
@@ -2696,7 +2724,13 @@ rules it settled, each the answer to something that went wrong.
   — and Calls, the call hierarchy; right the board and the assistant, so
   the board stands beside the code for every project. Each dock opens and
   closes from the status bar and a key, keeps its size, and remembers which
-  panel was in front.
+  panel was in front. **A tab's right-click takes its panel off the strip**,
+  VS Code's *Hide 'Output'* (`docks::hide`, kept in the dock's `hidden`):
+  never the last on a strip, which would leave a dock nothing could be
+  opened from, and a hidden panel is back whenever it is shown — by its
+  key, by a run that brings it, or by the *Show 'Search'* rows the menu of
+  any tab still on that strip lists, since a hidden panel has no tab of its
+  own to be found by.
 - **A run's panels are listed when they have something to say.** Output,
   Problems and Terminal always are; Plot arrives with the first sample or
   tunable, Waves with the first edge, Flight with a declared sensor, Draw
@@ -2743,7 +2777,31 @@ rules it settled, each the answer to something that went wrong.
   shows the one in force.
 - **Every surface answers a right-click with its own menu or not at all**
   (`app/menu.rs`, one menu for the window, filled by whichever surface was
-  clicked).
+  clicked). VS Code's for each (`app/context.rs`, which keeps what was under
+  the pointer until a row is picked): Output copies the line, copies all and
+  clears; a problem goes to itself, copies itself as VS Code's JSON of it
+  and copies its message, and a file's heading opens and copies its path;
+  the terminal — whose cells a drag selects, Ctrl+Shift+C copying them, and
+  Ctrl+C too while something is selected, as VS Code's does on Windows —
+  copies its selection, pastes, selects all, clears (the screen
+  and its history, then the form feed that is the shell's own Ctrl+L, so
+  ConPTY's screen and the one drawn agree), kills and restarts; a search
+  hit opens, copies its line and its path; a Markdown page shows its source
+  and copies its path; a dock's tab hides its panel. A row that would do
+  nothing is not there — the page's text cannot be selected, so its menu has
+  no Copy. **A path is copied as the tree copies one** (`tree_copy_path`):
+  VS Code's *Copy path*, absolute, and *Copy relative path*, both with the
+  system's separator. The Git menus' *Copy path* is still Fork's, relative,
+  beside *Copy full path* — one name meaning two things, left for the
+  owner to settle.
+- **Ctrl and the wheel size the text under the pointer; Ctrl+= and Ctrl+-
+  size the window**, VS Code's split. Over the code it is the editor's text,
+  over a Markdown page the page's own scale (prose and a listing are read at
+  different sizes), over the terminal its font — each a tenth a notch
+  between half and three times (`zoom::stepped`; a touchpad's small turns
+  summed into notches, `zoom::wheel_steps`), each in `workbench.toml`'s
+  `[layout]`, each put back by a palette action. The wheel alone still
+  scrolls.
 - **Lists of things the window has are generated from the thing.** The
   palette lists `actions::ALL` and the docks list `Dock::panels`; a list
   spelled out by hand beside them is a list that drifts, and some of the old
@@ -2801,8 +2859,9 @@ is no browser storage, and what the window remembers between runs is
   folder is the cloud-sync story.
 - `workbench.toml` (`config::WorkbenchState`) is the recents, the window's
   layout and theme and scale (`WindowLayout`: each dock's size, whether it is
-  open and which panel was in front, and where the editor groups part), the
-  editor's switches (`vim`,
+  open, which panel was in front and which were taken off its strip, where
+  the editor groups part, and the editor's, the page's and the terminal's
+  text scales), the editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so
   another spelling of the same directory finds it), the rebound keys
@@ -4030,6 +4089,34 @@ is no browser storage, and what the window remembers between runs is
   (`input_event_filter_before_children`), which a sibling never sees, so the
   card's own touch area beside its fix rows lost the hover to them and put
   the card away under the click.
+- **A Slint `StyledText` takes every press, of every button** (with
+  `shared-parley`, `items/text.rs`: `Pressed { .. } => EventAccepted`, so
+  that its links can be clicked), and nothing under it hears one. A
+  right-click on a Markdown page's text would have opened no menu, and a
+  `ContextMenuArea` would have fared no better — it, too, hears only what
+  its children leave. So the page has a touch area *over* it, short of the
+  scrollbar, which takes the right button and Ctrl and the wheel, and
+  passes the wheel alone on; a left click it hears is made again underneath
+  with the touch area stepped aside (`Shell.page-through`,
+  `App::page_click`, after the event and never inside it), which is how a
+  link still answers. What it costs is the pointer hand over a link, which
+  the text sets on a move the touch area now takes. **And a link wrapped
+  onto two lines answers only on its last** (`link_in_layout` in
+  `textlayout/sharedparley.rs` keeps the verdict of the last line's box,
+  each line overwriting the one before): a click on its first line goes
+  nowhere, with or without the touch area. Slint's, not rusty's: it was
+  taken for the touch area's fault until a bare `ScrollView` and
+  `StyledText` heard the same synthetic click on a one-line link at once.
+- **A Slint `Flickable` keeps a wheel gesture it began for 800 ms**
+  (`should_capture_scroll`, `items/flickable.rs`): a wheel turned within
+  that time of its own scroll, the pointer not moved two pixels, never
+  reaches what is inside it. Ctrl and the wheel straight after scrolling
+  the code therefore scrolled it — the probe measured exactly that — so
+  the code's rows take the wheel themselves (`CodeView`'s `wheel`): with
+  Ctrl the text's size, alone the view moved by as far as the wheel turned,
+  at once, which is VS Code's own scroll (`editor.smoothScrolling` is off by
+  default). The Markdown page's touch area sits beside its `ScrollView`,
+  not in it, for the same reason.
 
 ## The sheet
 

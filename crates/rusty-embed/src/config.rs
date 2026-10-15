@@ -336,6 +336,12 @@ mod file {
         pub theme: String,
         #[serde(default = "one")]
         pub zoom: f32,
+        #[serde(default = "one")]
+        pub editor_zoom: f32,
+        #[serde(default = "one")]
+        pub page_zoom: f32,
+        #[serde(default = "one")]
+        pub terminal_zoom: f32,
         #[serde(default)]
         pub left: Option<Dock>,
         #[serde(default)]
@@ -352,6 +358,8 @@ mod file {
         pub size: f32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub front: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub hidden: Vec<String>,
     }
 
     fn system() -> String {
@@ -374,11 +382,15 @@ mod file {
                     open: d.open,
                     size: d.size,
                     front: d.front.clone(),
+                    hidden: d.hidden.clone(),
                 })
             };
             WindowLayout {
                 theme: file.theme.clone(),
                 zoom: file.zoom,
+                editor_zoom: file.editor_zoom,
+                page_zoom: file.page_zoom,
+                terminal_zoom: file.terminal_zoom,
                 left: dock(&file.left, defaults.left),
                 bottom: dock(&file.bottom, defaults.bottom),
                 right: dock(&file.right, defaults.right),
@@ -400,11 +412,15 @@ mod file {
                     open: d.open,
                     size: d.size,
                     front: d.front.clone(),
+                    hidden: d.hidden.clone(),
                 })
             };
             Layout {
                 theme: layout.theme.clone(),
                 zoom: layout.zoom,
+                editor_zoom: layout.editor_zoom,
+                page_zoom: layout.page_zoom,
+                terminal_zoom: layout.terminal_zoom,
                 left: dock(&layout.left),
                 bottom: dock(&layout.bottom),
                 right: dock(&layout.right),
@@ -928,20 +944,26 @@ mod tests {
             layout: crate::model::WindowLayout {
                 theme: "light".into(),
                 zoom: 1.25,
+                editor_zoom: 1.3,
+                page_zoom: 0.8,
+                terminal_zoom: 1.5,
                 left: crate::model::DockLayout {
                     open: false,
                     size: 300.0,
                     front: Some("git".into()),
+                    hidden: vec!["search".into()],
                 },
                 bottom: crate::model::DockLayout {
                     open: true,
                     size: 180.0,
                     front: Some("terminal".into()),
+                    hidden: vec!["output".into(), "problems".into()],
                 },
                 right: crate::model::DockLayout {
                     open: true,
                     size: 500.0,
                     front: Some("board".into()),
+                    hidden: vec!["assistant".into()],
                 },
                 split: 0.3,
             },
@@ -988,6 +1010,27 @@ mod tests {
         save_workbench_at(&path, &WorkbenchState::default()).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(!written.contains("[editor]"), "{written}");
+    }
+
+    /// A layout written before the text had sizes of its own, or the docks
+    /// a hidden panel, reads with every text at its own size and every
+    /// panel on its strip — not at a size of zero, which draws nothing.
+    #[test]
+    fn a_layout_from_before_text_zoom_reads_at_its_own_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench.toml");
+        std::fs::write(
+            &path,
+            "[layout]\ntheme = \"dark\"\nzoom = 1.1\n\n[layout.bottom]\nopen = true\nsize = 200.0\n",
+        )
+        .unwrap();
+        let layout = workbench_at(&path).layout;
+        assert_eq!(layout.zoom, 1.1);
+        assert_eq!(
+            (layout.editor_zoom, layout.page_zoom, layout.terminal_zoom),
+            (1.0, 1.0, 1.0)
+        );
+        assert!(layout.bottom.open && layout.bottom.hidden.is_empty());
     }
 
     /// A layout written before the editor groups' divider was kept reads as

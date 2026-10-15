@@ -579,7 +579,8 @@ tests green, and CLAUDE.md saying how it works.
    under the split's rule; what is about the file happens in its window,
    what is about the project in the main window, which comes forward. Its
    keys are the main window's keymap — rebound keys, two-stroke chords, the
-   history's Alt+Left — and Ctrl over a name draws the link there. The
+   history's Alt+Left — Ctrl over a name draws the link there, and its text
+   is the editor's one size, which Ctrl and the wheel there set too. The
    probe's `RUSTY_PROBE_TORN` moves the file into a window of its own,
    types there, opens it in the main window too and types there, undoes
    from the other window, saves it on a rebound key and closes it, then
@@ -587,7 +588,8 @@ tests green, and CLAUDE.md saying how it works.
    tab's menu is then renamed in the tree, which the window follows, and
    deleted there, which closes it; and last, in a window of its own again,
    a link is drawn and followed, Ctrl+K Ctrl+S opens Keyboard Shortcuts in
-   the main window and Alt+Left walks back.
+   the main window, Alt+Left walks back, and Ctrl and the wheel there size
+   the text in both windows.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
@@ -692,6 +694,32 @@ tests green, and CLAUDE.md saying how it works.
    and used, Ctrl+S then saving nothing) and `RUSTY_PROBE_WINDOWS` (a
    second rusty on the welcome page, another project opened there, the
    first's refused, both recents kept).
+
+   Then what v0.7.0-rc.1's user found missing beside VS Code. Ctrl and the
+   wheel size the text under the pointer, Ctrl+= stays the window's: the
+   editor's text (`Surface::set_scale` — the font, the one row height and
+   the margin set together from `metrics::text_size`, every character
+   measured again, the top line kept), a Markdown page's own scale and the
+   terminal's font, each a tenth a notch and kept in `[layout]`, each put
+   back from the palette. And the surfaces that answered a right-click with
+   nothing have VS Code's menus (`app/context.rs`): Output, Problems (a
+   problem copied as VS Code's JSON of it), the terminal (a selection made
+   by dragging over its cells, Copy, Paste, Select all, Clear, Kill,
+   Restart), the search results, a Markdown page and a dock's tabs, whose
+   *Hide* takes a panel off its strip until it is shown again. A page's
+   text takes every press of every button, so the page has a touch area
+   over it that hears the right button and the wheel, and makes a left
+   click again underneath for the links. The probe's `RUSTY_PROBE_ZOOM`
+   and `RUSTY_PROBE_MENUS` (`probe_surfaces.rs`) drive both with the events
+   a pointer makes. Found on the way, in Ctrl+='s own zoom: the display's
+   factor was learned before the window was on the display, where it is
+   1.0, so a 125% display was put back to 100% — a window of 1600×1025
+   pixels at a scale of 1, laid out at 1280×820 and drawn into that corner.
+   The display's factor is now whatever the window has that rusty did not
+   ask for, worked out again whenever the window takes a new size — which
+   is how the factor arrives, the window being made a moment into the
+   event loop — and a new factor is followed by the logical size it makes
+   (`zoom::apply`).
 
 ## Decided
 

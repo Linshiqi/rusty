@@ -56,7 +56,11 @@
 //! back; then moves a new file there from its tab's menu, renames it in the
 //! tree and deletes it there; then, in a window of its own again, draws a
 //! link under Ctrl and follows it, presses Ctrl+K Ctrl+S and Alt+Left
-//! there — on a copy, since it saves and deletes.
+//! there, and turns the wheel there with Ctrl and without — on a copy,
+//! since it saves and deletes.
+//! With `RUSTY_PROBE_ZOOM` and `RUSTY_PROBE_MENUS` it runs the two in
+//! `probe_surfaces.rs`: Ctrl and the wheel over each text, and the
+//! surfaces' right-click menus.
 //! With `RUSTY_PROBE_TREE`, on a copy of a project with a `src/`, it works
 //! the file tree by its pointer and its keys: a file made in `src` from the
 //! folder's menu (a taken name refused under the box first), a folder made
@@ -168,6 +172,8 @@ pub fn start(window: &AppWindow) {
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
     let tearing = std::env::var_os("RUSTY_PROBE_TORN").is_some();
+    let zooming = std::env::var_os("RUSTY_PROBE_ZOOM").is_some();
+    let menus = std::env::var_os("RUSTY_PROBE_MENUS").is_some();
     let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
@@ -317,6 +323,12 @@ pub fn start(window: &AppWindow) {
                 Some((index + 1, line[..at].chars().count() + offset + 1))
             })
         };
+        let surfaces = crate::probe_surfaces::Run {
+            window: &window,
+            dir: &dir,
+            step: &step,
+            waited: &waited,
+        };
         match n {
             25 => {
                 snapshot(&window, &dir.join("open.png"));
@@ -399,6 +411,12 @@ pub fn start(window: &AppWindow) {
                 if tearing {
                     step.set(3600);
                 }
+                if zooming {
+                    step.set(6100);
+                }
+                if menus {
+                    step.set(6200);
+                }
                 if keyboard {
                     step.set(5100);
                 }
@@ -415,6 +433,10 @@ pub fn start(window: &AppWindow) {
                     step.set(3200);
                 }
             }
+            // Ctrl and the wheel over the code, a page and the terminal; and
+            // the surfaces' right-click menus (`probe_surfaces.rs`).
+            6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),
+            6200..=6399 if menus => crate::probe_surfaces::menus(n, &surfaces),
             // Keyboard Shortcuts: opened by its chord from the code, searched,
             // a refused key and a colliding one recorded, Save moved to
             // Ctrl+F7 and used there — the old key no longer saving — the
@@ -2788,8 +2810,59 @@ pub fn start(window: &AppWindow) {
                     shell.get_active_tab(),
                     app.torn_windows().len()
                 );
+                // Ctrl and two notches up over the code there: the text's
+                // size, in both windows, kept in workbench.toml.
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    let size = torn.window().size().to_logical(torn.window().scale_factor());
+                    eprintln!(
+                        "torn: the text before the wheel: there {:?}, the main window's {:?}",
+                        text_size_of(&torn.global::<Code>()),
+                        text_size_of(&code)
+                    );
+                    torn_wheel(torn, (size.width / 2.0, size.height / 3.0), 120.0, true);
+                }
             }
-            3678 if tearing => app.act("app.exit"),
+            3679 if tearing => {
+                let Some((torn, _)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                let view = torn.global::<Code>();
+                eprintln!(
+                    "torn: Ctrl and two notches up there: there {:?}, the main window's {:?}; workbench.toml keeps {}",
+                    text_size_of(&view),
+                    text_size_of(&code),
+                    rusty_embed::config::workbench().layout.editor_zoom
+                );
+                snapshot_of(torn.window(), &dir.join("torn-zoom.png"));
+                // A plain wheel down there: its own rows take it.
+                let size = torn.window().size().to_logical(torn.window().scale_factor());
+                eprintln!("torn: scrolled {} before a plain wheel", view.get_scroll_y());
+                torn_wheel(&torn, (size.width / 2.0, size.height / 3.0), -180.0, false);
+                // 3680 and 3681 are the typing detour's, above.
+                step.set(3683);
+            }
+            3683 if tearing => {
+                let Some((torn, _)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                eprintln!(
+                    "torn: three notches down there: scrolled {}, the text {:?}",
+                    torn.global::<Code>().get_scroll_y(),
+                    text_size_of(&torn.global::<Code>())
+                );
+                app.act("editor.zoom-reset");
+            }
+            3684 if tearing => {
+                eprintln!(
+                    "torn: Reset editor font zoom: there {:?}, the main window's {:?}; workbench.toml keeps {}",
+                    app.torn_windows()
+                        .first()
+                        .map(|(w, _)| text_size_of(&w.global::<Code>())),
+                    text_size_of(&code),
+                    rusty_embed::config::workbench().layout.editor_zoom
+                );
+            }
+            3685 if tearing => app.act("app.exit"),
             // Where the caret rests: the brace beside it and its partner
             // outlined; the name under it washed where else it occurs, and
             // the washes gone at the next key; a problem's fixes listed on
@@ -4487,7 +4560,7 @@ fn key_row(shell: &Shell, id: &str) -> String {
         .unwrap_or_else(|| format!("no row for {id}"))
 }
 
-fn screen_text(shell: &Shell) -> String {
+pub(crate) fn screen_text(shell: &Shell) -> String {
     shell
         .get_term_rows()
         .iter()
@@ -4503,6 +4576,38 @@ fn screen_text(shell: &Shell) -> String {
 
 /// A key with modifiers held, sent to a window of its own as a hand presses
 /// it: each modifier first and let go after.
+/// The wheel turned at a point of a window a tab was moved into, with Ctrl
+/// held when `control` — `probe_surfaces`' wheel, in that window.
+fn torn_wheel(torn: &crate::TornWindow, at: (f32, f32), delta: f32, control: bool) {
+    let send = |event| torn.window().dispatch_event(event);
+    let position = LogicalPosition::new(at.0, at.1);
+    if control {
+        send(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+    }
+    send(WindowEvent::PointerMoved { position });
+    send(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: delta,
+    });
+    if control {
+        send(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+    }
+}
+
+/// What a code view's text is at: the font, its rows and the margin.
+fn text_size_of(code: &Code) -> (f32, f32, f32) {
+    (
+        code.get_font_size(),
+        code.get_row_height(),
+        code.get_gutter(),
+    )
+}
+
 fn torn_chord(torn: &crate::TornWindow, held: &[Key], text: &str) {
     let send = |event| torn.window().dispatch_event(event);
     for key in held {
@@ -4720,7 +4825,7 @@ fn held_still(what: &str, photos: &[image::RgbaImage], dir: &Path) {
     }
 }
 
-fn snapshot(window: &AppWindow, path: &Path) {
+pub(crate) fn snapshot(window: &AppWindow, path: &Path) {
     snapshot_of(window.window(), path);
 }
 

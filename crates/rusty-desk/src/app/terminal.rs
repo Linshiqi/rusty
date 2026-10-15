@@ -27,6 +27,9 @@ const DARK: [u32; 16] = [
     0xff8b74, 0xa2dd89, 0xf5cd6e, 0x9bc9f2, 0xdda6e2, 0x74d8cb, 0xf5f1eb,
 ];
 
+/// The terminal's text as designed, before Ctrl and the wheel scale it.
+pub(super) const FONT: f32 = 13.0;
+
 /// What the panel holds.
 #[derive(Default)]
 pub(super) struct Term {
@@ -35,6 +38,45 @@ pub(super) struct Term {
     generation: u64,
     size: (u16, u16),
     screen: Screen,
+    /// What is selected: the cell pressed and the cell dragged to, as a row
+    /// and a column of the screen drawn.
+    selection: Option<((u16, u16), (u16, u16))>,
+}
+
+/// A selection's two ends, the earlier first.
+fn ordered(ends: ((u16, u16), (u16, u16))) -> ((u16, u16), (u16, u16)) {
+    if ends.0 <= ends.1 {
+        ends
+    } else {
+        (ends.1, ends.0)
+    }
+}
+
+/// What a selection from `from` up to the column before `to` holds: each
+/// row's characters whose first cell is in it — a wide one is two cells,
+/// as it is drawn — with the blanks at a line's end left out and the rows
+/// joined by line breaks.
+fn selected_text(rows: &[rusty_term::Row], from: (u16, u16), to: (u16, u16)) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let mut lines = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let index = index as u16;
+        if index < from.0 || index > to.0 {
+            continue;
+        }
+        let first = if index == from.0 { from.1 } else { 0 };
+        let last = if index == to.0 { to.1 } else { u16::MAX };
+        let mut line = String::new();
+        let mut cell = 0u16;
+        for c in row.spans.iter().flat_map(|span| span.text.chars()) {
+            if cell >= first && cell < last {
+                line.push(c);
+            }
+            cell = cell.saturating_add(c.width().unwrap_or(0) as u16);
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    lines.join("\n")
 }
 
 fn rgb(value: u32) -> slint::Color {
@@ -180,6 +222,7 @@ impl App {
                 old.kill();
             }
             state.term.generation += 1;
+            state.term.selection = None;
             let size = if state.term.size.0 == 0 {
                 (100, 24)
             } else {
@@ -244,21 +287,140 @@ impl App {
         let Some(terminal) = self.state.borrow().term.terminal.clone() else {
             return false;
         };
-        // Ctrl+Shift+V pastes and Ctrl+Shift+C copies nothing yet: the
-        // shell's own Ctrl+C is the interrupt.
+        // Ctrl+Shift+V pastes and Ctrl+Shift+C copies; Ctrl+C copies too
+        // while something is selected, as VS Code's terminal does on
+        // Windows, and is the shell's interrupt otherwise.
         if control && shift && text.eq_ignore_ascii_case("v") {
-            if let Ok(mut clipboard) = arboard::Clipboard::new()
-                && let Ok(pasted) = clipboard.get_text()
-            {
-                let _ = terminal.write(pasted.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
-            }
+            self.term_paste();
+            return true;
+        }
+        if control && !alt && text.eq_ignore_ascii_case("c") && (shift || self.term_has_selection())
+        {
+            self.term_copy();
+            self.term_unselect();
             return true;
         }
         let Some(bytes) = encode(text, control, alt) else {
             return false;
         };
+        self.term_unselect();
         let _ = terminal.write(&bytes);
         true
+    }
+
+    /// The clipboard typed into the shell, its line breaks as Enter.
+    pub(super) fn term_paste(&self) {
+        let Some(terminal) = self.state.borrow().term.terminal.clone() else {
+            return;
+        };
+        if let Ok(mut clipboard) = arboard::Clipboard::new()
+            && let Ok(pasted) = clipboard.get_text()
+        {
+            let _ = terminal.write(pasted.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
+        }
+    }
+
+    fn term_has_selection(&self) -> bool {
+        self.state
+            .borrow()
+            .term
+            .selection
+            .is_some_and(|(from, to)| from != to)
+    }
+
+    /// What is selected, as text; empty when nothing is.
+    pub(super) fn term_selected(&self) -> String {
+        let state = self.state.borrow();
+        let term = &state.term;
+        match term.selection.map(ordered) {
+            Some((from, to)) if from != to => selected_text(&term.screen.rows, from, to),
+            _ => String::new(),
+        }
+    }
+
+    /// The selection onto the clipboard.
+    pub(super) fn term_copy(&self) {
+        let text = self.term_selected();
+        if !text.is_empty() {
+            super::git::copy_text(&text);
+        }
+    }
+
+    /// A press (0) at a cell starts a selection there; a drag (1) carries
+    /// its other end.
+    pub(super) fn term_select(&self, kind: i32, col: i32, row: i32) {
+        let cell = (row.max(0) as u16, col.max(0) as u16);
+        {
+            let mut state = self.state.borrow_mut();
+            let selection = &mut state.term.selection;
+            *selection = match (kind, *selection) {
+                (1, Some((from, _))) => Some((from, cell)),
+                _ => Some((cell, cell)),
+            };
+        }
+        self.sync_term_selection();
+    }
+
+    /// Every cell of the screen selected.
+    pub(super) fn term_select_all(&self) {
+        {
+            let mut state = self.state.borrow_mut();
+            let term = &mut state.term;
+            let rows = term.screen.rows.len().max(1) as u16;
+            term.selection = Some(((0, 0), (rows - 1, term.screen.cols.max(1))));
+        }
+        self.sync_term_selection();
+    }
+
+    fn term_unselect(&self) {
+        if self.state.borrow_mut().term.selection.take().is_some() {
+            self.sync_term_selection();
+        }
+    }
+
+    /// The screen and its history blanked, and the shell asked for its
+    /// prompt again (`Terminal::clear`).
+    pub(super) fn term_clear(&self) {
+        let Some(terminal) = self.state.borrow().term.terminal.clone() else {
+            return;
+        };
+        let _ = terminal.clear();
+        {
+            let mut state = self.state.borrow_mut();
+            state.term.selection = None;
+            state.term.screen = terminal.screen();
+        }
+        self.sync_term();
+    }
+
+    /// The shell ended, where it stands: the panel then says it exited and
+    /// offers another.
+    pub(super) fn term_kill(&self) {
+        if let Some(terminal) = self.state.borrow().term.terminal.clone() {
+            std::thread::spawn(move || terminal.kill());
+        }
+    }
+
+    /// Whether a shell is running, which a menu offers to end.
+    pub(super) fn term_alive(&self) -> bool {
+        let state = self.state.borrow();
+        state.term.terminal.is_some() && state.term.screen.exited.is_none()
+    }
+
+    fn sync_term_selection(&self) {
+        let Some(window) = self.window() else { return };
+        let shell = window.global::<Shell>();
+        let selection = self.state.borrow().term.selection.map(ordered);
+        match selection {
+            Some((from, to)) if from != to => {
+                shell.set_term_selected(true);
+                shell.set_term_sel_row(i32::from(from.0));
+                shell.set_term_sel_col(i32::from(from.1));
+                shell.set_term_sel_end_row(i32::from(to.0));
+                shell.set_term_sel_end_col(i32::from(to.1));
+            }
+            _ => shell.set_term_selected(false),
+        }
     }
 
     /// The panel's size in cells.
@@ -272,13 +434,17 @@ impl App {
             state.term.size = size;
             state.term.terminal.clone()
         };
+        // The cells a selection named have moved.
+        self.term_unselect();
         if let Some(terminal) = terminal {
             let _ = terminal.resize(size.0, size.1);
         }
     }
 
     pub(super) fn term_scroll(&self, lines: i32) {
-        if let Some(terminal) = self.state.borrow().term.terminal.clone() {
+        let terminal = self.state.borrow().term.terminal.clone();
+        if let Some(terminal) = terminal {
+            self.term_unselect();
             terminal.scroll(lines);
         }
     }
@@ -340,6 +506,8 @@ impl App {
             Some(code) => rusty_i18n::t!("terminal.exited", code = code),
             None => String::new(),
         }));
+        drop(state);
+        self.sync_term_selection();
     }
 }
 
@@ -387,6 +555,34 @@ mod tests {
             vec![("ab", 2), ("中", 2), ("c", 1), ("文", 2)]
         );
         assert_eq!(pieces("plain"), vec![("plain", 5)]);
+    }
+
+    /// A selection copies the cells it covers: part of its first and last
+    /// rows, all of those between, a wide character by the cell it starts
+    /// in, and no line's trailing blanks.
+    #[test]
+    fn a_selection_copies_the_cells_it_covers() {
+        let row = |text: &str| rusty_term::Row {
+            spans: vec![rusty_term::Span {
+                text: text.to_string(),
+                style: Style::default(),
+            }],
+        };
+        let rows = vec![
+            row("PS E:\\> echo 中文 ok"),
+            row("中文 ok   "),
+            row("PS E:\\> "),
+        ];
+        // From the `echo` to the end of the second row; `中` is two cells.
+        assert_eq!(
+            selected_text(&rows, (0, 8), (1, 20)),
+            "echo 中文 ok\n中文 ok"
+        );
+        // Cells 2..4 of `中文 ok` are `文`.
+        assert_eq!(selected_text(&rows, (1, 2), (1, 4)), "文");
+        // Whichever way it was dragged, it is the same selection.
+        assert_eq!(ordered(((1, 4), (1, 2))), ((1, 2), (1, 4)));
+        assert_eq!(selected_text(&rows, (2, 0), (2, 80)), "PS E:\\>");
     }
 
     /// The cube's first step is 0 to 95, the rest 40 apart.
