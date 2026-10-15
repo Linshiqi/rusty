@@ -56,6 +56,16 @@ impl Strong {
         }
     }
 
+    /// A key the code left, to the window's own bindings: the main window's
+    /// shell, or the handler of the window a tab was moved into. The event
+    /// is named where Slint's generated code names it; no public path does.
+    pub fn invoke_key(&self, event: slint::private_unstable_api::re_exports::KeyEvent) -> bool {
+        match self {
+            Strong::Main(window) => window.global::<crate::Shell>().invoke_key(event),
+            Strong::Torn(window) => window.invoke_key(event),
+        }
+    }
+
     pub fn invoke_focus_code(&self) {
         match self {
             Strong::Main(window) => window.invoke_focus_code(),

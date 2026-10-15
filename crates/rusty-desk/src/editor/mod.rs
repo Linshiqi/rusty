@@ -28,6 +28,7 @@ mod inlays;
 mod keymap;
 mod lineops;
 mod lines;
+mod link;
 mod metrics;
 mod modal;
 mod overview;
@@ -128,6 +129,13 @@ struct Common {
 type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
 /// Who is told when the caret moves.
 type OnCaret = RefCell<Option<Box<dyn Fn()>>>;
+/// Asked first about every key the code takes: the window's, while a
+/// two-stroke chord is half pressed — its second stroke is the chord's, not
+/// a key for the editor (`Ctrl+K Ctrl+C` is no copy).
+type OnChord = RefCell<Option<Box<dyn Fn(&str, bool, bool, bool, bool) -> bool>>>;
+/// Who is told which lines an edit replaced: the path, the first line, how
+/// many lines were there and how many are there now.
+type OnLines = RefCell<Option<Box<dyn Fn(&str, usize, usize, usize)>>>;
 type OnBreakpoint = RefCell<Option<Box<dyn Fn(String, u32)>>>;
 type OnLens = RefCell<Option<Box<dyn Fn(rusty_edit::Runnable, String)>>>;
 /// Who applies a fix the hover card offered: the text's version, the
@@ -167,6 +175,12 @@ struct Press {
 const CLICK_GAP: Duration = Duration::from_millis(450);
 const CLICK_SLOP: f32 = 4.0;
 
+/// Whether the code takes `stroke` for its own — Ctrl+D, Ctrl+Z — before
+/// the window's shortcuts hear it, while the code has the keys.
+pub fn takes(stroke: &crate::keys::Stroke) -> bool {
+    keymap::command(&stroke.text(), stroke.ctrl, stroke.alt, stroke.shift, 1).is_some()
+}
+
 pub struct Surface {
     /// Itself, for the timers that call back into it.
     this: Weak<Surface>,
@@ -193,6 +207,8 @@ pub struct Surface {
     window: Host,
     on_edit: OnEdit,
     on_caret: OnCaret,
+    on_chord: OnChord,
+    on_lines: OnLines,
     /// Paths with a repaint on its way: one at a time each, whichever
     /// surface asked for it.
     painting: Rc<RefCell<HashSet<String>>>,
@@ -213,6 +229,8 @@ pub struct Surface {
     /// The lines squiggles are drawn on in the document on screen.
     squiggled: RefCell<Vec<usize>>,
     hovering: hover::Hovering,
+    /// The name under the pointer while Ctrl is held, drawn as a link.
+    linking: link::Linking,
     /// Where the caret rests: the bracket pair outlined and the name's
     /// occurrences washed, shared with the rows that draw them.
     resting: Rc<RefCell<resting::Resting>>,
@@ -323,6 +341,8 @@ impl Surface {
             window: host,
             on_edit: RefCell::default(),
             on_caret: RefCell::default(),
+            on_chord: RefCell::default(),
+            on_lines: RefCell::default(),
             painting,
             drag: Cell::new(None),
             press: Cell::new(None),
@@ -335,6 +355,7 @@ impl Surface {
             problems,
             squiggled: RefCell::default(),
             hovering: hover::Hovering::default(),
+            linking: link::Linking::default(),
             resting,
             occurring: resting::Occurring::default(),
             completing: completion::Completing::default(),
@@ -446,6 +467,16 @@ impl Surface {
         *self.on_caret.borrow_mut() = Some(Box::new(tell));
     }
 
+    pub fn on_chord(&self, ask: impl Fn(&str, bool, bool, bool, bool) -> bool + 'static) {
+        *self.on_chord.borrow_mut() = Some(Box::new(ask));
+    }
+
+    /// Who follows a line through the edits: told the path, the first line
+    /// an edit replaced, how many lines it replaced and how many it wrote.
+    pub fn on_lines(&self, tell: impl Fn(&str, usize, usize, usize) + 'static) {
+        *self.on_lines.borrow_mut() = Some(Box::new(tell));
+    }
+
     // ---- documents -------------------------------------------------------
 
     pub fn holds(&self, path: &str) -> bool {
@@ -545,6 +576,7 @@ impl Surface {
             let path = doc.borrow().path.clone();
             self.servers.changed(&path, &doc.borrow().text);
             self.tell_edit(&path);
+            self.tell_lines(&path, change);
             self.follows(doc, Some(change));
         }
     }
@@ -603,7 +635,7 @@ impl Surface {
             let code = window.global::<Code>();
             code.set_has_document(true);
             code.set_content_width(self.widest.get() + 200.0);
-            code.set_scroll_y(scroll.0);
+            code.set_scroll_y(shade::within(scroll.0));
             code.set_scroll_x(scroll.1);
             self.show_caret();
             window.invoke_focus_code();
@@ -841,6 +873,12 @@ impl Surface {
         }
     }
 
+    fn tell_lines(&self, path: &str, change: Change) {
+        if let Some(tell) = self.on_lines.borrow().as_ref() {
+            tell(path, change.first, change.removed, change.added);
+        }
+    }
+
     // ---- the view's callbacks --------------------------------------------
 
     fn wire(self: &Rc<Self>, window: &Strong) {
@@ -851,6 +889,7 @@ impl Surface {
         code.on_typed(move |text| {
             if let Some(this) = this.upgrade() {
                 this.hide_hover();
+                this.link_away();
                 this.type_text(&text);
             }
         });
@@ -860,7 +899,21 @@ impl Surface {
                 return false;
             };
             let m = event.modifiers;
-            // Any key puts the card away: it is about the text as it was.
+            // Ctrl on its own draws the name under the pointer as a link;
+            // no modifier on its own puts the card away, as in VS Code.
+            this.link_key(&event.text, true);
+            if link::is_modifier(&event.text) {
+                return false;
+            }
+            // While a two-stroke chord is half pressed the key is the
+            // window's, before the editor can take it for its own.
+            if let Some(chord) = this.on_chord.borrow().as_ref()
+                && chord(&event.text, m.control, m.alt, m.shift, m.meta)
+            {
+                return true;
+            }
+            // Any other key puts the card away: it is about the text as it
+            // was.
             this.hide_hover();
             if this.completion_key(&event.text, m.control || m.alt || m.meta) {
                 return true;
@@ -876,7 +929,45 @@ impl Surface {
                     this.run(command);
                     true
                 }
-                _ => false,
+                // What the editor does not take goes to the window's
+                // bindings from here, not by bubbling up: the TextInput the
+                // keys arrive in moves its own cursor on an arrow, so
+                // Alt+Left never reached Back. Its own window's: a window a
+                // tab was moved into has bindings of its own to ask.
+                _ => this
+                    .window
+                    .upgrade()
+                    .is_some_and(|window| window.invoke_key(event)),
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_key_released(move |event| {
+            if let Some(this) = this.upgrade() {
+                this.link_key(&event.text, false);
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_blurred(move || {
+            if let Some(this) = this.upgrade() {
+                this.link_blurred();
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_link_over(move |row, x, y, ctrl, window_x, window_y| {
+            if let Some(this) = this.upgrade() {
+                this.link_over(row, x, y, ctrl, (window_x, window_y));
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_link_left(move |row| {
+            if let Some(this) = this.upgrade() {
+                this.link_left(row);
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_navigate(move |back| {
+            if let Some(this) = this.upgrade() {
+                this.act(if back { "nav.back" } else { "nav.forward" });
             }
         });
         let this = Rc::downgrade(self);
@@ -919,6 +1010,14 @@ impl Surface {
                 this.view_changed();
             }
         });
+        if let Strong::Main(main) = window {
+            let this = Rc::downgrade(self);
+            main.global::<crate::Shade>().on_scrolled(move || {
+                if let Some(this) = this.upgrade() {
+                    this.shade_scrolled();
+                }
+            });
+        }
         let this = Rc::downgrade(self);
         code.on_sticky_pick(move |index| {
             if let Some(this) = this.upgrade() {
@@ -1335,11 +1434,21 @@ impl Surface {
             self.vim_pressed();
         }
         // Ctrl+click: the definition of the name clicked, the caret put
-        // there first so the jump is about what was clicked.
+        // there first so the jump is about what was clicked — where the
+        // link drawn on it said, when it is drawn, so what is underlined is
+        // what the click follows.
         if kind == 0 && ctrl && !alt {
+            let leads = self.link_under(row, x, y);
+            self.link_away();
             self.set_cursors(vec![Cursor::caret(at)]);
-            self.act("editor.definition");
+            match leads {
+                Some(location) => crate::work::app().follow_link(self.id, location),
+                None => self.act("editor.definition"),
+            }
             return;
+        }
+        if kind == 0 {
+            self.link_away();
         }
         match kind {
             0 => self.press(&doc, line, x, at, shift, alt),
@@ -1473,6 +1582,7 @@ impl Surface {
         let path = doc.borrow().path.clone();
         self.servers.changed(&path, &doc.borrow().text);
         self.tell_edit(&path);
+        self.tell_lines(&path, change);
         self.research(Some(change));
         self.rest_edited(change);
         self.cursors_moved();

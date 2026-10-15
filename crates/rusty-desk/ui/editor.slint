@@ -22,8 +22,10 @@ export struct Piece {
 // (2), the match the selection is (3), the scope find searches (4), a
 // squiggle under what a server found: an error (5), a warning (6),
 // something to know (7), whose line is `path`; an indent guide (8); the
-// bracket beside the caret or its partner, outlined (9); and another place
-// the name under the caret occurs, washed (10).
+// bracket beside the caret or its partner, outlined (9); another place
+// the name under the caret occurs, washed (10); and the line under a name
+// drawn as a link while Ctrl is held (11), whose characters are drawn in
+// the link colour too (a piece of kind 11).
 export struct Mark {
     x: length,
     width: length,
@@ -111,6 +113,20 @@ export global Code {
     // A right-click on a row, at a point in it, and where that is in the
     // window, for the menu.
     callback context-menu(int /* row */, length /* x */, length /* y */, length /* window x */, length /* window y */);
+    // A key let go, which Ctrl coming up is; the keys gone from the code,
+    // to another panel or with the window to another.
+    callback key-released(KeyEvent);
+    callback blurred();
+
+    // Ctrl over a name (`src/editor/link.rs`): the pointer moved over a row,
+    // at a point in it and in the window, with Ctrl held or not; it left a
+    // row. The row a name is drawn as a link on, where the pointer is a
+    // hand, or -1.
+    callback link-over(int /* row */, length /* x */, length /* y */, bool /* ctrl */, length /* window x */, length /* window y */);
+    callback link-left(int /* row */);
+    in property <int> link-row: -1;
+    // The mouse's back (true) and forward (false) buttons over the code.
+    callback navigate(bool);
 
     // The hover card: over which line, from where along it, how wide, and
     // what it says — the problems there, the code the server showed, its
@@ -758,12 +774,14 @@ component RowPaint inherits Rectangle {
     }
     for mark in root.line.marks: Rectangle {
         x: root.gutter + mark.x;
-        y: mark.kind == 1 ? 2px : mark.kind >= 5 && mark.kind <= 7 ? parent.height - 4px : mark.kind == 9 ? 1px : 0;
+        // A link's line sits a pixel under the text's baseline, which is
+        // a third of the font's size below the middle of the row.
+        y: mark.kind == 11 ? round((parent.height / 2 + Code.font-size * 0.35) / 1px) * 1px + 1px : mark.kind == 1 ? 2px : mark.kind >= 5 && mark.kind <= 7 ? parent.height - 4px : mark.kind == 9 ? 1px : 0;
         // A caret, and a match of nothing (`^`), are a bar; an
         // indent guide (8) a hairline.
         width: mark.kind == 1 ? 2px : mark.kind == 8 ? 1px : max(mark.width, 2px);
-        height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : mark.kind == 9 ? parent.height - 2px : parent.height;
-        background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind == 9 ? Theme.bracket-fill : mark.kind == 10 ? Theme.occurrence : mark.kind >= 5 ? transparent : Theme.text-selection;
+        height: mark.kind == 11 ? 1px : mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : mark.kind == 9 ? parent.height - 2px : parent.height;
+        background: mark.kind == 11 ? Theme.link : mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind == 9 ? Theme.bracket-fill : mark.kind == 10 ? Theme.occurrence : mark.kind >= 5 ? transparent : Theme.text-selection;
         // The bracket pair is a box round each, as VS Code draws it.
         border-width: mark.kind == 9 ? 1px : 0;
         border-color: Theme.bracket-match;
@@ -853,6 +871,8 @@ export global Shade {
     in-out property <length> scroll-y;
     in-out property <length> scroll-x;
     callback pressed(int /* row */, length /* x */, length /* y */);
+    // The view moved, or the list view moved it (`shade::within`).
+    callback scrolled();
 }
 
 export component ShadeView inherits Rectangle {
@@ -864,6 +884,9 @@ export component ShadeView inherits Rectangle {
         content-width: max(self.visible-width, Shade.content-width);
         content-y <=> Shade.scroll-y;
         content-x <=> Shade.scroll-x;
+        changed content-y => {
+            Shade.scrolled();
+        }
         for shaded[index] in Shade.rows: Rectangle {
             height: Code.row-height;
             width: max(shade-list.visible-width, Shade.content-width);
@@ -876,6 +899,9 @@ export component ShadeView inherits Rectangle {
                 pointer-event(event) => {
                     if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                         Shade.pressed(index, self.mouse-x - root.gutter, self.mouse-y);
+                    }
+                    if (event.kind == PointerEventKind.down && (event.button == PointerEventButton.back || event.button == PointerEventButton.forward)) {
+                        Code.navigate(event.button == PointerEventButton.back);
                     }
                 }
             }
@@ -931,6 +957,11 @@ export component CodeView inherits Rectangle {
                 clicked => {
                     Code.toggle-breakpoint(index);
                 }
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && (event.button == PointerEventButton.back || event.button == PointerEventButton.forward)) {
+                        Code.navigate(event.button == PointerEventButton.back);
+                    }
+                }
                 changed has-hover => {
                     Code.gutter-hover = self.has-hover;
                 }
@@ -938,8 +969,12 @@ export component CodeView inherits Rectangle {
             touch := TouchArea {
                 x: root.gutter - 20px;
                 width: parent.width - self.x;
-                mouse-cursor: text;
+                // A hand over a name drawn as a link.
+                mouse-cursor: Code.link-row == index ? MouseCursor.pointer : MouseCursor.text;
                 pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && (event.button == PointerEventButton.back || event.button == PointerEventButton.forward)) {
+                        Code.navigate(event.button == PointerEventButton.back);
+                    }
                     if (event.button == PointerEventButton.left) {
                         if (event.kind == PointerEventKind.down) {
                             Code.pointer(0, index, self.mouse-x + self.x - root.gutter, self.mouse-y, event.modifiers);
@@ -955,6 +990,7 @@ export component CodeView inherits Rectangle {
                     // a pointer event reports.
                     if (event.kind == PointerEventKind.move && !self.pressed) {
                         Code.hovered(index, self.mouse-x + self.x - root.gutter, self.mouse-y);
+                        Code.link-over(index, self.mouse-x + self.x - root.gutter, self.mouse-y, event.modifiers.control || event.modifiers.meta, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                     }
                 }
                 moved => {
@@ -965,6 +1001,7 @@ export component CodeView inherits Rectangle {
                 changed has-hover => {
                     if (!self.has-hover) {
                         Code.hovered(-1, 0, 0);
+                        Code.link-left(index);
                     }
                 }
             }
@@ -1083,7 +1120,10 @@ export component CodeView inherits Rectangle {
     sink := TextInput {
         x: root.gutter + Code.caret-x + list.content-x;
         y: Code.caret-line * Code.row-height + list.content-y;
-        width: max(2px, self.preferred-width);
+        // No width while nothing is composed: a TextInput takes the
+        // pointer over it, so the few pixels at the caret were where a
+        // click, a hover and Ctrl over a name never reached the code.
+        width: self.preedit-text == "" ? 0px : max(2px, self.preferred-width);
         height: Code.row-height;
         font-family: Theme.mono;
         font-size: Code.font-size;
@@ -1099,6 +1139,15 @@ export component CodeView inherits Rectangle {
                 return accept;
             }
             reject
+        }
+        key-released(event) => {
+            Code.key-released(event);
+            reject
+        }
+        changed has-focus => {
+            if (!self.has-focus) {
+                Code.blurred();
+            }
         }
         edited => {
             if (self.preedit-text == "" && self.text != "") {

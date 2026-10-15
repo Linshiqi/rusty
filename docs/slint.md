@@ -126,7 +126,13 @@ is happening; **Wokwi** for the board beside the code.
   covers the work.
 - **The keyboard reaches everything**: the palette (Ctrl+Shift+P) lists
   every action with its key, the finder (Ctrl+P) every file, symbol and
-  line; the keys are VS Code's wherever a VS Code key exists.
+  line; the keys are VS Code's wherever a VS Code key exists, two-stroke
+  chords included (Ctrl+K Ctrl+S), and Keyboard Shortcuts, a page, lists
+  every action with its key and rebinds it — what shows a key shows the
+  one in force.
+- **A window is a project**, as in VS Code: New Window (Ctrl+Shift+N) is
+  another rusty process on the welcome page, and a recent project opens
+  here or, with Ctrl or its row's button, in a window of its own.
 
 ## The shape of it
 
@@ -211,7 +217,10 @@ tests green, and CLAUDE.md saying how it works.
    copy for both windows), its imports brought along, and the signature of
    the call being typed; F12 and Ctrl+click to a definition — a
    dependency's or a toolchain header's opened read-only — references and
-   implementations in the picker, Alt+Left and Alt+Right through the jumps,
+   implementations in the picker, Ctrl over a name drawn as a link where it
+   has a definition, Alt+Left and Alt+Right (and the mouse's side buttons)
+   through VS Code's navigation history — tabs picked, files opened, jumps
+   and long moves, following the edits — not only the jumps,
    Ctrl+. for the server's fixes and the same fixes on the hover card under
    the problem, a click away; the bracket beside the caret boxed with its
    partner, and the name under it washed where else it occurs; F2 to
@@ -568,13 +577,17 @@ tests green, and CLAUDE.md saying how it works.
    answer from another thread names the surface that asked rather than
    reaching for "the editor". One file open in both windows is one document
    under the split's rule; what is about the file happens in its window,
-   what is about the project in the main window, which comes forward. The
+   what is about the project in the main window, which comes forward. Its
+   keys are the main window's keymap — rebound keys, two-stroke chords, the
+   history's Alt+Left — and Ctrl over a name draws the link there. The
    probe's `RUSTY_PROBE_TORN` moves the file into a window of its own,
    types there, opens it in the main window too and types there, undoes
-   from the other window, saves and closes it, then drags `Cargo.toml` out
-   and moves it back; a file moved out from its tab's menu is then renamed
-   in the tree, which the window follows, and deleted there, which closes
-   it.
+   from the other window, saves it on a rebound key and closes it, then
+   drags `Cargo.toml` out and moves it back; a file moved out from its
+   tab's menu is then renamed in the tree, which the window follows, and
+   deleted there, which closes it; and last, in a window of its own again,
+   a link is drawn and followed, Ctrl+K Ctrl+S opens Keyboard Shortcuts in
+   the main window and Alt+Left walks back.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
@@ -648,6 +661,37 @@ tests green, and CLAUDE.md saying how it works.
    menu as well. The rows are one model changed in place, so the box being
    typed in survives a re-read of the tree. `RUSTY_PROBE_TREE` works all of
    it by pointer events at the rows and keys, on a copy of `draw-vectors`.
+
+   Then two the release candidate was missed for, in the user's words:
+   no New Window, two projects never open at once, and no way to see the
+   keys. New Window starts this executable again with `--new-window`
+   (`src/instances.rs`, the Tauri window's design carried over: the
+   AppImage started rather than its mount, the child reaped, a process
+   group of its own, no console), and the instances register by a held
+   lock file each, now with the project each has open beside it — so a
+   project open in one window is refused in another rather than given two
+   language servers, and the update's restart says how many other windows
+   stay on the old version (the Slint installer renames aside what they
+   hold; it closes nothing). A recent project opens here, or in a new
+   window by Ctrl+Enter, Ctrl+click or its row's button; the Open dialog
+   has a new-window row too. Keyboard Shortcuts is a page: every action
+   and its key, searched by name or by pressing the key, a key recorded by
+   clicking it — two strokes at most, Enter to keep — refused when it
+   types or is Alt with a character, and what it collides with said on
+   its row. `actions::Keymap` is the table with the rebound keys over it,
+   kept in `workbench.toml`'s `keybinds`, which the old window wrote and
+   nothing had read since; the window's key handler, the palette, the
+   editor's, the tabs' and the tree's menus, the debugger's tooltips and
+   the welcome page all read it. Two-stroke chords are new: a stroke that
+   begins one is held, said in a note, and while it is held the code asks
+   the window about its next key before taking it for its own — ahead of
+   the path by which the code hands every key it does not use to the
+   bindings (`Shell::invoke_key`), which is how any other key reaches the
+   keymap from the code. Proven by
+   `RUSTY_PROBE_KEYS` (Ctrl+K Ctrl+S from the code, Save moved to Ctrl+F7
+   and used, Ctrl+S then saving nothing) and `RUSTY_PROBE_WINDOWS` (a
+   second rusty on the welcome page, another project opened there, the
+   first's refused, both recents kept).
 
 ## Decided
 

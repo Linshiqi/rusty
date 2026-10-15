@@ -23,6 +23,10 @@ flate2 = "1.1.9"
 # when an action from a window a tab was moved into lands there
 # (`app/torn.rs`). Slint has no word of its own for it.
 slint = { version = "1.18.1", features = ["unstable-winit-030"] }
+# Slint's own core, for one thing only: the probe turns a mouse wheel the
+# way winit hands one over (`RUSTY_PROBE_SCROLL_WHEEL`), animated, which the
+# public `PointerScrolled` is not. Pinned to the version slint pins.
+i-slint-core = { version = "=1.18.1", default-features = false }
 rusty-ai = { path = "../rusty-ai" }
 rusty-core = { path = "../rusty-core" }
 rusty-dbg = { path = "../rusty-dbg" }

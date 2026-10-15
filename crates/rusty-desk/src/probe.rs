@@ -49,10 +49,14 @@
 //! (Move into New Window), types there, opens the same file in the main
 //! window and photographs both with the edit in each, types in the main
 //! window and undoes it from the other (one history), saves from the
-//! window of its own, closes it and types in the main window again; then
-//! drags `Cargo.toml`'s tab out beyond the main window's edge and moves it
+//! window of its own — on the key the data directory rebound Save to, when
+//! it did — closes it and types in the main window again; then opens
+//! `Cargo.toml` after the long file scrolled to its end, which must be at
+//! the top, drags its tab out beyond the main window's edge and moves it
 //! back; then moves a new file there from its tab's menu, renames it in the
-//! tree and deletes it there — on a copy, since it saves and deletes.
+//! tree and deletes it there; then, in a window of its own again, draws a
+//! link under Ctrl and follows it, presses Ctrl+K Ctrl+S and Alt+Left
+//! there — on a copy, since it saves and deletes.
 //! With `RUSTY_PROBE_TREE`, on a copy of a project with a `src/`, it works
 //! the file tree by its pointer and its keys: a file made in `src` from the
 //! folder's menu (a taken name refused under the box first), a folder made
@@ -67,6 +71,32 @@
 //! its menu's rows — Split right, Copy path, the closes — and clicks the
 //! logo, photographing each; `RUSTY_PROBE_REVEAL` with it also reveals a
 //! file in the file manager, which opens a window of the system's.
+//! With `RUSTY_PROBE_LINK`, on `draw-vectors`' `examples/cross.rs`, it moves the
+//! pointer onto `c.norm()` and presses Ctrl, photographs the link, lets go,
+//! comes back with Ctrl held, Ctrl+clicks it, and walks back and forward
+//! with Alt+Left and Alt+Right, through a tab picked and with the mouse's
+//! side buttons, then puts three lines above a place and goes back to it —
+//! every pointer and key dispatched as the platform dispatches them.
+//! With `RUSTY_PROBE_SCROLL[=<px>]`, on a Markdown file, it scrolls the page
+//! that far, photographs it there, half a pixel further and a whole pixel
+//! further, and does the same in the code view over its source — printing
+//! where the half-pixel frame differs from the whole-pixel ones and how much
+//! sharpness it lost there, which is what a wheel's animation draws between.
+//! With `RUSTY_PROBE_SCROLL_WHEEL=<notches>` as well it then turns the page
+//! that many notches, animated as a real wheel is, and keeps every
+//! photograph it could take while the page glided (`wheel-<notch>-<ms>.png`).
+//! With `RUSTY_PROBE_KEYS` it types into the file, opens Keyboard Shortcuts
+//! with Ctrl+K Ctrl+S from the code (the edit still unsaved), searches it
+//! for `ctrl+s`, records a refused key and a colliding one for Save, moves
+//! Save to Ctrl+F7, and back in the code finds Ctrl+S saving nothing and
+//! Ctrl+F7 saving; then the palette and a tooltip name the new keys and
+//! every key is reset — on a copy, since it saves. With
+//! `RUSTY_PROBE_WINDOWS=<another project>` it presses Ctrl+Shift+N: the
+//! second rusty, started with the same variables, probes itself into
+//! `<dir>/second` — the welcome page, that project opened, this window's
+//! project refused — and writes what it saw to `said.txt`, which this
+//! window prints once the second has gone, with its own project and the
+//! recents both windows wrote.
 
 use std::{
     cell::{Cell, RefCell},
@@ -138,7 +168,41 @@ pub fn start(window: &AppWindow) {
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
     let tearing = std::env::var_os("RUSTY_PROBE_TORN").is_some();
+    let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
+    // New Window: the project the second window opens, and whether this is
+    // that window — started by the first with its flag, and the same
+    // variables, so it probes itself into a directory of its own.
+    let second_project = std::env::var_os("RUSTY_PROBE_WINDOWS").map(PathBuf::from);
+    let second =
+        second_project.is_some() && std::env::args().any(|arg| arg == crate::instances::NEW_WINDOW);
+    let dir = if second { dir.join("second") } else { dir };
+    // What the second window says, written down: its output goes nowhere.
+    let told = {
+        let dir = dir.clone();
+        move |line: String| {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("said.txt"))
+            {
+                let _ = writeln!(file, "{line}");
+            }
+        }
+    };
     let exploring = std::env::var_os("RUSTY_PROBE_TREE").is_some();
+    let linking = std::env::var_os("RUSTY_PROBE_LINK").is_some();
+    // Where the link probe points, in the window.
+    let aim: Rc<Cell<(f32, f32)>> = Rc::default();
+    let gliding = std::env::var_os("RUSTY_PROBE_SCROLL").is_some();
+    let notches = std::env::var("RUSTY_PROBE_SCROLL_WHEEL")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    // The photographs the scroll probe compares, and those it takes while a
+    // wheel's animation runs.
+    let photos: Rc<RefCell<Vec<image::RgbaImage>>> = Rc::default();
+    let frames: Rc<RefCell<Vec<(String, image::RgbaImage)>>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -158,16 +222,26 @@ pub fn start(window: &AppWindow) {
     let latencies: Rc<RefCell<Vec<Duration>>> = Rc::default();
     {
         let (waiting, latencies) = (waiting.clone(), latencies.clone());
-        window
-            .window()
-            .set_rendering_notifier(move |state, _| {
-                if let RenderingState::AfterRendering = state
-                    && let Some(sent) = waiting.take()
-                {
+        let named = Cell::new(false);
+        // The software renderer reports no frames; the probe still runs,
+        // without the times.
+        if let Err(error) = window.window().set_rendering_notifier(move |state, api| {
+            if let RenderingState::AfterRendering = state {
+                if !named.replace(true) {
+                    let api = match api {
+                        slint::GraphicsAPI::NativeOpenGL { .. } => "OpenGL",
+                        slint::GraphicsAPI::WebGL { .. } => "WebGL",
+                        _ => "another",
+                    };
+                    eprintln!("probe: drawn through {api}");
+                }
+                if let Some(sent) = waiting.take() {
                     latencies.borrow_mut().push(sent.elapsed());
                 }
-            })
-            .expect("a renderer that reports its frames");
+            }
+        }) {
+            eprintln!("probe: no frame times from this renderer ({error})");
+        }
     }
 
     let weak = window.as_weak();
@@ -325,9 +399,306 @@ pub fn start(window: &AppWindow) {
                 if tearing {
                     step.set(3600);
                 }
+                if keyboard {
+                    step.set(5100);
+                }
+                if second_project.is_some() {
+                    step.set(if second { 5250 } else { 5200 });
+                }
                 if exploring {
                     step.set(4100);
                 }
+                if linking {
+                    step.set(3100);
+                }
+                if gliding {
+                    step.set(3200);
+                }
+            }
+            // Keyboard Shortcuts: opened by its chord from the code, searched,
+            // a refused key and a colliding one recorded, Save moved to
+            // Ctrl+F7 and used there — the old key no longer saving — the
+            // palette and a tooltip naming the new key, and every key reset.
+            // An edit first, so a Ctrl+S taken for Save would show: the
+            // chord's second stroke is the chord's, in the code too.
+            5100 if keyboard => {
+                if shell.get_active_kind() != "file" {
+                    step.set(5100);
+                    return;
+                }
+                window.invoke_focus_code();
+            }
+            5101 if keyboard => {
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+                key("x".into());
+            }
+            5102 if keyboard => {
+                chord(&[Key::Control], "k".into());
+                chord(&[Key::Control], "s".into());
+            }
+            5103 if keyboard => {
+                // Long enough for a save the second stroke started to land.
+                if waited.get() < 50 {
+                    waited.set(waited.get() + 1);
+                    step.set(5103);
+                    return;
+                }
+                waited.set(0);
+                let path = start_path.borrow().clone();
+                eprintln!(
+                    "keys: Ctrl+K Ctrl+S opened {:?} ({:?}) — {} rows; the edit to {path} still unsaved: {}",
+                    shell.get_active_kind(),
+                    shell.get_active_title(),
+                    shell.get_keys_rows().row_count(),
+                    app.editor().is_dirty(&path)
+                );
+                snapshot(&window, &dir.join("keys.png"));
+                shell.set_keys_query("ctrl+s".into());
+                shell.invoke_keys_query_edited("ctrl+s".into());
+            }
+            5105 if keyboard => {
+                eprintln!("keys: searched ctrl+s: {}", key_rows(&shell));
+                snapshot(&window, &dir.join("keys-search.png"));
+                // Save's row in view, by its name in the window's language.
+                let save = rusty_i18n::lookup("desk.save");
+                shell.set_keys_query(save.clone().into());
+                shell.invoke_keys_query_edited(save.into());
+                shell.invoke_keys_record("file.save".into());
+            }
+            5106 if keyboard => chord(&[Key::Control, Key::Alt], "s".into()),
+            5107 if keyboard => key(Key::Return.into()),
+            5109 if keyboard => {
+                eprintln!("keys: Ctrl+Alt+S for Save: {}", key_row(&shell, "file.save"));
+                snapshot(&window, &dir.join("keys-refused.png"));
+                shell.invoke_keys_record("file.save".into());
+            }
+            5110 if keyboard => chord(&[Key::Control], "b".into()),
+            5112 if keyboard => {
+                eprintln!("keys: Ctrl+B pressed for Save: {}", key_row(&shell, "file.save"));
+                snapshot(&window, &dir.join("keys-recording.png"));
+                key(Key::Return.into());
+            }
+            5114 if keyboard => {
+                eprintln!(
+                    "keys: Save on Ctrl+B: {} / {}",
+                    key_row(&shell, "file.save"),
+                    key_row(&shell, "dock.left")
+                );
+                snapshot(&window, &dir.join("keys-conflict.png"));
+                shell.invoke_keys_record("file.save".into());
+            }
+            5113 if keyboard => {
+                // Both rows on the key, for the photograph.
+                shell.set_keys_query("\"Ctrl+B\"".into());
+                shell.invoke_keys_query_edited("\"Ctrl+B\"".into());
+            }
+            5115 if keyboard => chord(&[Key::Control], Key::F7.into()),
+            5117 if keyboard => {
+                key(Key::Return.into());
+                let save = rusty_i18n::lookup("desk.save");
+                shell.set_keys_query(save.clone().into());
+                shell.invoke_keys_query_edited(save.into());
+            }
+            5119 if keyboard => {
+                eprintln!(
+                    "keys: Save on Ctrl+F7: {}; workbench.toml keybinds {:?}",
+                    key_row(&shell, "file.save"),
+                    rusty_embed::config::workbench().keybinds
+                );
+                snapshot(&window, &dir.join("keys-rebound.png"));
+                // Back to the code, an edit, and the old key.
+                let first = shell.get_tabs().iter().find(|t| t.kind == "file");
+                if let Some(tab) = first {
+                    shell.invoke_pick_tab(tab.id);
+                }
+                window.invoke_focus_code();
+            }
+            5121 if keyboard => {
+                key("x".into());
+                chord(&[Key::Control], "s".into());
+            }
+            5124 if keyboard => {
+                // Two seconds: longer than a save's format may take, so a
+                // Ctrl+S that saved would have landed.
+                if waited.get() < 50 {
+                    waited.set(waited.get() + 1);
+                    step.set(5124);
+                    return;
+                }
+                waited.set(0);
+                let path = app.editor().current_path().unwrap_or_default();
+                eprintln!(
+                    "keys: an edit and Ctrl+S: still unsaved {}",
+                    app.editor().is_dirty(&path)
+                );
+                chord(&[Key::Control], Key::F7.into());
+            }
+            5130 if keyboard => {
+                let path = app.editor().current_path().unwrap_or_default();
+                // A save formats first, for up to a second.
+                if app.editor().is_dirty(&path) && waited.get() < 125 {
+                    waited.set(waited.get() + 1);
+                    step.set(5130);
+                    return;
+                }
+                waited.set(0);
+                eprintln!(
+                    "keys: Ctrl+F7: still unsaved {}",
+                    app.editor().is_dirty(&path)
+                );
+                eprintln!(
+                    "keys: the debugger's tooltips: {:?} {:?}",
+                    shell.invoke_key_of("file.save".into(), shell.get_keys_version()),
+                    shell.invoke_key_of("debug.over".into(), shell.get_keys_version())
+                );
+                app.act("palette.open");
+                let save = rusty_i18n::lookup("desk.save");
+                shell.set_picker_text(save.clone().into());
+                shell.invoke_picker_query(save.into());
+            }
+            5133 if keyboard => {
+                let rows: Vec<String> = shell
+                    .get_picker_rows()
+                    .iter()
+                    .map(|r| format!("{} [{}]", r.title, r.chord))
+                    .collect();
+                eprintln!("keys: the palette for save: {rows:?}");
+                snapshot(&window, &dir.join("keys-palette.png"));
+                shell.invoke_picker_pick(-1);
+                app.act("keys.open");
+            }
+            5135 if keyboard => {
+                shell.invoke_keys_reset("file.save".into());
+                eprintln!(
+                    "keys: Save reset: {}; keybinds {:?}",
+                    key_row(&shell, "file.save"),
+                    rusty_embed::config::workbench().keybinds
+                );
+                shell.invoke_keys_record("debug.over".into());
+            }
+            5136 if keyboard => chord(&[Key::Shift], Key::F9.into()),
+            5137 if keyboard => key(Key::Return.into()),
+            5139 if keyboard => {
+                eprintln!(
+                    "keys: Step over on Shift+F9: tooltip {:?}; keybinds {:?}",
+                    shell.invoke_key_of("debug.over".into(), shell.get_keys_version()),
+                    rusty_embed::config::workbench().keybinds
+                );
+                app.act("keys.reset-all");
+            }
+            5141 if keyboard => {
+                eprintln!(
+                    "keys: all reset: rebound {} keybinds {:?} tooltip {:?}",
+                    shell.get_keys_rebound(),
+                    rusty_embed::config::workbench().keybinds,
+                    shell.invoke_key_of("debug.over".into(), shell.get_keys_version())
+                );
+                snapshot(&window, &dir.join("keys-reset.png"));
+                app.act("app.exit");
+            }
+            // New Window, from the first window: Ctrl+Shift+N starts a second
+            // rusty, which probes itself (5250…) and leaves; this one waits,
+            // then says what it has and what the second wrote down.
+            5200 if second_project.is_some() && !second => {
+                eprintln!(
+                    "windows: first window on {:?}, {} other windows",
+                    shell.get_project(),
+                    crate::instances::others()
+                );
+                chord(&[Key::Control, Key::Shift], "n".into());
+            }
+            5201 if second_project.is_some() && !second => {
+                if crate::instances::others() == 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1500 {
+                        step.set(5201);
+                        return;
+                    }
+                }
+                eprintln!(
+                    "windows: {} other window(s) after {} ticks",
+                    crate::instances::others(),
+                    waited.get()
+                );
+                waited.set(0);
+            }
+            5202 if second_project.is_some() && !second => {
+                let said = std::fs::read_to_string(dir.join("second").join("said.txt"))
+                    .unwrap_or_default();
+                if !said.contains("second: done") {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 4500 {
+                        step.set(5202);
+                        return;
+                    }
+                }
+                eprintln!("windows: the second window said:\n{said}");
+                eprintln!(
+                    "windows: the first still on {:?}; recents {:?}",
+                    shell.get_project(),
+                    rusty_embed::config::workbench().recent_projects
+                );
+                snapshot(&window, &dir.join("first-after.png"));
+                app.act("project.menu");
+            }
+            5206 if second_project.is_some() && !second => {
+                let rows: Vec<String> = shell
+                    .get_picker_rows()
+                    .iter()
+                    .map(|r| format!("{} {}{}", r.title, r.detail, if r.windowed { " ⧉" } else { "" }))
+                    .collect();
+                eprintln!("windows: the project menu: {rows:?}");
+                snapshot(&window, &dir.join("first-projects.png"));
+                shell.invoke_picker_pick(-1);
+            }
+            5230 if second_project.is_some() && !second => {
+                eprintln!("windows: {} other window(s) at the end", crate::instances::others());
+                app.act("app.exit");
+            }
+            5250 if second => {
+                told(format!(
+                    "second: started on {:?} (a project: {}), {} other window(s)",
+                    shell.get_active_kind(),
+                    shell.get_has_project(),
+                    crate::instances::others()
+                ));
+                snapshot(&window, &dir.join("welcome.png"));
+                if let Some(project) = &second_project {
+                    app.open_project(project.clone(), None);
+                }
+            }
+            5251 if second => {
+                if !shell.get_has_project() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1500 {
+                        step.set(5251);
+                        return;
+                    }
+                }
+                told(format!("second: opened {:?}", shell.get_project()));
+            }
+            5260 if second => {
+                snapshot(&window, &dir.join("project.png"));
+                // The first window's project: said, not opened twice.
+                let first = rusty_embed::config::workbench()
+                    .recent_projects
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .find(|p| second_project.as_ref().is_none_or(|s| !rusty_embed::config::same_dir(p, s)));
+                told(format!("second: asked to open {first:?}"));
+                if let Some(first) = first {
+                    app.open_project(first, None);
+                }
+            }
+            5290 if second => {
+                let notes: Vec<String> = shell.get_notes().iter().map(|n| n.text.to_string()).collect();
+                told(format!(
+                    "second: still on {:?}; notes {notes:?}",
+                    shell.get_project()
+                ));
+                snapshot(&window, &dir.join("refused.png"));
+                told("second: done".to_string());
+                app.act("app.exit");
             }
             500 if sim => app.act("run.run"),
             // A breakpoint beside the line that toggles the LED, then F5: the
@@ -767,6 +1138,130 @@ pub fn start(window: &AppWindow) {
                 eprintln!("md: after the toggle page {}", shell.get_md_page());
                 snapshot(&window, &dir.join("markdown-source.png"));
                 app.act("app.exit");
+            }
+            // Scrolling, photographed between whole pixels: a Markdown file's
+            // page and then its source in the code view, each drawn at an
+            // offset, half a pixel further and a whole pixel further. A
+            // wheel's animation draws its frames at fractions like these, so
+            // what differs between the half-pixel frame and the whole-pixel
+            // frame beside it is what moving content looks like, held still.
+            // A dispatched wheel event moves at once (the animation is the
+            // platform's wheel only), which is what lets a fraction be asked
+            // for exactly.
+            3200..=3207 if gliding => {
+                if !shell.get_md_page() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(3200);
+                    }
+                    return;
+                }
+                let size = window.window().size().to_logical(window.window().scale_factor());
+                let at = slint::LogicalPosition::new(size.width * 0.6, size.height * 0.5);
+                let wheel = |delta_y: f32| {
+                    window.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+                    window.window().dispatch_event(WindowEvent::PointerScrolled {
+                        position: at,
+                        delta_x: 0.0,
+                        delta_y,
+                    });
+                };
+                match n {
+                    3200 => {
+                        eprintln!("scroll: scale factor {}", window.window().scale_factor());
+                        let start = std::env::var("RUSTY_PROBE_SCROLL")
+                            .ok()
+                            .and_then(|s| s.parse::<f32>().ok())
+                            .unwrap_or(300.0);
+                        wheel(-start);
+                    }
+                    3203 | 3205 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        wheel(-0.5);
+                    }
+                    3207 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        held_still("page", &photos.borrow(), &dir);
+                        photos.borrow_mut().clear();
+                        app.act("markdown.toggle");
+                    }
+                    _ => {}
+                }
+            }
+            3210..=3217 if gliding => {
+                let top = -(code.get_row_height() * 20.0);
+                match n {
+                    3210 => code.set_scroll_y(top),
+                    3213 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        code.set_scroll_y(top - 0.5);
+                    }
+                    3215 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        code.set_scroll_y(top - 1.0);
+                    }
+                    3217 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        held_still("code", &photos.borrow(), &dir);
+                        if notches > 0 {
+                            app.act("markdown.toggle");
+                            step.set(3230);
+                        } else {
+                            app.act("app.exit");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // With RUSTY_PROBE_SCROLL_WHEEL=<notches>, the page is turned by a
+            // mouse wheel as winit hands one to Slint — sixty pixels a notch,
+            // animated over 180 ms — and photographed as often as the
+            // window can be while it glides, each photograph named by the
+            // notch and the milliseconds since it. A real wheel needs a hand
+            // on it; this is the event winit dispatches for one, from the
+            // moment the platform has read it.
+            3230.. if gliding && notches > 0 => {
+                let sent = (n - 3230) / 8;
+                if (n - 3230).is_multiple_of(8) && sent < notches {
+                    let size = window.window().size().to_logical(window.window().scale_factor());
+                    let at = slint::LogicalPosition::new(size.width * 0.6, size.height * 0.5);
+                    window.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+                    window.window().dispatch_event(WindowEvent::internal(
+                        i_slint_core::input::BackendMouseEvent::Wheel {
+                            position: i_slint_core::lengths::LogicalPoint::new(at.x, at.y),
+                            delta_x: 0.0,
+                            delta_y: -60.0,
+                            phase: i_slint_core::input::TouchPhase::Moved,
+                        },
+                    ));
+                    let notch = Instant::now();
+                    let weak = window.as_weak();
+                    let frames = frames.clone();
+                    let fast = Rc::new(Timer::default());
+                    let hold = fast.clone();
+                    // Kept in memory until the end: a photograph costs a
+                    // whole frame's drawing and reading back, and the disk
+                    // would take the moments the animation is in.
+                    fast.start(TimerMode::Repeated, Duration::from_millis(4), move || {
+                        let Some(window) = weak.upgrade() else { return };
+                        let ms = notch.elapsed().as_millis();
+                        if ms > 260 {
+                            hold.stop();
+                            return;
+                        }
+                        if let Some(picture) = photo(&window) {
+                            frames.borrow_mut().push((format!("wheel-{sent}-{ms:03}.png"), picture));
+                        }
+                    });
+                }
+                if sent >= notches {
+                    let frames = frames.take();
+                    eprintln!("scroll: {notches} wheel notches, {} photographs while gliding", frames.len());
+                    for (name, picture) in &frames {
+                        save_quickly(picture, &dir.join(name));
+                    }
+                    app.act("app.exit");
+                }
             }
             // The math toolbox: the Euler example's rows, the attitude row's
             // working played, a row retyped, and the reference.
@@ -1949,13 +2444,20 @@ pub fn start(window: &AppWindow) {
                         .map(str::to_string)
                 });
                 eprintln!("torn: Ctrl+Z in the window of its own: the line typed there {typed:?}");
-                // Saved from there.
+                // Saved from there, on the key Save was rebound to when one
+                // was (`probe.sh` writes Ctrl+F7 into the data directory).
+                let save = rusty_embed::config::workbench()
+                    .keybinds
+                    .get("file.save")
+                    .cloned();
+                eprintln!("torn: Save is on {save:?} here");
                 if let Some((torn, _)) = app.torn_windows().first() {
-                    let send = |event| torn.window().dispatch_event(event);
-                    send(WindowEvent::KeyPressed { text: Key::Control.into() });
-                    send(WindowEvent::KeyPressed { text: "s".into() });
-                    send(WindowEvent::KeyReleased { text: "s".into() });
-                    send(WindowEvent::KeyReleased { text: Key::Control.into() });
+                    match save.as_deref() {
+                        Some("Ctrl+F7") => {
+                            torn_chord(torn, &[Key::Control], &slint::SharedString::from(Key::F7))
+                        }
+                        _ => torn_chord(torn, &[Key::Control], "s"),
+                    }
                 }
             }
             3640 if tearing => {
@@ -1998,8 +2500,18 @@ pub fn start(window: &AppWindow) {
             3646 if tearing => {
                 if shell.get_active_tab() != "file:Cargo.toml" {
                     step.set(3646);
-                    return;
                 }
+            }
+            // A short file after a long one scrolled to its end, a few frames
+            // on: at the top, not laid out below it by the list view.
+            3647 if tearing => {
+                eprintln!(
+                    "torn: Cargo.toml after lib.rs scrolled down: the view's offset {}",
+                    code.get_scroll_y()
+                );
+                snapshot(&window, &dir.join("torn-short.png"));
+            }
+            3648 if tearing => {
                 // The tab pressed, dragged over the window's left edge and
                 // let go beyond it, through the window's own pointer events:
                 // the strip's TouchArea keeps the press while it is outside.
@@ -2018,10 +2530,11 @@ pub fn start(window: &AppWindow) {
             3650 if tearing => {
                 let torn = app.torn_windows();
                 eprintln!(
-                    "torn: Cargo.toml dragged out: {} window(s) of its own, its tab {:?}, main strip {:?}",
+                    "torn: Cargo.toml dragged out: {} window(s) of its own, its tab {:?}, main strip {:?}, its offset {:?}",
                     torn.len(),
                     torn.first().map(|(w, _)| w.get_name().to_string()),
                     shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                    torn.first().map(|(w, _)| w.global::<Code>().get_scroll_y()),
                 );
                 if let Some((torn, _)) = torn.first() {
                     snapshot_of(torn.window(), &dir.join("torn-dragged.png"));
@@ -2030,10 +2543,11 @@ pub fn start(window: &AppWindow) {
             }
             3652 if tearing => {
                 eprintln!(
-                    "torn: moved back: {} window(s) of its own, main strip {:?}, in front {:?}",
+                    "torn: moved back: {} window(s) of its own, main strip {:?}, in front {:?}, its offset {}",
                     app.torn_windows().len(),
                     shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
                     shell.get_active_tab(),
+                    code.get_scroll_y(),
                 );
                 snapshot(&window, &dir.join("torn-back.png"));
             }
@@ -2129,8 +2643,153 @@ pub fn start(window: &AppWindow) {
                     shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
                 );
                 snapshot(&window, &dir.join("torn-deleted.png"));
+                app.open_file(start_path.borrow().clone());
+                step.set(3666);
             }
-            3665 if tearing => app.act("app.exit"),
+            // The keys in a window of its own are the main window's keymap:
+            // a name drawn as a link under Ctrl and followed by a click, a
+            // two-stroke chord, the history's Alt+Left — and Save on the key
+            // the data directory rebound it to (`probe.sh` writes it).
+            3666 if tearing => {
+                let path = start_path.borrow().clone();
+                if shell.get_active_tab() != format!("file:{path}").as_str() {
+                    step.set(3666);
+                    return;
+                }
+                app.act("editor.detach");
+                waited.set(0);
+            }
+            3667 if tearing => {
+                let Some((torn, surface)) = app.torn_windows().into_iter().next() else {
+                    step.set(3667);
+                    return;
+                };
+                let text = surface
+                    .current_path()
+                    .and_then(|path| app.editor().draft_of(&path))
+                    .map(|(text, ..)| text)
+                    .unwrap_or_default();
+                if let Some((line, col)) = text.lines().enumerate().find_map(|(index, line)| {
+                    line.find("self.dot(self)").map(|at| (index + 1, at + "self.".len() + 2))
+                }) {
+                    surface.go_to(line, Some(col));
+                }
+                let size = torn.window().size().to_logical(torn.window().scale_factor());
+                torn.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(size.width / 2.0, size.height / 3.0),
+                });
+            }
+            3668 if tearing => {
+                let Some((torn, surface)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                let Some((row, x, y, (wx, wy))) = surface.link_pointer() else {
+                    eprintln!("torn: the pointer is not over the code there");
+                    step.set(3674);
+                    return;
+                };
+                let view = torn.global::<Code>();
+                let rows = view.get_row_height();
+                let (left, top) = (wx - x, wy - y - row as f32 * rows);
+                let target = (
+                    left + view.get_caret_x() + 3.0,
+                    top + view.get_caret_line() as f32 * rows + rows / 2.0,
+                );
+                aim.set(target);
+                let send = |event| torn.window().dispatch_event(event);
+                send(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(target.0, target.1),
+                });
+                send(WindowEvent::KeyPressed {
+                    text: Key::Control.into(),
+                });
+                waited.set(0);
+            }
+            3669 if tearing => {
+                let Some((torn, surface)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                let send = |event| torn.window().dispatch_event(event);
+                if surface.link_shown().is_none() && waited.get() < 1500 {
+                    waited.set(waited.get() + 1);
+                    if waited.get().is_multiple_of(75) {
+                        send(WindowEvent::KeyReleased {
+                            text: Key::Control.into(),
+                        });
+                        send(WindowEvent::KeyPressed {
+                            text: Key::Control.into(),
+                        });
+                    }
+                    step.set(3669);
+                    return;
+                }
+                eprintln!(
+                    "torn: Ctrl over `dot` in the window of its own after {} ticks: {:?}, link row {}",
+                    waited.get(),
+                    surface.link_shown().map(|l| (l.0, l.1, l.2, l.3.line)),
+                    torn.global::<Code>().get_link_row()
+                );
+                snapshot_of(torn.window(), &dir.join("torn-link.png"));
+                // Clicked with Ctrl held: where the link leads, in this
+                // window, since it is this file.
+                let (x, y) = aim.get();
+                let at = slint::LogicalPosition::new(x, y);
+                let left = PointerEventButton::Left;
+                send(WindowEvent::PointerPressed { position: at, button: left });
+                send(WindowEvent::PointerReleased { position: at, button: left });
+                send(WindowEvent::KeyReleased {
+                    text: Key::Control.into(),
+                });
+            }
+            3671 if tearing => {
+                let Some((torn, surface)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                eprintln!(
+                    "torn: the link followed: its caret {:?}, the main window's in front {:?}",
+                    surface.status().map(|s| (s.0, s.1)),
+                    shell.get_active_tab()
+                );
+                // Ctrl+K: the first stroke of a chord, said there.
+                torn_chord(&torn, &[Key::Control], "k");
+            }
+            3672 if tearing => {
+                let Some((torn, _)) = app.torn_windows().into_iter().next() else {
+                    return;
+                };
+                eprintln!("torn: Ctrl+K there: its status line {:?}", torn.get_message());
+                torn_chord(&torn, &[Key::Control], "s");
+            }
+            3674 if tearing => {
+                eprintln!(
+                    "torn: Ctrl+K Ctrl+S there: the main window's in front {:?}; its status line {:?}",
+                    shell.get_active_tab(),
+                    app.torn_windows().first().map(|(w, _)| w.get_message().to_string())
+                );
+                let name = rusty_i18n::lookup("desk.detach");
+                shell.set_keys_query(name.clone().into());
+                shell.invoke_keys_query_edited(name.into());
+            }
+            3675 if tearing => {
+                eprintln!(
+                    "torn: on the shortcuts page: {} / {}",
+                    key_row(&shell, "editor.detach"),
+                    key_row(&shell, "file.save")
+                );
+                snapshot(&window, &dir.join("torn-keys.png"));
+                // Alt+Left there: back along the main window's history.
+                if let Some((torn, _)) = app.torn_windows().first() {
+                    torn_chord(torn, &[Key::Alt], &slint::SharedString::from(Key::LeftArrow));
+                }
+            }
+            3677 if tearing => {
+                eprintln!(
+                    "torn: Alt+Left there: the main window's in front {:?}, its windows of their own {}",
+                    shell.get_active_tab(),
+                    app.torn_windows().len()
+                );
+            }
+            3678 if tearing => app.act("app.exit"),
             // Where the caret rests: the brace beside it and its partner
             // outlined; the name under it washed where else it occurs, and
             // the washes gone at the next key; a problem's fixes listed on
@@ -2319,6 +2978,292 @@ pub fn start(window: &AppWindow) {
             }
             3017 if marking => snapshot(&window, &dir.join("marks-dark.png")),
             3018 if marking => app.act("app.exit"),
+            // Ctrl over a name and back and forward, through the window's
+            // own events: the pointer and the keys dispatched as the
+            // platform dispatches them, so the row's touch area, the key
+            // path and the bindings are the ones a hand reaches.
+            3100 if linking => {
+                let colours = app.editor().told().map_or(0, |told| told.0);
+                if shell.get_active_kind() != "file" || colours == 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 3000 {
+                        step.set(3100);
+                        return;
+                    }
+                }
+                eprintln!("link: the server painted {colours} spans after {} ticks", waited.get());
+                waited.set(0);
+                let Some((line, col)) = find("c.norm()", 3) else {
+                    eprintln!("link: no `c.norm()` in the file");
+                    app.act("app.exit");
+                    return;
+                };
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+                app.editor().go_to(line, Some(col));
+            }
+            // Where the code is in the window: a move over the top of its
+            // middle, and what its touch area says it was over.
+            3101 if linking => {
+                let size = window.window().size().to_logical(window.window().scale_factor());
+                window.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(size.width / 2.0, size.height / 4.0),
+                });
+            }
+            3102 if linking => {
+                let Some((row, x, y, (wx, wy))) = app.editor().link_pointer() else {
+                    eprintln!("link: the middle of the window is not over the code");
+                    app.act("app.exit");
+                    return;
+                };
+                let rows = code.get_row_height();
+                let left = wx - x;
+                let top = wy - y - row as f32 * rows;
+                let target = (
+                    left + code.get_caret_x() + 3.0,
+                    top + code.get_caret_line() as f32 * rows + rows / 2.0,
+                );
+                aim.set(target);
+                eprintln!(
+                    "link: the code's rows start at ({left:.0}, {top:.0}) in the window; `norm` is at ({:.0}, {:.0}), row {}",
+                    target.0,
+                    target.1,
+                    code.get_caret_line()
+                );
+                // Onto the name with nothing held: no link, a text cursor.
+                window.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(target.0, target.1),
+                });
+            }
+            3103 if linking => {
+                eprintln!(
+                    "link: over the name with no Ctrl: {:?}, link row {}",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2)),
+                    code.get_link_row()
+                );
+                // Ctrl down, the pointer still.
+                window.window().dispatch_event(WindowEvent::KeyPressed {
+                    text: Key::Control.into(),
+                });
+                waited.set(0);
+            }
+            3104 if linking => {
+                if app.editor().link_shown().is_none() && waited.get() < 1500 {
+                    waited.set(waited.get() + 1);
+                    // A server still loading answers nothing: Ctrl let go
+                    // and pressed again asks again, as a hand would.
+                    if waited.get().is_multiple_of(75) {
+                        let send = |event| window.window().dispatch_event(event);
+                        send(WindowEvent::KeyReleased {
+                            text: Key::Control.into(),
+                        });
+                        send(WindowEvent::KeyPressed {
+                            text: Key::Control.into(),
+                        });
+                    }
+                    step.set(3104);
+                    return;
+                }
+                let linked: Vec<String> = code
+                    .get_rows()
+                    .iter()
+                    .flat_map(|row| {
+                        row.pieces
+                            .iter()
+                            .filter(|p| p.kind == 11)
+                            .map(|p| format!("{}:{:?}", row.number, p.text.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                eprintln!(
+                    "link: Ctrl pressed over `norm`, after {} ticks: {:?}; the line under it {:?}; drawn in the link colour {linked:?}; link row {} (caret row {})",
+                    waited.get(),
+                    app.editor().link_shown(),
+                    drawn(&code, 11),
+                    code.get_link_row(),
+                    code.get_caret_line()
+                );
+                snapshot(&window, &dir.join("link.png"));
+                window.window().dispatch_event(WindowEvent::KeyReleased {
+                    text: Key::Control.into(),
+                });
+            }
+            3105 if linking => {
+                eprintln!(
+                    "link: Ctrl let go: {:?}, link row {}, {} lines under",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2)),
+                    code.get_link_row(),
+                    drawn(&code, 11).len()
+                );
+                // Off the name, Ctrl down, and back onto it: the move asks.
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                send(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(x, y + code.get_row_height() * 2.0),
+                });
+                send(WindowEvent::KeyPressed {
+                    text: Key::Control.into(),
+                });
+                send(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(x, y),
+                });
+                waited.set(0);
+            }
+            3106 if linking => {
+                if app.editor().link_shown().is_none() && waited.get() < 250 {
+                    waited.set(waited.get() + 1);
+                    step.set(3106);
+                    return;
+                }
+                eprintln!(
+                    "link: moved onto `norm` with Ctrl held, after {} ticks: {:?}",
+                    waited.get(),
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2))
+                );
+                // A key with Ctrl still held puts it away; the link comes
+                // back at the next move.
+                key(Key::Escape.into());
+                eprintln!(
+                    "link: after a key: {:?}",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2)),
+                );
+                let (x, y) = aim.get();
+                window.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(x + 1.0, y),
+                });
+                waited.set(0);
+            }
+            3107 if linking => {
+                if app.editor().link_shown().is_none() && waited.get() < 250 {
+                    waited.set(waited.get() + 1);
+                    step.set(3107);
+                    return;
+                }
+                eprintln!(
+                    "link: back after a move: {:?}; Ctrl+click on it",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2))
+                );
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                let position = slint::LogicalPosition::new(x + 1.0, y);
+                let button = slint::platform::PointerEventButton::Left;
+                send(WindowEvent::PointerPressed { position, button });
+                send(WindowEvent::PointerReleased { position, button });
+                send(WindowEvent::KeyReleased {
+                    text: Key::Control.into(),
+                });
+                waited.set(0);
+            }
+            3108 if linking => {
+                let path = app.editor().current_path().unwrap_or_default();
+                if path == start_path.borrow().as_str() && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(3108);
+                    return;
+                }
+                eprintln!(
+                    "link: Ctrl+click went to {path} at {:?}: {:?}",
+                    app.editor().status().map(|s| (s.0, s.1)),
+                    app.editor()
+                        .status()
+                        .and_then(|s| draft().and_then(|t| t.lines().nth(s.0 - 1).map(str::to_string)))
+                );
+                snapshot(&window, &dir.join("link-followed.png"));
+                chord(&[Key::Alt], Key::LeftArrow.into());
+            }
+            3110 if linking => {
+                eprintln!(
+                    "link: Alt+Left: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                snapshot(&window, &dir.join("nav-back.png"));
+                chord(&[Key::Alt], Key::RightArrow.into());
+            }
+            3112 if linking => {
+                eprintln!(
+                    "link: Alt+Right: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                // The other tab picked, as a click on the strip picks it.
+                let start = start_path.borrow().clone();
+                let tab = shell
+                    .get_tabs()
+                    .iter()
+                    .find(|t| t.id.ends_with(start.as_str()))
+                    .map(|t| t.id.clone());
+                match tab {
+                    Some(id) => shell.invoke_pick_tab(id),
+                    None => eprintln!("link: no tab for {start}"),
+                }
+            }
+            3114 if linking => {
+                eprintln!(
+                    "link: its tab picked: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                chord(&[Key::Alt], Key::LeftArrow.into());
+            }
+            3116 if linking => {
+                eprintln!(
+                    "link: Alt+Left after the tab: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                snapshot(&window, &dir.join("nav-tab-back.png"));
+                // The mouse's back button, over the code.
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                let position = slint::LogicalPosition::new(x, y);
+                let button = slint::platform::PointerEventButton::Back;
+                send(WindowEvent::PointerPressed { position, button });
+                send(WindowEvent::PointerReleased { position, button });
+            }
+            3118 if linking => {
+                eprintln!(
+                    "link: the mouse's back button: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                let position = slint::LogicalPosition::new(x, y);
+                let button = slint::platform::PointerEventButton::Forward;
+                send(WindowEvent::PointerPressed { position, button });
+                send(WindowEvent::PointerReleased { position, button });
+            }
+            3120 if linking => {
+                eprintln!(
+                    "link: the mouse's forward button: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                // Three lines put at the top of the file not on screen:
+                // its place moves down with them.
+                let start = start_path.borrow().clone();
+                match app.editor().draft_of(&start) {
+                    Some((text, ..)) => {
+                        let version = app.editor().version_of(&start).unwrap_or(0);
+                        let moved = app.editor().replace(&start, version, format!("// one\n// two\n// three\n{text}"));
+                        eprintln!("link: three lines put above the place in {start}: {moved}");
+                    }
+                    None => eprintln!("link: {start} is not open"),
+                }
+                chord(&[Key::Alt], Key::LeftArrow.into());
+            }
+            3122 if linking => {
+                eprintln!(
+                    "link: Alt+Left after the edit: {:?} at {:?}: {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1)),
+                    app.editor()
+                        .status()
+                        .and_then(|s| draft().and_then(|t| t.lines().nth(s.0 - 1).map(str::to_string)))
+                );
+                chord(&[Key::Control], "z".into());
+            }
+            3124 if linking => app.act("app.exit"),
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -2907,7 +3852,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || navigating || updating || marking) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || navigating || updating || marking || linking) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
@@ -3513,6 +4458,35 @@ fn tree_click(window: &AppWindow, row: i32, button: PointerEventButton) {
 }
 
 /// What the terminal shows, a line a row.
+/// The shortcuts page's rows as they read: name, key, what is said.
+fn key_rows(shell: &Shell) -> String {
+    shell
+        .get_keys_rows()
+        .iter()
+        .map(|row| format!("{} [{}] {}", row.title, row.chord, row.note))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// One row of the shortcuts page, by its action.
+fn key_row(shell: &Shell, id: &str) -> String {
+    shell
+        .get_keys_rows()
+        .iter()
+        .find(|row| row.id == id)
+        .map(|row| {
+            format!(
+                "{} [{}]{}{} {:?}",
+                row.title,
+                row.chord,
+                if row.rebound { " rebound" } else { "" },
+                if row.recording { " recording" } else { "" },
+                row.note
+            )
+        })
+        .unwrap_or_else(|| format!("no row for {id}"))
+}
+
 fn screen_text(shell: &Shell) -> String {
     shell
         .get_term_rows()
@@ -3633,6 +4607,117 @@ fn groups(shell: &Shell) -> String {
 
 fn clipboard() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
+}
+
+/// The window as it is drawn now, kept in memory.
+fn photo(window: &AppWindow) -> Option<image::RgbaImage> {
+    let buffer = window.window().take_snapshot().ok()?;
+    image::RgbaImage::from_raw(buffer.width(), buffer.height(), buffer.as_bytes().to_vec())
+}
+
+/// A photograph written with the least compression, so that taking the next
+/// one waits on the disk as little as it can.
+fn save_quickly(picture: &image::RgbaImage, path: &Path) {
+    use image::ImageEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    let Ok(file) = std::fs::File::create(path) else {
+        return;
+    };
+    let encoder = PngEncoder::new_with_quality(
+        std::io::BufWriter::new(file),
+        CompressionType::Fast,
+        FilterType::NoFilter,
+    );
+    let _ = encoder.write_image(
+        picture.as_raw(),
+        picture.width(),
+        picture.height(),
+        image::ExtendedColorType::Rgba8,
+    );
+}
+
+/// Three photographs of one surface, scrolled to a whole pixel, half a
+/// pixel further and a whole pixel further: saved, and the half-pixel one
+/// held to the whole-pixel one nearest it. Where the content was only moved
+/// the two agree; where it was drawn between pixels they differ, and the
+/// half-pixel frame has less vertical contrast there — sampled between two
+/// rows, a one-pixel stroke becomes two at half strength.
+fn held_still(what: &str, photos: &[image::RgbaImage], dir: &Path) {
+    let [before, half, after] = photos else {
+        eprintln!("scroll {what}: {} photographs, not three", photos.len());
+        return;
+    };
+    for (picture, name) in [(before, "a"), (half, "half"), (after, "b")] {
+        let path = dir.join(format!("scroll-{what}-{name}.png"));
+        if picture.save(&path).is_ok() {
+            eprintln!("snapshot: {}", path.display());
+        }
+    }
+    let luma = |p: &image::Rgba<u8>| {
+        (i32::from(p[0]) * 299 + i32::from(p[1]) * 587 + i32::from(p[2]) * 114) / 1000
+    };
+    // Summed vertical contrast over a box: what blurring lowers and
+    // moving keeps.
+    let contrast = |picture: &image::RgbaImage, x0: u32, x1: u32, y0: u32, y1: u32| -> i64 {
+        let mut sum = 0i64;
+        for y in y0..y1.min(picture.height() - 1) {
+            for x in x0..=x1 {
+                sum += i64::from(
+                    (luma(picture.get_pixel(x, y + 1)) - luma(picture.get_pixel(x, y))).abs(),
+                );
+            }
+        }
+        sum
+    };
+    let (width, height) = half.dimensions();
+    for (other, name) in [(before, "the frame before"), (after, "the frame after")] {
+        // Rows that differ, and how far across.
+        let rows: Vec<Option<(u32, u32, u32)>> = (0..height)
+            .map(|y| {
+                let mut seen: Option<(u32, u32, u32)> = None;
+                for x in 0..width {
+                    let (a, b) = (half.get_pixel(x, y), other.get_pixel(x, y));
+                    if (0..3).any(|c| a[c].abs_diff(b[c]) > 8) {
+                        let (lo, hi, n) = seen.unwrap_or((x, x, 0));
+                        seen = Some((lo.min(x), hi.max(x), n + 1));
+                    }
+                }
+                seen
+            })
+            .collect();
+        let differing: u32 = rows.iter().flatten().map(|r| r.2).sum();
+        // Runs of differing rows, a gap of up to four rows inside one.
+        let mut bands: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
+        for (y, row) in rows.iter().enumerate() {
+            let Some((lo, hi, n)) = *row else { continue };
+            let y = y as u32;
+            match bands.last_mut() {
+                Some(band) if y <= band.1 + 5 => {
+                    band.1 = y;
+                    band.2 = band.2.min(lo);
+                    band.3 = band.3.max(hi);
+                    band.4 += n;
+                }
+                _ => bands.push((y, y, lo, hi, n)),
+            }
+        }
+        eprintln!(
+            "scroll {what}: half a pixel against {name}: {differing} pixels differ ({:.2}% of the window) in {} bands; contrast {:.3} of it over the window",
+            f64::from(differing) * 100.0 / f64::from(width * height),
+            bands.len(),
+            contrast(half, 0, width - 1, 0, height) as f64
+                / contrast(other, 0, width - 1, 0, height).max(1) as f64
+        );
+        let mut largest = bands.clone();
+        largest.sort_by_key(|band| std::cmp::Reverse(band.4));
+        for (y0, y1, x0, x1, n) in largest.into_iter().take(12) {
+            eprintln!(
+                "    rows {y0}..{y1}, x {x0}..{x1}: {n} differ, contrast {:.3} of it",
+                contrast(half, x0, x1, y0, y1 + 1) as f64
+                    / contrast(other, x0, x1, y0, y1 + 1).max(1) as f64
+            );
+        }
+    }
 }
 
 fn snapshot(window: &AppWindow, path: &Path) {

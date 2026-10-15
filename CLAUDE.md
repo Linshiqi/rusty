@@ -187,7 +187,10 @@ python crates/rusty-mcu/scripts/x035_pins.py \
 # exit): it refuses to run without a data directory of its own, and a
 # second run on the same one shows the draft back. RUSTY_PROBE_SAVES also
 # saves badly formatted Rust over the file and says whether rustfmt ran --
-# point it at a copy.
+# point it at a copy. The header of src/probe.rs lists the other modes;
+# RUSTY_PROBE_KEYS rebinds Save and uses it, and RUSTY_PROBE_WINDOWS=<other
+# project> opens a second rusty with Ctrl+Shift+N, which probes itself into
+# <dir>/second and leaves.
 cargo run -p rusty-desk --release -- <project> <file-in-it>
 RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data cargo run -p rusty-desk --release -- <project> <file-in-it>
 
@@ -214,7 +217,7 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
 | `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — WCH's CH32V003 and CH32X035, which nobody's QEMU models. Pure: `cpu` is a QingKe hart, the V2A's RV32EC or the V4C's RV32IMAC (`Core`), with Zicsr, the address vector table and the hardware stack; `elf` loads a flasher's view of an image; `ch32/` is one machine for both parts — the clock tree, GPIO with AFIO's remaps and EXTI, the timers, SysTick, the PFIC, the USARTs and the debug registers SDI print writes through — with what differs between them as data in `ch32/part.rs`; its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *WCH's parts* |
 | `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
-| `rusty-desk` | **The window, in Slint** — `docs/slint.md` is the design and the order of the work. One process: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app/mod.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width |
+| `rusty-desk` | **The window, in Slint** — `docs/slint.md` is the design and the order of the work. One process: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app/mod.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width. `actions.rs` is every action and its default key, and the `Keymap` of the keys in force over them; `instances.rs` is New Window and the other rusty windows on the machine |
 | `rusty-setup` | The Windows installer: one executable carrying the app and its tools (`payload`: one tar of the install, xz-compressed whole and appended, found by a footer — 75 MB where per-file deflate made 148), installing per user in `%LOCALAPPDATA%\Programs\rusty` with an uninstall entry and shortcuts of its own (`shell`). Double-clicked it is a window in Slint (`ui.rs`, `ui/setup.slint`, software renderer only): where it goes and a desktop shortcut, then the progress with the release's highlights going by, then Open — in the system's language, Chinese or English; `RUSTY_SETUP_SHOTS=<dir>` with `--features shots` photographs every page. The updater runs it as `--quiet --run --wait <pid>`, with no window, and — cut down to its own part — the uninstaller. `files` stages the payload beside the install and moves it into place, and writes down what it put there (`install.txt`), so an update removes what it no longer carries and the uninstaller removes exactly that |
 | `rusty-release` | What the release workflow runs between the build and the upload: `pack` appends the install directory to the installer, `sign` writes a minisign `.minisig` with the updater key, `verify` checks it with `rusty_embed::update::verify` before anything is published |
 
@@ -780,8 +783,9 @@ exactly as with Vim off.
   `start..end` — and using `end` for both was the first bug, visible as the
   cursor landing one past every word.
 - **What it does not know, it names**, in the status line beside the mode. A
-  key that vanishes teaches people the editor is broken. `Ctrl+O`'s jump list
-  says so today rather than pretending.
+  key that vanishes teaches people the editor is broken. `Ctrl+O` and
+  `Ctrl+I` walk the editor's own history (*Back and forward*, under *Two
+  editor groups*), the one Alt+Left walks, and say so at either end.
 - **The switch is `workbench.toml`** (`vim`), read as the window starts and
   written the moment it changes. Landing in the wrong mode is not a shrug, it
   is twenty keystrokes doing something else.
@@ -1247,7 +1251,18 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   other's edits. Closing one view of a file with changes asks nothing while
   the other holds it; the last view to close is the one that asks.
 - **Each document keeps where its view was scrolled**, so a tab comes back
-  where it was left, whichever group it comes back in.
+  where it was left, whichever group it comes back in. **And never above
+  the top, which Slint's `ListView` will put it** (1.18.1,
+  `model/repeater.rs`): a model reset keeps the rows' layout state, and a
+  new model with fewer rows than the first one on screen clamps the offset
+  to its last row but not the first row's place, so the rows are laid out
+  from far down the view and the offset is set positive to match. A short
+  file shown after a long one scrolled down sat twenty rows below the top,
+  and the offset, kept with the document, carried the gap into a window of
+  its own. Every offset read from a view, kept or put back goes through
+  `shade::within`, and a view the list moved above the top is put back at
+  it (`view_changed`, `Shade.scrolled`), from where the list lays out
+  right.
 - **The split never shows an empty pane**: a group left with no tabs ends
   the split.
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
@@ -1291,11 +1306,73 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   type is a jump, as a definition is, and nothing found says so rather than
   being a key that seems to do nothing (`App::show_places`). Every place
   arrives with its line (`rusty_lsp::Place`), because a row of `lib.rs:41`
-  is a riddle. `App::jump` is the one jump, and remembers where the caret
-  was for Alt+Left. Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
+  is a riddle. `App::jump` is the one jump, and the place it lands is a
+  place of its own for Alt+Left however near (*Back and forward*, below).
+  Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
   that know them need not learn ours; type definitions, the call hierarchy
   and a macro's expansion have no key, as in VS Code — whose Shift+Alt+H
   for the hierarchy is an Alt-letter chord, left here to AltGr.
+- **Back and forward are VS Code's navigation history, not a list of
+  jumps** (`crate::trail`, pure and tested; `app/navigate.rs` feeds and walks
+  it). Alt+Left walked only what `App::jump` had recorded, so after picking
+  a tab or clicking around it did nothing — reported in those words. Now
+  every place the caret settles is told to the trail: another file is a new
+  place (a tab picked, a file from the tree, the finder, a search result, a
+  problem), a jump is one however near it lands, and a move of ten lines or
+  more in one file is — a click, Ctrl+Home/End, Go to Line, a find, each
+  measured from the last settling, so the arrow keys never make one.
+  Anything else replaces the current place, which is why Back from the
+  newest place goes to where the caret *was*, not where it first arrived;
+  the same line twice is one place; a place recorded after Back drops what
+  was ahead. **The caret settles once a turn** (`App::caret_moved`, a 0 ms
+  timer): a file opened at a line shows its document's caret and then the
+  line, and recorded at both, the first was a place nobody went to. **A
+  walk is not a move**: the trail ignores the caret until it is somewhere
+  other than where the step left it, so a file still being read does not
+  end the walk, and the arrival is the place walked to. Places follow the
+  edits (`Surface::on_lines`, every edit's `Change`, on screen or off); a
+  place in a closed file reopens it, and a macro's expansion closed since
+  is passed over and forgotten. From a page Back goes to the file that was
+  in front. The mouse's side buttons are Slint 1.18's `PointerEventButton.
+  back` and `.forward`, taken where the code is drawn (both groups and the
+  margin): every other touch area in the window takes the press as its
+  own, and Slint has no hook before them short of the unstable winit
+  accessor. **And Alt+Left never reached Back from the editor at all**:
+  the keys land in the `TextInput` that holds what an input method
+  composes, a key the editor rejects goes on to that `TextInput`, and it
+  moves its own (empty) cursor on any arrow, Alt or not, and accepts — so
+  the root `FocusScope` with the bindings never heard it. What the editor
+  does not take is handed to the bindings from the editor's own key handler
+  now (`Shell::invoke_key`), before the `TextInput` sees it; found by the
+  probe dispatching Alt+Left as the platform does, not by reading the code.
+- **Ctrl over a name draws it as a link** (`editor/link.rs`) —
+  underlined, in the link colour (`Theme.link`, VS Code's
+  `editorLink.activeForeground`), the hand — where the server has a
+  definition for it: the definition itself is asked, as VS Code asks, and
+  nothing is drawn for an empty answer. Asked when the pointer moves with
+  Ctrl held and when Ctrl goes down with the pointer still, once the pointer
+  has rested on a name 60 ms, numbered so a late answer for another word is
+  dropped; gone when Ctrl comes up (the root `FocusScope` hears that from
+  any panel), the pointer leaves the name, the editor loses the keys or a
+  key goes down — a modifier on its own puts neither the link nor the hover
+  card away, as in VS Code. The rows draw it: the name's characters are
+  pieces of their own in the link's colour (`rows::kinds`), not an overlay
+  over the text, and the line under them is a mark (kind 11) placed by
+  `inlays::ink` like every other. **Ctrl+click follows the link drawn**
+  (`Surface::link_under`, `App::follow_link`) rather than asking again
+  about the point the click puts the caret at, so what is underlined is
+  what the click does. **Slint chooses the pointer's shape only on a pointer
+  event**, so a hand that comes or goes with the pointer still is made by
+  dispatching the window's last move again (`pointer_again`). The row's
+  "left" arrives after the next row's move, so it counts only for the row
+  the pointer is on (`link_left`). **The `TextInput` at the caret has no
+  width while nothing is composed** (`ui/editor.slint`, `sink`): a
+  `TextInput` takes the pointer over it, and its few pixels (more than the
+  two it was given: an empty one measures wider) sat exactly where a click
+  had just put the caret — so Ctrl over the name just
+  clicked, a Ctrl+click there, the hover card and a second click of a
+  double-click at the caret all went to it and not to the code. The probe
+  aimed three pixels past the caret and got nothing at all until then.
 - **The editor's right-click menu is VS Code's** (`App::editor_menu`):
   where the name leads, then rename and the fixes, then the palette, each
   row an action named and keyed as the palette names and keys it, and the
@@ -1383,6 +1460,24 @@ Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
   and the split are refused there, in its status line, since both act on
   the main window's editor. A right-click there has no menu yet: the menu
   is the main window's overlay.
+- **Its keys are the main window's keymap** (`App::key_in`,
+  `chord_key_in`). A key the code there does not take goes from the code
+  straight to that window's own handler (`Strong::invoke_key`), as the main
+  window's goes to its shell rather than bubbling, and is looked up in the
+  one `Keymap`, rebound keys included; the action runs as one asked for
+  there (`torn_act`). A chord's first stroke there is said in its status
+  line, and its second is the chord's there too — the code asks first
+  (`Surface::on_chord`). Alt+Left, Alt+Right and the mouse's side buttons
+  walk the main window's history, which comes forward, and an edit there
+  moves the history's places as one in the main window does (`on_lines`).
+  Ctrl over a name draws the link there, and a click follows it as a
+  definition found from there goes (`App::follow_link` takes the asking
+  surface): in the same file, in that window.
+- **It belongs to its process.** New Window is a second process with its
+  own `App` and main window, sharing no memory; a window a tab was moved
+  into is the `App`'s it was moved out of, Move into Main Window means that
+  process's main window, it closes with that main window through its exit,
+  and it is no instance (`instances.rs` lists processes, not windows).
 - **Closing.** A torn window closes with its tab — its ×, Ctrl+W, `:q`, the
   system's close button — and its file's last view with changes asks first
   (`After::CloseWindow` when the answer is save). Closing it never closes
@@ -2301,6 +2396,115 @@ download is put in place.
   sandbox, with `--silent` — or through its window, whose buttons are
   accessible, so UI Automation can press Install and Done as a person
   would.
+- **An update closes no other window, and the restart says so.** The
+  Tauri window's NSIS installer ended every rusty process; `rusty-setup`
+  does not — a file another window holds is renamed aside (`*.old`) and
+  swept up by the next install — so the other windows keep running the
+  version they started with until they are closed. The restart's question
+  counts them (`instances::others`, *More than one rusty*) whenever there
+  are any, because a window still on the old version after *Restart now*
+  reads as an update that did not take.
+
+## More than one rusty
+
+New Window (Ctrl+Shift+N, VS Code's chord, in the palette and the project
+menu) opens another rusty on the welcome page, beside the one it was asked
+from. `src/instances.rs` starts it and keeps the count;
+`app/new_window.rs` is when to ask.
+
+- **A second project is a second process.** One rusty holds one project —
+  its language servers, its watcher, its runs, the emulator — so New Window
+  starts this executable again with `--new-window`, and `main` then stays
+  on the welcome page instead of reopening `recent_projects[0]`: that
+  project is open in the window it was asked from. From an AppImage the
+  image is started (`$APPIMAGE`), not the binary inside its mount, which
+  goes when the first does. The child is reaped on a thread, gets a process
+  group of its own on Unix so a Ctrl+C in the terminal that ran the first
+  leaves it alone, and no console window (a debug build is a console
+  program).
+- **Here or in a new window, as VS Code offers it.** A recent project in
+  the project menu opens here; Ctrl+Enter or the window button on its row
+  opens it in a new window, and so do Ctrl+click and the hover button on
+  the welcome page's recents. The Open dialog has a second row, *Open
+  project in new window…*. A project is never started a second time: the
+  same window says it already has it, another window's is said too.
+- **The windows know of each other through files** (`instances::directory`:
+  `%LOCALAPPDATA%\rusty\instances`, or beside `RUSTY_CONFIG_DIR` so a test
+  counts only its own windows — never the data directory, which may be
+  synced). Each instance holds an exclusive lock on `<pid>.lock` for as long
+  as it lives and names the project it has open in `<pid>.project` beside
+  it — not in it: a locked file is unreadable to others on Windows. A lock
+  nobody holds is a window that has gone, however it went, and the next
+  look removes both files; a registration is locked under a `.pending` name
+  and renamed into place, so a count running at that moment cannot take it
+  for a dead one.
+- **Two windows on one project are refused, not raced.** Two rust-analyzers
+  would take turns at one build directory, and two hot exits would keep
+  drafts of the same files over each other. `open_project` asks
+  `instances::holding` first and says the project is open in another
+  window; a plain `rusty` started while the last project is open elsewhere
+  opens on the welcome page. rusty cannot bring that other window forward —
+  VS Code can, through its main process — so the note is the whole answer.
+- **Every instance shares one `workbench.toml`, so every write is a
+  read-modify-write of only what changed, under `config::update`'s lock**
+  (`workbench.lock`, held across processes). The recents, each project's
+  tab strip and each key are their own entries, and what another window
+  wrote is read back where it is shown (`App::reread_workbench`): the
+  recents when the project menu or the welcome page is looked at, the keys
+  when Keyboard Shortcuts opens.
+
+## Keyboard shortcuts
+
+`actions::ALL` is the table of every action and its default key;
+`actions::Keymap` is the table with what somebody rebound over it, and the
+only thing that answers "which key runs this" or "what does this key run".
+The page is VS Code's Keyboard Shortcuts (Ctrl+K Ctrl+S, the palette, and
+Settings ▸ Keyboard); `app/shortcuts.rs` runs it and `ui/keys.slint` draws
+it.
+
+- **The binding in force is the key shown, everywhere.** The window's key
+  handler, the palette, the editor's, the tabs' and the tree's menus (the
+  rows that are actions — the tree's cut, copy, paste, rename and delete
+  are its own keys, like the editor's), the debugger's tooltips
+  (`Shell.key-of`, a pure callback handed `keys-version` so it is asked
+  again when a key changes) and the welcome page's line all read the
+  keymap — never `Action::chord`, which is only the default.
+- **A rebinding is `workbench.toml`'s `keybinds`**: action id → chord, the
+  changed keys only, so a new default in a newer rusty reaches everyone who
+  has not rebound that action. Written at once through `config::update`;
+  a key set back to its default removes the entry. Read, never trusted
+  (`Keymap::read`): an id this window has no listed action for, a chord that
+  names no key and one no shortcut may be are left out, and every spelling
+  — the Tauri window's `Shift+Alt` order, `cmd+k`, `ctrl+left` — reads as
+  the one a press makes (`keys::Stroke`: Ctrl, Alt, Shift, then the key).
+- **Recorded as VS Code records it**: a click on a row's key, the strokes
+  pressed (two at most), Enter to keep them, Escape — or the page losing
+  the keys — to leave the key as it was. Searched by name, id or key; the
+  keyboard button beside the search takes keys pressed instead, quoted to
+  match exactly.
+- **A shortcut is a key nothing types** (`actions::refusal`): a function
+  key alone, or Ctrl, or Alt with a named key (Alt+ArrowLeft is Back) —
+  never a bare character or Enter, and never Alt with a character, which is
+  how a layout with AltGr types one (AltGr is Ctrl+Alt to the system). The
+  table's own Ctrl+Alt+B for the right dock predates the rule.
+- **What a key collides with is said on its row, not prevented**: another
+  action on the same key, a key whose first stroke is another's whole key
+  (which could then never run), and on a rebound key one the code takes
+  for itself while it has the keys (`editor::takes`, the editor's own
+  keymap — Ctrl+D, Ctrl+Z). Two actions on one key run the one somebody
+  bound.
+- **Two-stroke chords wait for the rest, wherever the first was pressed.**
+  A stroke that begins a chord in force is held, said in a note VS Code's
+  words ("(Ctrl+K) was pressed. Waiting for the second key of the chord…"),
+  and the next stroke completes it or is said not to be a command — taken
+  either way. Every key the code does not take reaches the keymap through
+  `Shell::invoke_key` (*Two editor groups*, where Alt+Left once never
+  reached Back), chords' first strokes
+  included; while a chord is half pressed the code asks the window before
+  its own keymap (`Surface::on_chord`), so `Ctrl+K Ctrl+C` is never a
+  copy. A text field
+  other than the code still types a bare second stroke, which is why a
+  chord's second stroke follows the first's rule.
 
 ## The gutter, and one line height
 
@@ -2532,9 +2736,11 @@ rules it settled, each the answer to something that went wrong.
   read as "Test ran a build".
 - **The keyboard reaches everything.** The palette lists every action with
   its key; the keys are VS Code's wherever a VS Code key exists (Ctrl+P,
-  Ctrl+Shift+P, Ctrl+B, Ctrl+\, F12, Ctrl+.), Arduino's for the board
-  (Ctrl+U flashes, Ctrl+Shift+M monitors), and never an Alt letter, which a
-  layout with AltGr types characters with.
+  Ctrl+Shift+P, Ctrl+B, Ctrl+\, F12, Ctrl+., Ctrl+Shift+N, Ctrl+K Ctrl+S),
+  Arduino's for the board (Ctrl+U flashes, Ctrl+Shift+M monitors), and
+  never an Alt letter, which a layout with AltGr types characters with.
+  Every one can be rebound (*Keyboard shortcuts*), and what shows a key
+  shows the one in force.
 - **Every surface answers a right-click with its own menu or not at all**
   (`app/menu.rs`, one menu for the window, filled by whichever surface was
   clicked).
@@ -2599,9 +2805,10 @@ is no browser storage, and what the window remembers between runs is
   editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so
-  another spelling of the same directory finds it), a skipped update and the
-  auto-sweep. Drafts are files of their own, under the data directory's
-  `backups/` (`editor/backup.rs`).
+  another spelling of the same directory finds it), the rebound keys
+  (`keybinds`), a skipped update and the auto-sweep. Every window shares
+  it (*More than one rusty*). Drafts are files of their own, under the
+  data directory's `backups/` (`editor/backup.rs`).
 - Secrets stay in the OS credential store, never in the data directory — a
   synced directory must never sync a key.
 - Per-project, team-shared things live in the project's `.rusty/`, where they
@@ -3781,6 +3988,36 @@ is no browser storage, and what the window remembers between runs is
   the build stops at `Cannot override property 'row'`, which reads like a
   name declared twice. It happened twice in one day (the Environment page's
   tool row, the wizard's choice); name the property after what it holds.
+- **Slint's OpenGL renderer draws text half a pixel off sharply, and the
+  contents of a rounded clip half a pixel off blurred — so rusty carries a
+  patched renderer** (`vendor/i-slint-renderer-femtovg`, through
+  `[patch.crates-io]`). Reported as "scrolling looks like behind glass, and
+  sharp once it stops". A wheel notch is 60 px eased over 180 ms
+  (`items/flickable.rs`), so every frame in between leaves the content at a
+  fraction of a pixel — but femtovg puts each glyph run's origin on the
+  pixel grid, so that alone blurs no text. An element with `clip: true` *and*
+  a `border-radius` is different: femtovg cannot clip to a rounded shape, so
+  `visit_clip` draws the children into a texture and copied it to the
+  item's unrounded position, sampling between texels. Measured with
+  `RUSTY_PROBE_SCROLL` on a Markdown page held still half a pixel off: the
+  paragraphs identical to the whole-pixel frame, the code blocks at 0.67
+  and 0.86 of its contrast; the code view, which has no rounded clips,
+  identical; the software renderer sharp. With the texture put on the grid,
+  as femtovg's opacity layers already were, the code blocks match too.
+  `RUSTY_PROBE_SCROLL_WHEEL` then turns the wheel as winit hands it over and
+  photographs the glide: unpatched, a code block's brightest strokes fell
+  from 222 at rest to 177 at half a pixel, and the block was soft at rest
+  as well — the page's centred column had set it half a pixel in; patched,
+  235 at every phase. So it is not only scrolling: anything clipped round
+  (code blocks and tables, a `Field`, the editor's popups) is soft wherever
+  its position falls between pixels. Upstream's `visit_clip` was unchanged
+  when this was written; when slint moves, check it and copy the crate
+  again or drop the patch. A patch whose version slint no longer pins is
+  only a warning that it went unused, so `rusty-desk/tests/renderer.rs`
+  fails on a lockfile whose renderer came from the registry.
+  **The hypothesis that came first — fractional offsets blur text — was
+  right about the motion and wrong about the text**, and only a photograph
+  held between pixels told the two apart.
 - **A Slint `TouchArea`'s `moved` is called only while a button is held**
   (`grabbed`, in `i-slint-core`'s `input_items.rs`), so a hover cannot be
   read there. The code view's hover card was wired to `moved`'s not-pressed

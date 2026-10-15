@@ -76,7 +76,8 @@ impl App {
     }
 
     /// A menu of actions by their ids, each row named and keyed as the
-    /// palette names and keys it; an empty id is a divider.
+    /// palette names and keys it — the key in force, so a rebound key is
+    /// the key shown; an empty id is a divider.
     pub(super) fn open_action_menu(
         self: &Rc<Self>,
         owner: &'static str,
@@ -84,6 +85,7 @@ impl App {
         x: f32,
         y: f32,
     ) {
+        let keys = self.state.borrow().keys.map.clone();
         let rows = ids
             .iter()
             .map(|&id| {
@@ -95,7 +97,8 @@ impl App {
                         .unwrap_or_default()
                         .into(),
                     danger: false,
-                    chord: action.and_then(|a| a.chord).unwrap_or_default().into(),
+                    // The key in force: a rebound key is the key shown.
+                    chord: keys.chord(id).unwrap_or_default().into(),
                 }
             })
             .collect();

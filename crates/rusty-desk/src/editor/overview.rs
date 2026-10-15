@@ -85,6 +85,12 @@ impl Surface {
             return;
         };
         let code = window.global::<Code>();
+        // Above the top is the list view's mistake, not a place
+        // (`shade::within`); put back, the view lays out right from there.
+        let y = code.get_scroll_y();
+        if super::shade::within(y) != y {
+            code.set_scroll_y(super::shade::within(y));
+        }
         let Some(doc) = self.doc() else {
             code.set_sticky_rows(ModelRc::default());
             code.set_minimap_on(false);
