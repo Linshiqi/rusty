@@ -74,6 +74,10 @@ type Shared = Rc<RefCell<Option<Rc<RefCell<Document>>>>>;
 type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
 /// Who is told when the caret moves.
 type OnCaret = RefCell<Option<Box<dyn Fn()>>>;
+/// Asked first about every key the code takes: the window's, while a
+/// two-stroke chord is half pressed — its second stroke is the chord's, not
+/// a key for the editor (`Ctrl+K Ctrl+C` is no copy).
+type OnChord = RefCell<Option<Box<dyn Fn(&str, bool, bool, bool, bool) -> bool>>>;
 type OnBreakpoint = RefCell<Option<Box<dyn Fn(String, u32)>>>;
 type OnLens = RefCell<Option<Box<dyn Fn(rusty_edit::Runnable, String)>>>;
 /// Who applies a fix the hover card offered: the text's version, the
@@ -110,6 +114,12 @@ struct Press {
 const CLICK_GAP: Duration = Duration::from_millis(450);
 const CLICK_SLOP: f32 = 4.0;
 
+/// Whether the code takes `stroke` for its own — Ctrl+D, Ctrl+Z — before
+/// the window's shortcuts hear it, while the code has the keys.
+pub fn takes(stroke: &crate::keys::Stroke) -> bool {
+    keymap::command(&stroke.text(), stroke.ctrl, stroke.alt, stroke.shift, 1).is_some()
+}
+
 pub struct Surface {
     /// Itself, for the timers that call back into it.
     this: Weak<Surface>,
@@ -130,6 +140,7 @@ pub struct Surface {
     window: slint::Weak<AppWindow>,
     on_edit: OnEdit,
     on_caret: OnCaret,
+    on_chord: OnChord,
     /// Paths with a repaint on its way: one at a time each.
     painting: RefCell<HashSet<String>>,
     drag: Cell<Option<Drag>>,
@@ -213,6 +224,7 @@ impl Surface {
             window: window.as_weak(),
             on_edit: RefCell::default(),
             on_caret: RefCell::default(),
+            on_chord: RefCell::default(),
             painting: RefCell::default(),
             drag: Cell::new(None),
             press: Cell::new(None),
@@ -289,6 +301,10 @@ impl Surface {
 
     pub fn on_caret(&self, tell: impl Fn() + 'static) {
         *self.on_caret.borrow_mut() = Some(Box::new(tell));
+    }
+
+    pub fn on_chord(&self, ask: impl Fn(&str, bool, bool, bool, bool) -> bool + 'static) {
+        *self.on_chord.borrow_mut() = Some(Box::new(ask));
     }
 
     // ---- documents -------------------------------------------------------
@@ -655,6 +671,11 @@ impl Surface {
                 return false;
             };
             let m = event.modifiers;
+            if let Some(chord) = this.on_chord.borrow().as_ref()
+                && chord(&event.text, m.control, m.alt, m.shift, m.meta)
+            {
+                return true;
+            }
             // Any key puts the card away: it is about the text as it was.
             this.hide_hover();
             if this.completion_key(&event.text, m.control || m.alt || m.meta) {

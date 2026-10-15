@@ -45,6 +45,18 @@
 //! literal missing two fields, opens the hover card on it, photographs the
 //! fixes the card lists, applies one by its click and prints the lines it
 //! wrote — on a copy, since it ends by keeping the draft.
+//! With `RUSTY_PROBE_KEYS` it types into the file, opens Keyboard Shortcuts
+//! with Ctrl+K Ctrl+S from the code (the edit still unsaved), searches it
+//! for `ctrl+s`, records a refused key and a colliding one for Save, moves
+//! Save to Ctrl+F7, and back in the code finds Ctrl+S saving nothing and
+//! Ctrl+F7 saving; then the palette and a tooltip name the new keys and
+//! every key is reset — on a copy, since it saves. With
+//! `RUSTY_PROBE_WINDOWS=<another project>` it presses Ctrl+Shift+N: the
+//! second rusty, started with the same variables, probes itself into
+//! `<dir>/second` — the welcome page, that project opened, this window's
+//! project refused — and writes what it saw to `said.txt`, which this
+//! window prints once the second has gone, with its own project and the
+//! recents both windows wrote.
 
 use std::{
     cell::{Cell, RefCell},
@@ -115,6 +127,28 @@ pub fn start(window: &AppWindow) {
     let navigating = std::env::var_os("RUSTY_PROBE_NAV").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
+    let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
+    // New Window: the project the second window opens, and whether this is
+    // that window — started by the first with its flag, and the same
+    // variables, so it probes itself into a directory of its own.
+    let second_project = std::env::var_os("RUSTY_PROBE_WINDOWS").map(PathBuf::from);
+    let second =
+        second_project.is_some() && std::env::args().any(|arg| arg == crate::instances::NEW_WINDOW);
+    let dir = if second { dir.join("second") } else { dir };
+    // What the second window says, written down: its output goes nowhere.
+    let told = {
+        let dir = dir.clone();
+        move |line: String| {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("said.txt"))
+            {
+                let _ = writeln!(file, "{line}");
+            }
+        }
+    };
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -291,6 +325,297 @@ pub fn start(window: &AppWindow) {
                 if marking {
                     step.set(3000);
                 }
+                if keyboard {
+                    step.set(4100);
+                }
+                if second_project.is_some() {
+                    step.set(if second { 4250 } else { 4200 });
+                }
+            }
+            // Keyboard Shortcuts: opened by its chord from the code, searched,
+            // a refused key and a colliding one recorded, Save moved to
+            // Ctrl+F7 and used there — the old key no longer saving — the
+            // palette and a tooltip naming the new key, and every key reset.
+            // An edit first, so a Ctrl+S taken for Save would show: the
+            // chord's second stroke is the chord's, in the code too.
+            4100 if keyboard => {
+                if shell.get_active_kind() != "file" {
+                    step.set(4100);
+                    return;
+                }
+                window.invoke_focus_code();
+            }
+            4101 if keyboard => {
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+                key("x".into());
+            }
+            4102 if keyboard => {
+                chord(&[Key::Control], "k".into());
+                chord(&[Key::Control], "s".into());
+            }
+            4103 if keyboard => {
+                // Long enough for a save the second stroke started to land.
+                if waited.get() < 50 {
+                    waited.set(waited.get() + 1);
+                    step.set(4103);
+                    return;
+                }
+                waited.set(0);
+                let path = start_path.borrow().clone();
+                eprintln!(
+                    "keys: Ctrl+K Ctrl+S opened {:?} ({:?}) — {} rows; the edit to {path} still unsaved: {}",
+                    shell.get_active_kind(),
+                    shell.get_active_title(),
+                    shell.get_keys_rows().row_count(),
+                    app.editor().is_dirty(&path)
+                );
+                snapshot(&window, &dir.join("keys.png"));
+                shell.set_keys_query("ctrl+s".into());
+                shell.invoke_keys_query_edited("ctrl+s".into());
+            }
+            4105 if keyboard => {
+                eprintln!("keys: searched ctrl+s: {}", key_rows(&shell));
+                snapshot(&window, &dir.join("keys-search.png"));
+                // Save's row in view, by its name in the window's language.
+                let save = rusty_i18n::lookup("desk.save");
+                shell.set_keys_query(save.clone().into());
+                shell.invoke_keys_query_edited(save.into());
+                shell.invoke_keys_record("file.save".into());
+            }
+            4106 if keyboard => chord(&[Key::Control, Key::Alt], "s".into()),
+            4107 if keyboard => key(Key::Return.into()),
+            4109 if keyboard => {
+                eprintln!("keys: Ctrl+Alt+S for Save: {}", key_row(&shell, "file.save"));
+                snapshot(&window, &dir.join("keys-refused.png"));
+                shell.invoke_keys_record("file.save".into());
+            }
+            4110 if keyboard => chord(&[Key::Control], "b".into()),
+            4112 if keyboard => {
+                eprintln!("keys: Ctrl+B pressed for Save: {}", key_row(&shell, "file.save"));
+                snapshot(&window, &dir.join("keys-recording.png"));
+                key(Key::Return.into());
+            }
+            4114 if keyboard => {
+                eprintln!(
+                    "keys: Save on Ctrl+B: {} / {}",
+                    key_row(&shell, "file.save"),
+                    key_row(&shell, "dock.left")
+                );
+                snapshot(&window, &dir.join("keys-conflict.png"));
+                shell.invoke_keys_record("file.save".into());
+            }
+            4113 if keyboard => {
+                // Both rows on the key, for the photograph.
+                shell.set_keys_query("\"Ctrl+B\"".into());
+                shell.invoke_keys_query_edited("\"Ctrl+B\"".into());
+            }
+            4115 if keyboard => chord(&[Key::Control], Key::F7.into()),
+            4117 if keyboard => {
+                key(Key::Return.into());
+                let save = rusty_i18n::lookup("desk.save");
+                shell.set_keys_query(save.clone().into());
+                shell.invoke_keys_query_edited(save.into());
+            }
+            4119 if keyboard => {
+                eprintln!(
+                    "keys: Save on Ctrl+F7: {}; workbench.toml keybinds {:?}",
+                    key_row(&shell, "file.save"),
+                    rusty_embed::config::workbench().keybinds
+                );
+                snapshot(&window, &dir.join("keys-rebound.png"));
+                // Back to the code, an edit, and the old key.
+                let first = shell.get_tabs().iter().find(|t| t.kind == "file");
+                if let Some(tab) = first {
+                    shell.invoke_pick_tab(tab.id);
+                }
+                window.invoke_focus_code();
+            }
+            4121 if keyboard => {
+                key("x".into());
+                chord(&[Key::Control], "s".into());
+            }
+            4124 if keyboard => {
+                // Two seconds: longer than a save's format may take, so a
+                // Ctrl+S that saved would have landed.
+                if waited.get() < 50 {
+                    waited.set(waited.get() + 1);
+                    step.set(4124);
+                    return;
+                }
+                waited.set(0);
+                let path = app.editor().current_path().unwrap_or_default();
+                eprintln!(
+                    "keys: an edit and Ctrl+S: still unsaved {}",
+                    app.editor().is_dirty(&path)
+                );
+                chord(&[Key::Control], Key::F7.into());
+            }
+            4130 if keyboard => {
+                let path = app.editor().current_path().unwrap_or_default();
+                // A save formats first, for up to a second.
+                if app.editor().is_dirty(&path) && waited.get() < 125 {
+                    waited.set(waited.get() + 1);
+                    step.set(4130);
+                    return;
+                }
+                waited.set(0);
+                eprintln!(
+                    "keys: Ctrl+F7: still unsaved {}",
+                    app.editor().is_dirty(&path)
+                );
+                eprintln!(
+                    "keys: the debugger's tooltips: {:?} {:?}",
+                    shell.invoke_key_of("file.save".into(), shell.get_keys_version()),
+                    shell.invoke_key_of("debug.over".into(), shell.get_keys_version())
+                );
+                app.act("palette.open");
+                let save = rusty_i18n::lookup("desk.save");
+                shell.set_picker_text(save.clone().into());
+                shell.invoke_picker_query(save.into());
+            }
+            4133 if keyboard => {
+                let rows: Vec<String> = shell
+                    .get_picker_rows()
+                    .iter()
+                    .map(|r| format!("{} [{}]", r.title, r.chord))
+                    .collect();
+                eprintln!("keys: the palette for save: {rows:?}");
+                snapshot(&window, &dir.join("keys-palette.png"));
+                shell.invoke_picker_pick(-1);
+                app.act("keys.open");
+            }
+            4135 if keyboard => {
+                shell.invoke_keys_reset("file.save".into());
+                eprintln!(
+                    "keys: Save reset: {}; keybinds {:?}",
+                    key_row(&shell, "file.save"),
+                    rusty_embed::config::workbench().keybinds
+                );
+                shell.invoke_keys_record("debug.over".into());
+            }
+            4136 if keyboard => chord(&[Key::Shift], Key::F9.into()),
+            4137 if keyboard => key(Key::Return.into()),
+            4139 if keyboard => {
+                eprintln!(
+                    "keys: Step over on Shift+F9: tooltip {:?}; keybinds {:?}",
+                    shell.invoke_key_of("debug.over".into(), shell.get_keys_version()),
+                    rusty_embed::config::workbench().keybinds
+                );
+                app.act("keys.reset-all");
+            }
+            4141 if keyboard => {
+                eprintln!(
+                    "keys: all reset: rebound {} keybinds {:?} tooltip {:?}",
+                    shell.get_keys_rebound(),
+                    rusty_embed::config::workbench().keybinds,
+                    shell.invoke_key_of("debug.over".into(), shell.get_keys_version())
+                );
+                snapshot(&window, &dir.join("keys-reset.png"));
+                app.act("app.exit");
+            }
+            // New Window, from the first window: Ctrl+Shift+N starts a second
+            // rusty, which probes itself (4250…) and leaves; this one waits,
+            // then says what it has and what the second wrote down.
+            4200 if second_project.is_some() && !second => {
+                eprintln!(
+                    "windows: first window on {:?}, {} other windows",
+                    shell.get_project(),
+                    crate::instances::others()
+                );
+                chord(&[Key::Control, Key::Shift], "n".into());
+            }
+            4201 if second_project.is_some() && !second => {
+                if crate::instances::others() == 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1500 {
+                        step.set(4201);
+                        return;
+                    }
+                }
+                eprintln!(
+                    "windows: {} other window(s) after {} ticks",
+                    crate::instances::others(),
+                    waited.get()
+                );
+                waited.set(0);
+            }
+            4202 if second_project.is_some() && !second => {
+                let said = std::fs::read_to_string(dir.join("second").join("said.txt"))
+                    .unwrap_or_default();
+                if !said.contains("second: done") {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 4500 {
+                        step.set(4202);
+                        return;
+                    }
+                }
+                eprintln!("windows: the second window said:\n{said}");
+                eprintln!(
+                    "windows: the first still on {:?}; recents {:?}",
+                    shell.get_project(),
+                    rusty_embed::config::workbench().recent_projects
+                );
+                snapshot(&window, &dir.join("first-after.png"));
+                app.act("project.menu");
+            }
+            4206 if second_project.is_some() && !second => {
+                let rows: Vec<String> = shell
+                    .get_picker_rows()
+                    .iter()
+                    .map(|r| format!("{} {}{}", r.title, r.detail, if r.windowed { " ⧉" } else { "" }))
+                    .collect();
+                eprintln!("windows: the project menu: {rows:?}");
+                snapshot(&window, &dir.join("first-projects.png"));
+                shell.invoke_picker_pick(-1);
+            }
+            4230 if second_project.is_some() && !second => {
+                eprintln!("windows: {} other window(s) at the end", crate::instances::others());
+                app.act("app.exit");
+            }
+            4250 if second => {
+                told(format!(
+                    "second: started on {:?} (a project: {}), {} other window(s)",
+                    shell.get_active_kind(),
+                    shell.get_has_project(),
+                    crate::instances::others()
+                ));
+                snapshot(&window, &dir.join("welcome.png"));
+                if let Some(project) = &second_project {
+                    app.open_project(project.clone(), None);
+                }
+            }
+            4251 if second => {
+                if !shell.get_has_project() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 1500 {
+                        step.set(4251);
+                        return;
+                    }
+                }
+                told(format!("second: opened {:?}", shell.get_project()));
+            }
+            4260 if second => {
+                snapshot(&window, &dir.join("project.png"));
+                // The first window's project: said, not opened twice.
+                let first = rusty_embed::config::workbench()
+                    .recent_projects
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .find(|p| second_project.as_ref().is_none_or(|s| !rusty_embed::config::same_dir(p, s)));
+                told(format!("second: asked to open {first:?}"));
+                if let Some(first) = first {
+                    app.open_project(first, None);
+                }
+            }
+            4290 if second => {
+                let notes: Vec<String> = shell.get_notes().iter().map(|n| n.text.to_string()).collect();
+                told(format!(
+                    "second: still on {:?}; notes {notes:?}",
+                    shell.get_project()
+                ));
+                snapshot(&window, &dir.join("refused.png"));
+                told("second: done".to_string());
+                app.act("app.exit");
             }
             500 if sim => app.act("run.run"),
             // A breakpoint beside the line that toggles the LED, then F5: the
@@ -2402,6 +2727,35 @@ fn calls_said(shell: &Shell) -> String {
 }
 
 /// What the terminal shows, a line a row.
+/// The shortcuts page's rows as they read: name, key, what is said.
+fn key_rows(shell: &Shell) -> String {
+    shell
+        .get_keys_rows()
+        .iter()
+        .map(|row| format!("{} [{}] {}", row.title, row.chord, row.note))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// One row of the shortcuts page, by its action.
+fn key_row(shell: &Shell, id: &str) -> String {
+    shell
+        .get_keys_rows()
+        .iter()
+        .find(|row| row.id == id)
+        .map(|row| {
+            format!(
+                "{} [{}]{}{} {:?}",
+                row.title,
+                row.chord,
+                if row.rebound { " rebound" } else { "" },
+                if row.recording { " recording" } else { "" },
+                row.note
+            )
+        })
+        .unwrap_or_else(|| format!("no row for {id}"))
+}
+
 fn screen_text(shell: &Shell) -> String {
     shell
         .get_term_rows()

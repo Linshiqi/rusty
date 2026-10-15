@@ -43,6 +43,7 @@ mod math_words;
 mod memory;
 mod menu;
 mod navigate;
+mod new_window;
 mod part;
 mod playground;
 mod plot;
@@ -51,6 +52,7 @@ mod saving;
 mod search;
 mod servers;
 mod sheet;
+mod shortcuts;
 mod sim;
 mod strip;
 mod terminal;
@@ -69,7 +71,7 @@ use crate::{
         Document, Surface,
         backup::{self, Keeper},
     },
-    keys, language,
+    language,
     lsp::{Problems, Servers},
     picker::{self, Mode, Pick},
     project::Project,
@@ -104,6 +106,7 @@ impl Tab {
             Tab::Page("memory") => t!("panel.memory"),
             Tab::Page("crates") => t!("panel.crates"),
             Tab::Page("math") => t!("panel.math"),
+            Tab::Page("keys") => t!("shortcuts.title"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -190,6 +193,8 @@ struct State {
     watching: watch::Watching,
     testing: testing::Testing,
     term: terminal::Term,
+    /// The keys in force, a chord half pressed, and the shortcuts page.
+    keys: shortcuts::Keys,
 }
 
 pub struct App {
@@ -275,6 +280,7 @@ impl App {
                 view: saved.editor,
                 vim: saved.vim,
                 recents: saved.recent_projects.clone(),
+                keys: shortcuts::Keys::new(&saved.keybinds),
                 tabs: vec![Tab::Page("welcome")],
                 active: Some(0),
                 ..State::default()
@@ -592,27 +598,43 @@ impl App {
         on!(on_board_add, |app, id| app.board_add(&id));
         let weak = Rc::downgrade(self);
         shell.on_key(move |event| {
-            let Some(app) = weak.upgrade() else {
-                return false;
-            };
-            let modifiers = event.modifiers;
-            let Some(chord) = keys::chord(
-                &event.text,
-                modifiers.control,
-                modifiers.alt,
-                modifiers.shift,
-                modifiers.meta,
-            ) else {
-                return false;
-            };
-            match actions::bound_to(&chord) {
-                Some(action) => {
-                    app.act(action.id);
-                    true
-                }
-                None => false,
-            }
+            let m = event.modifiers;
+            weak.upgrade()
+                .is_some_and(|app| app.window_key(&event.text, m.control, m.alt, m.shift, m.meta))
         });
+        let weak = Rc::downgrade(self);
+        self.editor.on_chord(move |text, ctrl, alt, shift, meta| {
+            weak.upgrade()
+                .is_some_and(|app| app.chord_key(text, ctrl, alt, shift, meta))
+        });
+        let weak = Rc::downgrade(self);
+        shell.on_keys_stroke(move |event| {
+            let m = event.modifiers;
+            weak.upgrade()
+                .is_some_and(|app| app.keys_stroke(&event.text, m.control, m.alt, m.shift, m.meta))
+        });
+        let weak = Rc::downgrade(self);
+        shell.on_keys_search_stroke(move |event| {
+            let m = event.modifiers;
+            weak.upgrade().is_some_and(|app| {
+                app.keys_search_stroke(&event.text, m.control, m.alt, m.shift, m.meta)
+            })
+        });
+        let weak = Rc::downgrade(self);
+        shell.on_key_of(move |id, _version| {
+            weak.upgrade()
+                .map(|app| app.key_suffix(&id))
+                .unwrap_or_default()
+                .into()
+        });
+        on!(on_keys_query_edited, |app, query| app.keys_query(&query));
+        on!(on_keys_record, |app, id| app.keys_record(&id));
+        on!(on_keys_reset, |app, id| app.keys_reset(&id));
+        on!(on_keys_lost, |app| app.keys_lost());
+        on!(on_open_recent_new_window, |app, path| app
+            .new_window(Some(PathBuf::from(path.as_str()))));
+        on!(on_picker_pick_new_window, |app, index| app
+            .picker_pick_with(index as usize, true));
         let weak = Rc::downgrade(self);
         self.editor.on_breakpoint(move |path, line| {
             if let Some(app) = weak.upgrade() {
@@ -656,6 +678,11 @@ impl App {
             "palette.open" => self.open_picker(Mode::Commands),
             "finder.open" => self.open_picker(Mode::Files),
             "project.open" => self.choose_project(),
+            "project.open-new-window" => self.choose_project_new_window(),
+            "window.new" => self.new_window(None),
+            "keys.open" => self.open_shortcuts(),
+            "keys.reset-all" => self.keys_reset_all(),
+            "keys.search-keys" => self.keys_search_keys(),
             "settings.open" => self.open_tab(Tab::Page("settings")),
             "environment.open" => self.open_tab(Tab::Page("environment")),
             "environment.refresh" => self.probe_environment(),
@@ -668,7 +695,10 @@ impl App {
             "playground.keep" => self.keep_playground(),
             "wizard.create" => self.wizard_create(),
             "wizard.install" => self.wizard_install(),
-            "welcome.open" => self.open_tab(Tab::Page("welcome")),
+            "welcome.open" => {
+                self.open_tab(Tab::Page("welcome"));
+                self.reread_workbench();
+            }
             "file.save" => self.save(),
             "find.open" => self.editor.find_open(false),
             "find.replace" => self.editor.find_open(true),
@@ -718,7 +748,11 @@ impl App {
             "theme.system" => self.set_theme("system"),
             "theme.dark" => self.set_theme("dark"),
             "theme.light" => self.set_theme("light"),
-            "project.menu" => self.open_picker(Mode::Projects),
+            "project.menu" => {
+                self.open_picker(Mode::Projects);
+                // What another window opened since is a recent project too.
+                self.reread_workbench();
+            }
             "app.menu" => self.open_picker(Mode::Commands),
             "run.stop" => {
                 // Debugging stops with the run that booted the target.
@@ -799,10 +833,25 @@ impl App {
         );
     }
 
-    /// Open a project, and then `file` in it when one is named.
+    /// Open a project, and then `file` in it when one is named. One open in
+    /// another rusty window is said rather than opened twice: two windows
+    /// on one project are two language servers at one build directory, and
+    /// two hot exits keeping drafts of the same files.
     pub fn open_project(self: &Rc<Self>, root: PathBuf, file: Option<String>) {
         work::spawn(
-            move || Project::read(root.clone()).map_err(|reason| (root, reason)),
+            move || {
+                if crate::instances::holding(&root) {
+                    let name = root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| root.display().to_string());
+                    return Err((1, t!("windows.open-elsewhere", name = name)));
+                }
+                Project::read(root.clone()).map_err(|reason| {
+                    let path = root.display().to_string();
+                    (2, t!("desk.open-failed", path = path, reason = reason))
+                })
+            },
             move |app, read| match read {
                 Ok(project) => {
                     app.project_opened(project);
@@ -810,14 +859,7 @@ impl App {
                         app.open_file(file);
                     }
                 }
-                Err((root, reason)) => app.note(
-                    2,
-                    t!(
-                        "desk.open-failed",
-                        path = root.display().to_string(),
-                        reason = reason
-                    ),
-                ),
+                Err((level, said)) => app.note(level, said),
             },
         );
     }
@@ -879,6 +921,7 @@ impl App {
         self.probe_environment();
         self.load_board(None);
         self.bring_back(opened);
+        self.tell_instances();
     }
 
     fn tree_click(self: &Rc<Self>, index: usize) {
@@ -1333,7 +1376,7 @@ impl App {
             return;
         };
         let found = match mode {
-            Mode::Commands => picker::commands(query),
+            Mode::Commands => picker::commands(query, &self.state.borrow().keys.map),
             Mode::Files if picker::line_target(query).is_some() => self.line_rows(query),
             Mode::Files => {
                 let state = self.state.borrow();
@@ -1357,7 +1400,10 @@ impl App {
         };
         let rows: Vec<PickRow> = found
             .iter()
-            .map(|(title, detail, _)| PickRow {
+            .map(|(title, detail, pick)| PickRow {
+                // A project opens here, or with Ctrl+Enter or its button in
+                // a window of its own, as in VS Code's recents.
+                windowed: matches!(pick, Pick::Project(_)),
                 title: title.into(),
                 detail: if mode == Mode::Commands {
                     SharedString::new()
@@ -1380,6 +1426,11 @@ impl App {
     }
 
     fn picker_pick(self: &Rc<Self>, index: usize) {
+        self.picker_pick_with(index, false);
+    }
+
+    /// A row picked, a project's opening in a new window when `windowed`.
+    fn picker_pick_with(self: &Rc<Self>, index: usize, windowed: bool) {
         let pick = self
             .state
             .borrow_mut()
@@ -1392,6 +1443,7 @@ impl App {
         match pick {
             Some(Pick::Action(id)) => self.act(id),
             Some(Pick::File(path)) => self.open_file(path),
+            Some(Pick::Project(path)) if windowed => self.new_window(Some(PathBuf::from(path))),
             Some(Pick::Project(path)) => self.open_project(PathBuf::from(path), None),
             Some(Pick::Line(line, col)) => self.editor.go_to(line, col),
             Some(Pick::Place(location)) => self.jump(&location),
@@ -1592,6 +1644,7 @@ impl App {
         self.sync_settings();
         self.sync_update();
         self.sync_calls();
+        self.sync_keys();
     }
 
     fn sync_project(&self) {

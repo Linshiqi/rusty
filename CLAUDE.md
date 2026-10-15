@@ -187,7 +187,10 @@ python crates/rusty-mcu/scripts/x035_pins.py \
 # exit): it refuses to run without a data directory of its own, and a
 # second run on the same one shows the draft back. RUSTY_PROBE_SAVES also
 # saves badly formatted Rust over the file and says whether rustfmt ran --
-# point it at a copy.
+# point it at a copy. The header of src/probe.rs lists the other modes;
+# RUSTY_PROBE_KEYS rebinds Save and uses it, and RUSTY_PROBE_WINDOWS=<other
+# project> opens a second rusty with Ctrl+Shift+N, which probes itself into
+# <dir>/second and leaves.
 cargo run -p rusty-desk --release -- <project> <file-in-it>
 RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data cargo run -p rusty-desk --release -- <project> <file-in-it>
 
@@ -214,7 +217,7 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
 | `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — WCH's CH32V003 and CH32X035, which nobody's QEMU models. Pure: `cpu` is a QingKe hart, the V2A's RV32EC or the V4C's RV32IMAC (`Core`), with Zicsr, the address vector table and the hardware stack; `elf` loads a flasher's view of an image; `ch32/` is one machine for both parts — the clock tree, GPIO with AFIO's remaps and EXTI, the timers, SysTick, the PFIC, the USARTs and the debug registers SDI print writes through — with what differs between them as data in `ch32/part.rs`; its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *WCH's parts* |
 | `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
-| `rusty-desk` | **The window, in Slint** — `docs/slint.md` is the design and the order of the work. One process: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app/mod.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width |
+| `rusty-desk` | **The window, in Slint** — `docs/slint.md` is the design and the order of the work. One process: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app/mod.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width. `actions.rs` is every action and its default key, and the `Keymap` of the keys in force over them; `instances.rs` is New Window and the other rusty windows on the machine |
 | `rusty-setup` | The Windows installer: one executable carrying the app and its tools (`payload`: one tar of the install, xz-compressed whole and appended, found by a footer — 75 MB where per-file deflate made 148), installing per user in `%LOCALAPPDATA%\Programs\rusty` with an uninstall entry and shortcuts of its own (`shell`). Double-clicked it is a window in Slint (`ui.rs`, `ui/setup.slint`, software renderer only): where it goes and a desktop shortcut, then the progress with the release's highlights going by, then Open — in the system's language, Chinese or English; `RUSTY_SETUP_SHOTS=<dir>` with `--features shots` photographs every page. The updater runs it as `--quiet --run --wait <pid>`, with no window, and — cut down to its own part — the uninstaller. `files` stages the payload beside the install and moves it into place, and writes down what it put there (`install.txt`), so an update removes what it no longer carries and the uninstaller removes exactly that |
 | `rusty-release` | What the release workflow runs between the build and the upload: `pack` appends the install directory to the installer, `sign` writes a minisign `.minisig` with the updater key, `verify` checks it with `rusty_embed::update::verify` before anything is published |
 
@@ -2154,6 +2157,109 @@ download is put in place.
   sandbox, with `--silent` — or through its window, whose buttons are
   accessible, so UI Automation can press Install and Done as a person
   would.
+- **An update closes no other window, and the restart says so.** The
+  Tauri window's NSIS installer ended every rusty process; `rusty-setup`
+  does not — a file another window holds is renamed aside (`*.old`) and
+  swept up by the next install — so the other windows keep running the
+  version they started with until they are closed. The restart's question
+  counts them (`instances::others`, *More than one rusty*) whenever there
+  are any, because a window still on the old version after *Restart now*
+  reads as an update that did not take.
+
+## More than one rusty
+
+New Window (Ctrl+Shift+N, VS Code's chord, in the palette and the project
+menu) opens another rusty on the welcome page, beside the one it was asked
+from. `src/instances.rs` starts it and keeps the count;
+`app/new_window.rs` is when to ask.
+
+- **A second project is a second process.** One rusty holds one project —
+  its language servers, its watcher, its runs, the emulator — so New Window
+  starts this executable again with `--new-window`, and `main` then stays
+  on the welcome page instead of reopening `recent_projects[0]`: that
+  project is open in the window it was asked from. From an AppImage the
+  image is started (`$APPIMAGE`), not the binary inside its mount, which
+  goes when the first does. The child is reaped on a thread, gets a process
+  group of its own on Unix so a Ctrl+C in the terminal that ran the first
+  leaves it alone, and no console window (a debug build is a console
+  program).
+- **Here or in a new window, as VS Code offers it.** A recent project in
+  the project menu opens here; Ctrl+Enter or the window button on its row
+  opens it in a new window, and so do Ctrl+click and the hover button on
+  the welcome page's recents. The Open dialog has a second row, *Open
+  project in new window…*. A project is never started a second time: the
+  same window says it already has it, another window's is said too.
+- **The windows know of each other through files** (`instances::directory`:
+  `%LOCALAPPDATA%\rusty\instances`, or beside `RUSTY_CONFIG_DIR` so a test
+  counts only its own windows — never the data directory, which may be
+  synced). Each instance holds an exclusive lock on `<pid>.lock` for as long
+  as it lives and names the project it has open in `<pid>.project` beside
+  it — not in it: a locked file is unreadable to others on Windows. A lock
+  nobody holds is a window that has gone, however it went, and the next
+  look removes both files; a registration is locked under a `.pending` name
+  and renamed into place, so a count running at that moment cannot take it
+  for a dead one.
+- **Two windows on one project are refused, not raced.** Two rust-analyzers
+  would take turns at one build directory, and two hot exits would keep
+  drafts of the same files over each other. `open_project` asks
+  `instances::holding` first and says the project is open in another
+  window; a plain `rusty` started while the last project is open elsewhere
+  opens on the welcome page. rusty cannot bring that other window forward —
+  VS Code can, through its main process — so the note is the whole answer.
+- **Every instance shares one `workbench.toml`, so every write is a
+  read-modify-write of only what changed, under `config::update`'s lock**
+  (`workbench.lock`, held across processes). The recents, each project's
+  tab strip and each key are their own entries, and what another window
+  wrote is read back where it is shown (`App::reread_workbench`): the
+  recents when the project menu or the welcome page is looked at, the keys
+  when Keyboard Shortcuts opens.
+
+## Keyboard shortcuts
+
+`actions::ALL` is the table of every action and its default key;
+`actions::Keymap` is the table with what somebody rebound over it, and the
+only thing that answers "which key runs this" or "what does this key run".
+The page is VS Code's Keyboard Shortcuts (Ctrl+K Ctrl+S, the palette, and
+Settings ▸ Keyboard); `app/shortcuts.rs` runs it and `ui/keys.slint` draws
+it.
+
+- **The binding in force is the key shown, everywhere.** The window's key
+  handler, the palette, the editor's menu, the debugger's tooltips
+  (`Shell.key-of`, a pure callback handed `keys-version` so it is asked
+  again when a key changes) and the welcome page's line all read the
+  keymap — never `Action::chord`, which is only the default.
+- **A rebinding is `workbench.toml`'s `keybinds`**: action id → chord, the
+  changed keys only, so a new default in a newer rusty reaches everyone who
+  has not rebound that action. Written at once through `config::update`;
+  a key set back to its default removes the entry. Read, never trusted
+  (`Keymap::read`): an id this window has no listed action for, a chord that
+  names no key and one no shortcut may be are left out, and every spelling
+  — the Tauri window's `Shift+Alt` order, `cmd+k`, `ctrl+left` — reads as
+  the one a press makes (`keys::Stroke`: Ctrl, Alt, Shift, then the key).
+- **Recorded as VS Code records it**: a click on a row's key, the strokes
+  pressed (two at most), Enter to keep them, Escape — or the page losing
+  the keys — to leave the key as it was. Searched by name, id or key; the
+  keyboard button beside the search takes keys pressed instead, quoted to
+  match exactly.
+- **A shortcut is a key nothing types** (`actions::refusal`): a function
+  key alone, or Ctrl, or Alt with a named key (Alt+ArrowLeft is Back) —
+  never a bare character or Enter, and never Alt with a character, which is
+  how a layout with AltGr types one (AltGr is Ctrl+Alt to the system). The
+  table's own Ctrl+Alt+B for the right dock predates the rule.
+- **What a key collides with is said on its row, not prevented**: another
+  action on the same key, a key whose first stroke is another's whole key
+  (which could then never run), and on a rebound key one the code takes
+  for itself while it has the keys (`editor::takes`, the editor's own
+  keymap — Ctrl+D, Ctrl+Z). Two actions on one key run the one somebody
+  bound.
+- **Two-stroke chords wait for the rest, wherever the first was pressed.**
+  A stroke that begins a chord in force is held, said in a note VS Code's
+  words ("(Ctrl+K) was pressed. Waiting for the second key of the chord…"),
+  and the next stroke completes it or is said not to be a command — taken
+  either way. The code asks the window first while a chord is half pressed
+  (`Surface::on_chord`), so `Ctrl+K Ctrl+C` is never a copy; a text field
+  other than the code still types a bare second stroke, which is why a
+  chord's second stroke follows the first's rule.
 
 ## The gutter, and one line height
 
@@ -2382,9 +2488,11 @@ rules it settled, each the answer to something that went wrong.
   read as "Test ran a build".
 - **The keyboard reaches everything.** The palette lists every action with
   its key; the keys are VS Code's wherever a VS Code key exists (Ctrl+P,
-  Ctrl+Shift+P, Ctrl+B, Ctrl+\, F12, Ctrl+.), Arduino's for the board
-  (Ctrl+U flashes, Ctrl+Shift+M monitors), and never an Alt letter, which a
-  layout with AltGr types characters with.
+  Ctrl+Shift+P, Ctrl+B, Ctrl+\, F12, Ctrl+., Ctrl+Shift+N, Ctrl+K Ctrl+S),
+  Arduino's for the board (Ctrl+U flashes, Ctrl+Shift+M monitors), and
+  never an Alt letter, which a layout with AltGr types characters with.
+  Every one can be rebound (*Keyboard shortcuts*), and what shows a key
+  shows the one in force.
 - **Every surface answers a right-click with its own menu or not at all**
   (`app/menu.rs`, one menu for the window, filled by whichever surface was
   clicked).
@@ -2448,9 +2556,10 @@ is no browser storage, and what the window remembers between runs is
   open and which panel was in front), the editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so
-  another spelling of the same directory finds it), a skipped update and the
-  auto-sweep. Drafts are files of their own, under the data directory's
-  `backups/` (`editor/backup.rs`).
+  another spelling of the same directory finds it), the rebound keys
+  (`keybinds`), a skipped update and the auto-sweep. Every window shares
+  it (*More than one rusty*). Drafts are files of their own, under the
+  data directory's `backups/` (`editor/backup.rs`).
 - Secrets stay in the OS credential store, never in the data directory — a
   synced directory must never sync a key.
 - Per-project, team-shared things live in the project's `.rusty/`, where they
