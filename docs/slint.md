@@ -555,9 +555,10 @@ tests green, and CLAUDE.md saying how it works.
    Updates and says whatever it found; the download runs in the
    background, its progress in the status bar, and the restart that
    installs it is asked for. On Windows the installer is our own
-   (`crates/rusty-setup`): the app and its tools zipped and appended to it,
-   installed per user in `%LOCALAPPDATA%\Programs\rusty` with an entry of
-   its own in Settings ▸ Apps (`dev.rusty.workbench`), run by the updater
+   (`crates/rusty-setup`): the app and its tools in one tar, compressed
+   whole with xz and appended to it, installed per user in
+   `%LOCALAPPDATA%\Programs\rusty` with an entry of its own in Settings ▸
+   Apps (`dev.rusty.workbench`), run by the updater
    as `--quiet --run --wait <pid>`, and, cut down to its own part, the
    uninstaller.
    Staged beside the install and moved into place, with a list of what it

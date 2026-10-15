@@ -14,11 +14,14 @@ name = "rusty-setup"
 path = "src/main.rs"
 
 [dependencies]
-# The payload is a zip, deflated: the one format with a reader in every
-# toolbox and a writer in this one.
-zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
-# zip names flate2 without a backend; its own default, miniz in Rust, is the one.
-flate2 = "1.1.9"
+# The payload is one tar, compressed whole with xz: LZMA over the whole
+# install, so the many near-identical files among the tools compress
+# against each other — a third of what per-file deflate made of them.
+tar = "0.4.46"
+# liblzma itself, built from its own source (`static`) so no system copy is
+# needed, with the multithreaded encoder and decoder (`parallel`). Without
+# `bindgen`: the bindings are pregenerated, and a build needs no libclang.
+liblzma = { version = "0.4.8", default-features = false, features = ["static", "parallel"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55.0"
