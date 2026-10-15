@@ -29,6 +29,10 @@ pub const ALL: &[Action] = &[
     action("project.open", "menu.file.open-project", Some("Ctrl+O")),
     action("project.new", "menu.file.new-project", None),
     action("project.clone", "menu.file.clone", None),
+    // In the folder the tree has selected, named in the tree, as VS Code's
+    // explorer buttons make them.
+    action("tree.new-file", "context.tree-new-file", None),
+    action("tree.new-folder", "context.tree-new-folder", None),
     action("settings.open", "desk.settings", Some("Ctrl+,")),
     action("welcome.open", "desk.welcome", None),
     action("environment.open", "panel.toolchain", None),
