@@ -1,14 +1,10 @@
 //! rusty's installer for Windows: one executable that is the installer, the
 //! updater's second half and, without its payload, the uninstaller.
 //!
-//! It replaced the Tauri bundler's NSIS installer when the window moved to
-//! Slint, and it answers that installer's command line, because a copy of
-//! rusty from before runs whatever its updater downloaded as
-//! `setup.exe /P /UPDATE /R /ARGS …`: `/P` passive (no questions), `/S`
-//! silent (nothing shown), `/R` open rusty afterwards with the arguments
-//! after `/ARGS`. It installs where that installer did
-//! (`%LOCALAPPDATA%\rusty`, or wherever the uninstall entry says), takes
-//! over its entry and its shortcuts, and leaves none of its files behind.
+//! Per user, with no elevation: `%LOCALAPPDATA%\Programs\rusty`, an entry
+//! in Settings ▸ Apps, a Start menu shortcut and, on a first install, one
+//! on the desktop. Double-clicked it asks before it installs; the updater
+//! runs it as `--quiet --run --wait <pid>`.
 //!
 //! [`payload`] is the format, [`files`] what happens in the directory —
 //! both portable, so the release workflow packs on any runner and the
@@ -22,13 +18,13 @@ pub mod shell;
 /// What the command line asked for.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Flags {
-    /// `/P`: no questions, nothing but a failure shown.
-    pub passive: bool,
-    /// `/S`: nothing shown at all.
+    /// `--quiet`: no questions, nothing but a failure shown.
+    pub quiet: bool,
+    /// `--silent`: nothing shown at all.
     pub silent: bool,
-    /// `/R`: rusty opened when it is installed.
-    pub restart: bool,
-    /// What rusty is opened with — everything after `/ARGS`.
+    /// `--run`: rusty opened when it is installed.
+    pub run: bool,
+    /// What rusty is opened with — everything after `--`.
     pub args: Vec<String>,
     /// `--wait <pid>`: the rusty that asked for this, to be gone first.
     pub wait: Option<u32>,
@@ -41,22 +37,19 @@ impl Flags {
         let mut flags = Flags::default();
         let mut at = 0;
         while let Some(arg) = args.get(at) {
-            match arg.to_ascii_uppercase().as_str() {
-                "/P" => flags.passive = true,
-                "/S" => flags.silent = true,
-                "/R" => flags.restart = true,
-                // The Tauri installer's; this one installs the same way
-                // whether it is an update or not.
-                "/UPDATE" => flags.passive = true,
-                "/ARGS" => {
+            match arg.as_str() {
+                "--quiet" => flags.quiet = true,
+                "--silent" => flags.silent = true,
+                "--run" => flags.run = true,
+                "--" => {
                     flags.args = args[at + 1..].to_vec();
                     break;
                 }
-                "--WAIT" => {
+                "--wait" => {
                     flags.wait = args.get(at + 1).and_then(|pid| pid.parse().ok());
                     at += 1;
                 }
-                "--DIR" => {
+                "--dir" => {
                     flags.dir = args.get(at + 1).map(std::path::PathBuf::from);
                     at += 1;
                 }
@@ -67,9 +60,9 @@ impl Flags {
         flags
     }
 
-    /// Whether anybody is asked anything.
-    pub fn quiet(&self) -> bool {
-        self.passive || self.silent
+    /// Whether nobody is asked anything.
+    pub fn asks_nothing(&self) -> bool {
+        self.quiet || self.silent
     }
 }
 
@@ -82,24 +75,24 @@ mod tests {
         Flags::parse(&args)
     }
 
-    /// What the Tauri updater runs a downloaded installer with.
+    /// What the updater runs a downloaded installer with.
     #[test]
-    fn the_tauri_updaters_command_line_reads() {
-        let flags = parse("/P /UPDATE /R /ARGS --new-window E:\\proj");
-        assert!(flags.passive && flags.restart && !flags.silent);
-        assert_eq!(flags.args, ["--new-window", "E:\\proj"]);
-        assert!(flags.quiet());
+    fn the_updaters_command_line_reads() {
+        let flags = parse("--quiet --run --wait 4242");
+        assert!(flags.quiet && flags.run && !flags.silent);
+        assert_eq!(flags.wait, Some(4242));
+        assert!(flags.asks_nothing());
     }
 
     #[test]
-    fn rustys_own_command_line_reads() {
-        let flags = parse("/S /R --wait 4242 --dir D:\\apps\\rusty");
-        assert!(flags.silent && flags.restart);
-        assert_eq!(flags.wait, Some(4242));
+    fn a_directory_and_rustys_own_arguments_read() {
+        let flags = parse("--silent --dir D:\\apps\\rusty -- --new-window E:\\proj");
+        assert!(flags.silent && !flags.run);
         assert_eq!(
             flags.dir.as_deref(),
             Some(std::path::Path::new("D:\\apps\\rusty"))
         );
-        assert!(!parse("").quiet(), "double-clicked: it asks");
+        assert_eq!(flags.args, ["--new-window", "E:\\proj"]);
+        assert!(!parse("").asks_nothing(), "double-clicked: it asks");
     }
 }

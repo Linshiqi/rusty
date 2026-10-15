@@ -6047,7 +6047,6 @@ dependencies = [
 name = "rusty-embed"
 version = "0.6.77"
 dependencies = [
- "base64 0.22.1",
  "cc",
  "gimli",
  "minisign",

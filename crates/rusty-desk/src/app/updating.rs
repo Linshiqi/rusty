@@ -15,12 +15,11 @@
 //!   that came by itself when a download happened to finish would take
 //!   whatever was running with it.
 //! - **How a verified download is put in place is the system's.** On
-//!   Windows it is the installer (`rusty-setup`), run passively with this
-//!   process's id to wait for and told to open rusty again; a copy from
-//!   before Slint runs the same file its own way. On macOS the app bundle
-//!   is replaced and opened again; on Linux the AppImage is. A `.deb` is
-//!   the package manager's, and the update says so rather than touching
-//!   `/usr`.
+//!   Windows it is the installer (`rusty-setup`), run with no questions,
+//!   this process's id to wait for, and told to open rusty again. On macOS
+//!   the app bundle is replaced and opened again; on Linux the AppImage is.
+//!   A `.deb` is the package manager's, and the update says so rather than
+//!   touching `/usr`.
 
 use std::{path::PathBuf, rc::Rc, time::Duration};
 
@@ -311,7 +310,12 @@ fn put_in_place(file: &std::path::Path) -> Result<(), String> {
         // The installer waits for this process, installs where rusty is
         // installed, and opens it again.
         std::process::Command::new(file)
-            .args(["/P", "/R", "--wait", &std::process::id().to_string()])
+            .args([
+                "--quiet",
+                "--run",
+                "--wait",
+                &std::process::id().to_string(),
+            ])
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("{}: {e}", file.display()))

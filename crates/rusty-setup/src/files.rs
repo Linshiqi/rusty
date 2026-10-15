@@ -12,9 +12,7 @@
 //! install removes what it no longer carries and the uninstaller removes
 //! exactly what was put there — never the directory wholesale, which on a
 //! machine where somebody pointed the install at a folder of their own
-//! would take their files with it. An install that predates the list — the
-//! Tauri installer's — is recognised by its `rusty-app.exe`, and its own
-//! files are what the list would have said.
+//! would take their files with it.
 
 use std::{
     path::{Path, PathBuf},
@@ -28,30 +26,17 @@ pub const MANIFEST: &str = "install.txt";
 /// Where the payload is unpacked before it is moved into place.
 const STAGING: &str = ".staging";
 
-/// What the Tauri installer put in the directory, before there was a list:
-/// the app, its uninstaller and the tools under `bundled/`.
-pub fn tauri_leftovers(dir: &Path) -> Vec<String> {
-    if !dir.join("rusty-app.exe").is_file() {
-        return Vec::new();
-    }
-    let mut old = vec!["rusty-app.exe".to_string()];
-    if let Ok(bundled) = payload::files_under(&dir.join("bundled")) {
-        old.extend(bundled.into_iter().map(|rel| format!("bundled/{rel}")));
-    }
-    old
-}
-
-/// What an earlier install put in `dir`.
+/// What an earlier install put in `dir`; nothing where there was none.
 pub fn installed(dir: &Path) -> Vec<String> {
-    match std::fs::read_to_string(dir.join(MANIFEST)) {
-        Ok(text) => text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect(),
-        Err(_) => tauri_leftovers(dir),
-    }
+    std::fs::read_to_string(dir.join(MANIFEST))
+        .map(|text| {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Put the payload's files in `dir`, take away what an earlier install
@@ -179,27 +164,40 @@ mod tests {
         payload::find(&packed).unwrap().1.to_vec()
     }
 
-    /// Over a Tauri install: the new files in, `rusty-app.exe` and the
-    /// tools it carried that this one does not gone, a list written — and
-    /// a file of somebody's own in the directory left alone.
+    /// An install, an update that carries less, and another: each takes
+    /// away what the list says the last one put there and this one does
+    /// not carry, and a file of somebody's own in the directory is left
+    /// alone.
     #[test]
-    fn an_install_over_the_tauri_one_takes_away_its_files_and_only_its_files() {
+    fn the_list_decides_what_goes_and_nothing_else_does() {
         let dir = scratch("over");
-        std::fs::write(dir.join("rusty-app.exe"), b"tauri").unwrap();
-        std::fs::create_dir_all(dir.join("bundled/old-tool")).unwrap();
-        std::fs::write(dir.join("bundled/old-tool/tool.exe"), b"old").unwrap();
-        std::fs::write(dir.join("bundled/espflash.exe"), b"old espflash").unwrap();
         std::fs::write(dir.join("notes.txt"), b"mine").unwrap();
-        let zip = zip_of(&[("rusty.exe", b"slint"), ("bundled/espflash.exe", b"new")]);
+        let zip = zip_of(&[
+            ("rusty.exe", b"slint"),
+            ("bundled/espflash.exe", b"espflash"),
+            ("bundled/old-tool/tool.exe", b"tool"),
+        ]);
+        let now = install(&zip, &dir, &["uninstall.exe"]).unwrap();
+        assert_eq!(
+            now,
+            [
+                "bundled/espflash.exe",
+                "bundled/old-tool/tool.exe",
+                "rusty.exe",
+                "uninstall.exe"
+            ]
+        );
+        assert!(!dir.join(STAGING).exists());
 
+        // The next version drops a tool and changes another.
+        let zip = zip_of(&[("rusty.exe", b"slint 2"), ("bundled/espflash.exe", b"new")]);
         let now = install(&zip, &dir, &["uninstall.exe"]).unwrap();
         assert_eq!(now, ["bundled/espflash.exe", "rusty.exe", "uninstall.exe"]);
-        assert_eq!(std::fs::read(dir.join("rusty.exe")).unwrap(), b"slint");
+        assert_eq!(std::fs::read(dir.join("rusty.exe")).unwrap(), b"slint 2");
         assert_eq!(
             std::fs::read(dir.join("bundled/espflash.exe")).unwrap(),
             b"new"
         );
-        assert!(!dir.join("rusty-app.exe").exists());
         assert!(
             !dir.join("bundled/old-tool").exists(),
             "an emptied directory goes"
@@ -208,10 +206,9 @@ mod tests {
             dir.join("notes.txt").exists(),
             "not the installer's to take"
         );
-        assert!(!dir.join(STAGING).exists());
 
-        // The next version drops a file; the list knows it was there.
-        let zip = zip_of(&[("rusty.exe", b"slint 2")]);
+        // And the one after carries no tools at all.
+        let zip = zip_of(&[("rusty.exe", b"slint 3")]);
         install(&zip, &dir, &["uninstall.exe"]).unwrap();
         assert!(!dir.join("bundled").exists());
 

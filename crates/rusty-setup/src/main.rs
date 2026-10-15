@@ -73,8 +73,8 @@ mod windows {
             .or_else(|| std::env::var_os("RUSTY_SETUP_DIR").map(Into::into))
             .or_else(shell::installed_at)
             .unwrap_or_else(shell::default_dir);
-        let fresh = !dir.join("rusty.exe").exists() && !dir.join("rusty-app.exe").exists();
-        if !flags.quiet()
+        let fresh = !dir.join("rusty.exe").exists();
+        if !flags.asks_nothing()
             && !ask(&format!(
                 "Install rusty {VERSION} in {}?\n\nYour settings and projects are not touched.",
                 dir.display()
@@ -82,8 +82,7 @@ mod windows {
         {
             return Ok(());
         }
-        // The rusty that asked for this goes first; a copy from before
-        // exits by itself the moment it has started this.
+        // The rusty that asked for this goes first.
         if let Some(pid) = flags.wait {
             shell::wait_for(pid);
         }
@@ -97,15 +96,16 @@ mod windows {
         let app = dir.join("rusty.exe");
         let (start, desktop) = shell::link_dirs();
         shell::shortcut(&start.join("rusty.lnk"), &app)?;
-        // A desktop shortcut is made on a fresh install, as the Tauri
-        // installer made one, and kept pointing at rusty on an update —
-        // never put back on a desktop somebody cleared.
+        // A desktop shortcut is made on a fresh install and kept pointing
+        // at rusty on an update — never put back on a desktop somebody
+        // cleared.
         let on_desktop = desktop.join("rusty.lnk");
         if fresh || on_desktop.exists() {
             let _ = shell::shortcut(&on_desktop, &app);
         }
-        let open = flags.restart
-            || (!flags.quiet() && ask(&format!("rusty {VERSION} is installed. Open it now?")));
+        let open = flags.run
+            || (!flags.asks_nothing()
+                && ask(&format!("rusty {VERSION} is installed. Open it now?")));
         if open {
             std::process::Command::new(&app)
                 .args(&flags.args)
@@ -125,7 +125,7 @@ mod windows {
                 dir.display()
             ));
         }
-        if !flags.quiet()
+        if !flags.asks_nothing()
             && !ask(
                 "Remove rusty from this computer?\n\nYour settings, the tools it installed and your projects stay.",
             )
@@ -142,7 +142,7 @@ mod windows {
             let _ = std::fs::remove_file(link);
         }
         remove_after_exit(&me, &dir);
-        if !flags.quiet() {
+        if !flags.asks_nothing() {
             tell(
                 "rusty was removed. Your settings and projects are where they were.",
                 false,
