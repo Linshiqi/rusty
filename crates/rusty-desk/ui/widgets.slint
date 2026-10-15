@@ -131,6 +131,8 @@ export component Splitter inherits Rectangle {
     callback dragged(length);
     callback pressed();
     callback released();
+    // A double-click: the boundary back where it starts.
+    callback reset();
 
     property <length> from;
 
@@ -160,6 +162,9 @@ export component Splitter inherits Rectangle {
             if (self.pressed) {
                 root.dragged((root.vertical ? self.absolute-position.x + self.mouse-x : self.absolute-position.y + self.mouse-y) - root.from);
             }
+        }
+        double-clicked => {
+            root.reset();
         }
     }
 }

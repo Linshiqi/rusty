@@ -88,9 +88,163 @@ export component NotYet inherits Rectangle {
     }
 }
 
+// One row of the tree: an entry, or the box a name is typed in. A press
+// pulled more than four pixels carries the entry; the row it is let go
+// over is where it is dropped, counted from this row in rows, since the
+// pointer stays this row's until it is let go.
+component TreeItem inherits Rectangle {
+    in property <TreeRow> entry;
+    in property <int> index;
+    in property <length> row-height;
+    // The tree has the keys: the selection is drawn as the list's focus.
+    in property <bool> keys;
+    // Where a row starts: VS Code's eight pixels a level, so a new entry's
+    // box is drawn where the entry will be.
+    property <length> indent: 10px + root.entry.depth * 8px;
+    property <length> press-x;
+    property <length> press-y;
+    property <bool> held;
+    property <bool> carried;
+
+    height: root.row-height;
+    background: root.entry.drop ? Theme.slate-fill : root.entry.naming ? transparent : root.entry.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    border-width: root.entry.selected && root.keys && !root.entry.naming ? 1px : 0px;
+    border-color: Theme.rust.with-alpha(0.6);
+    if !root.entry.naming: HorizontalLayout {
+        padding-left: root.indent;
+        padding-right: 8px;
+        spacing: 4px;
+        Rectangle {
+            width: 12px;
+            if root.entry.dir: Icon {
+                path: Icons.chevron;
+                size: 11px;
+                color: Theme.label-3;
+                transform-rotation: root.entry.open ? 0deg : -90deg;
+            }
+        }
+        Text {
+            text: root.entry.name;
+            color: root.entry.cut ? Theme.label-4 : root.entry.dir ? Theme.label : Theme.label-2;
+            font-size: Theme.body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    // The box: what is typed is judged once an input method has committed
+    // it, never while it composes (`f'l'y` is not a name anybody typed).
+    if root.entry.naming: HorizontalLayout {
+        padding-left: root.indent;
+        padding-right: 6px;
+        padding-top: 1px;
+        padding-bottom: 1px;
+        spacing: 4px;
+        Rectangle {
+            width: 12px;
+            if root.entry.dir: Icon {
+                path: Icons.chevron;
+                size: 11px;
+                color: Theme.label-3;
+                transform-rotation: -90deg;
+            }
+        }
+        Rectangle {
+            background: Theme.sunken;
+            border-width: 1px;
+            border-color: Shell.tree-name-problem != "" ? Theme.crimson : Theme.rust;
+            clip: true;
+            name := TextInput {
+                x: 4px;
+                width: parent.width - 8px;
+                height: parent.height;
+                text <=> Shell.tree-name;
+                color: Theme.label;
+                font-size: Theme.body;
+                vertical-alignment: center;
+                single-line: true;
+                init => {
+                    self.focus();
+                    self.set-selection-offsets(0, Shell.tree-name-select);
+                }
+                edited => {
+                    if (self.preedit-text == "") {
+                        Shell.tree-name-edited(self.text);
+                    }
+                }
+                accepted => {
+                    if (self.preedit-text == "") {
+                        Shell.tree-name-done(true);
+                    }
+                }
+                key-pressed(event) => {
+                    if (self.preedit-text != "") {
+                        return reject;
+                    }
+                    if (event.text == Key.Escape) {
+                        Shell.tree-name-done(false);
+                        return accept;
+                    }
+                    reject
+                }
+                changed has-focus => {
+                    if (!self.has-focus) {
+                        Shell.tree-name-left();
+                    }
+                }
+            }
+        }
+    }
+    touch := TouchArea {
+        enabled: !root.entry.naming;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.carried = false;
+                root.held = event.button == PointerEventButton.left;
+                root.press-x = self.mouse-x;
+                root.press-y = self.mouse-y;
+                if (event.button == PointerEventButton.right) {
+                    Shell.tree-menu(root.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                }
+            }
+            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                root.held = false;
+                if (root.carried) {
+                    Shell.tree-drop(root.index, root.index + floor(self.mouse-y / root.row-height));
+                }
+            }
+        }
+        moved => {
+            if (root.held && !root.carried && (abs(self.mouse-x - root.press-x) > 4px || abs(self.mouse-y - root.press-y) > 4px)) {
+                root.carried = true;
+            }
+            if (root.held && root.carried) {
+                Shell.tree-drag(root.index, root.index + floor(self.mouse-y / root.row-height));
+            }
+        }
+        clicked => {
+            if (!root.carried) {
+                Shell.tree-click(root.index);
+            }
+        }
+        double-clicked => {
+            if (!root.carried) {
+                Shell.tree-double-click(root.index);
+            }
+        }
+    }
+}
+
 // The project's files: a flat list of rows with depths, made by the Rust
-// side from the folders that are open, so only what is shown exists.
+// side from the folders that are open, so only what is shown exists. It
+// takes the keys when a row is clicked — VS Code's explorer: the arrows,
+// Enter, F2, Delete, and cut, copy and paste — and the space below the
+// rows is the project's root, for a right-click, a paste and a drop.
 component ProjectTree inherits Rectangle {
+    property <length> row-height: 22px;
+    property <int> focus-asked: Shell.tree-focus;
+    changed focus-asked => {
+        keys.focus();
+    }
     if !Shell.has-project: VerticalLayout {
         alignment: center;
         padding: 20px;
@@ -101,33 +255,72 @@ component ProjectTree inherits Rectangle {
             horizontal-alignment: center;
         }
     }
-    if Shell.has-project: ListView {
-        for row[index] in Shell.tree: RowButton {
-            height: 24px;
-            selected: row.selected;
-            clicked => {
-                Shell.tree-click(index);
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (Shell.tree-key(event)) {
+                return accept;
             }
-            HorizontalLayout {
-                padding-left: 8px + row.depth * 12px;
-                padding-right: 8px;
-                spacing: 4px;
-                Rectangle {
-                    width: 12px;
-                    if row.dir: Icon {
-                        path: Icons.chevron;
-                        size: 11px;
-                        color: Theme.label-3;
-                        transform-rotation: row.open ? 0deg : -90deg;
+            reject
+        }
+        TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                    Shell.tree-menu(-1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                }
+            }
+            clicked => {
+                Shell.tree-click(-1);
+            }
+        }
+        // The root lit for a drop: a frame round the whole list, in the
+        // drop's colour rather than the selection's.
+        if Shell.tree-drop-root: Rectangle {
+            border-width: 1px;
+            border-color: Theme.slate;
+            background: Theme.slate-fill;
+        }
+        list := ListView {
+            y: 0;
+            // Only as tall as its rows, so the space below them is the
+            // root's.
+            height: min(parent.height, Shell.tree.length * root.row-height);
+            property <int> reveal: Shell.tree-reveal;
+            changed reveal => {
+                // The row brought into view: above, to the top; below, to
+                // the bottom; already in view, left where it is.
+                if (Shell.tree-reveal-row >= 0) {
+                    if (Shell.tree-reveal-row * root.row-height < -self.content-y) {
+                        self.content-y = -Shell.tree-reveal-row * root.row-height;
+                    } else if ((Shell.tree-reveal-row + 1) * root.row-height > -self.content-y + self.visible-height) {
+                        self.content-y = min(0px, self.visible-height - (Shell.tree-reveal-row + 1) * root.row-height);
                     }
                 }
-                Text {
-                    text: row.name;
-                    color: row.dir ? Theme.label : Theme.label-2;
-                    font-size: Theme.body;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+            }
+            for row[index] in Shell.tree: TreeItem {
+                entry: row;
+                index: index;
+                row-height: root.row-height;
+                keys: keys.has-focus;
+            }
+        }
+        // What is wrong with the name typed, under the box, over the rows
+        // below it.
+        if Shell.tree-name-problem != "": Rectangle {
+            x: 10px;
+            y: min(parent.height - self.height, (Shell.tree-name-row + 1) * root.row-height + list.content-y);
+            width: parent.width - 20px;
+            height: problem.preferred-height + 12px;
+            background: Theme.overlay;
+            border-width: 1px;
+            border-color: Theme.crimson;
+            problem := Text {
+                x: 7px;
+                width: parent.width - 14px;
+                text: Shell.tree-name-problem;
+                color: Theme.label;
+                font-size: Theme.small;
+                wrap: word-wrap;
+                vertical-alignment: center;
             }
         }
     }
@@ -263,10 +456,42 @@ component ProblemsPanel inherits Rectangle {
 export component LeftDock inherits Rectangle {
     background: Theme.sidebar;
     VerticalLayout {
-        DockHeader {
-            dock: "left";
-            panels: Shell.left-panels;
-            front: Shell.left-front;
+        HorizontalLayout {
+            DockHeader {
+                dock: "left";
+                panels: Shell.left-panels;
+                front: Shell.left-front;
+            }
+            // The explorer's own buttons, where VS Code's title bar has
+            // them: a new file or folder in the folder selected, and the
+            // tree read again.
+            if Shell.left-front == "project" && Shell.has-project: IconButton {
+                y: 3px;
+                icon: Icons.file-plus;
+                tip: @tr("context.tree-new-file");
+                clicked => {
+                    Shell.act("tree.new-file");
+                }
+            }
+            if Shell.left-front == "project" && Shell.has-project: IconButton {
+                y: 3px;
+                icon: Icons.folder-plus;
+                tip: @tr("context.tree-new-folder");
+                clicked => {
+                    Shell.act("tree.new-folder");
+                }
+            }
+            if Shell.left-front == "project" && Shell.has-project: IconButton {
+                y: 3px;
+                icon: Icons.refresh;
+                tip: @tr("context.tree-refresh");
+                clicked => {
+                    Shell.act("tree.refresh");
+                }
+            }
+            Rectangle {
+                width: 4px;
+            }
         }
         Rectangle {
             height: 1px;

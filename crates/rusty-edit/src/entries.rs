@@ -58,8 +58,7 @@ pub fn move_entry(root: &Path, from: &str, into: &str) -> Result<String> {
 /// relative path.
 pub fn rename_entry(root: &Path, from: &str, new_name: &str) -> Result<String> {
     let new_name = new_name.trim();
-    if new_name.is_empty() || new_name == "." || new_name == ".." || new_name.contains(['/', '\\'])
-    {
+    if name_problem(new_name).is_some() {
         return Err(Error::BadName {
             name: new_name.to_string(),
         });
@@ -146,6 +145,108 @@ pub fn absolute(root: &Path, path: &str) -> Result<PathBuf> {
 }
 
 // ─── the rules, pure ─────────────────────────────────────────────────────────
+
+/// Why a name typed for an entry is not one. A name is one segment: a
+/// rename is a name, and a path is a move to somewhere the tree did not
+/// show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NameProblem {
+    /// Nothing but space.
+    Empty,
+    /// A `/` or a `\` in it.
+    Separator,
+    /// `.` or `..`, which name a directory that is already there.
+    Dots,
+    /// What this system will not take for a file's name: on Windows a
+    /// character Explorer refuses (`<>:"|?*` and the control range), a
+    /// name ending in a dot or a space, or a device name such as `CON` or
+    /// `nul.txt`. Said before the write rather than after it, as the
+    /// operating system's own error, which names none of this.
+    Invalid,
+}
+
+/// What is wrong with `name` as the name of an entry on this system, or
+/// `None` when it is one. Leading and trailing space is the caller's to
+/// trim; a name that is only space is [`NameProblem::Empty`].
+pub fn name_problem(name: &str) -> Option<NameProblem> {
+    name_problem_on(name, cfg!(windows))
+}
+
+/// [`name_problem`] with the system named, so both are tested anywhere.
+pub fn name_problem_on(name: &str, windows: bool) -> Option<NameProblem> {
+    if name.trim().is_empty() {
+        return Some(NameProblem::Empty);
+    }
+    if name.contains(['/', '\\']) {
+        return Some(NameProblem::Separator);
+    }
+    if name == "." || name == ".." {
+        return Some(NameProblem::Dots);
+    }
+    if windows {
+        const DEVICES: [&str; 22] = [
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        ];
+        let refused =
+            |c: char| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*');
+        let stem = name.split('.').next().unwrap_or(name).trim_end();
+        if name.chars().any(refused)
+            || name.ends_with(['.', ' '])
+            || DEVICES
+                .iter()
+                .any(|device| stem.eq_ignore_ascii_case(device))
+        {
+            return Some(NameProblem::Invalid);
+        }
+    }
+    None
+}
+
+/// Where a drop of `carried` (a directory when `carried_dir`) would put it:
+/// the folder under the pointer, a file's own folder — the row of a file
+/// stands for the folder it is in — or the root (`""`) when `over` is the
+/// empty space below the rows. `None` where nothing would move: the folder
+/// it is already in, or a folder into itself or anywhere below itself. The
+/// same refusals [`move_entry`] makes, said before the drop so that the
+/// highlight never promises a move the library refuses.
+pub fn drop_target(carried: &str, carried_dir: bool, over: Option<(&str, bool)>) -> Option<String> {
+    let into = match over {
+        None => String::new(),
+        Some((path, true)) => path.to_string(),
+        Some((path, false)) => parent_of(path).to_string(),
+    };
+    if parent_of(carried) == into {
+        return None;
+    }
+    if carried_dir && (into == carried || into.starts_with(&format!("{carried}/"))) {
+        return None;
+    }
+    Some(into)
+}
+
+/// Where `path` is once `from` has become `to`: `to` itself, or the same
+/// place under `to` — and `None` for a path that is not `from` or below
+/// it. Below by the separator, not the prefix: `src2/a.rs` is not under
+/// `src`. What the window carries its tabs, documents and folders with.
+pub fn moved_path(path: &str, from: &str, to: &str) -> Option<String> {
+    if path == from {
+        return Some(to.to_string());
+    }
+    let rest = path.strip_prefix(from)?.strip_prefix('/')?;
+    Some(joined(to, rest))
+}
+
+/// Whether `path` is `dir` or anything below it — by the separator, not
+/// the prefix.
+pub fn is_within(path: &str, dir: &str) -> bool {
+    dir.is_empty() || moved_path(path, dir, dir).is_some()
+}
+
+/// The directory a relative path is in, `""` at the root.
+pub fn parent_dir(path: &str) -> &str {
+    parent_of(path)
+}
 
 /// The last segment of a relative path, which is what a move keeps.
 fn base_name(path: &str) -> Result<&str> {
@@ -369,6 +470,92 @@ mod tests {
         assert_eq!(split_extension("archive.tar.gz"), ("archive.tar", ".gz"));
         assert_eq!(split_extension("Makefile"), ("Makefile", ""));
         assert_eq!(split_extension(".env"), (".env", ""));
+    }
+
+    #[test]
+    fn a_name_is_one_segment_this_system_takes() {
+        for (name, windows, problem) in [
+            ("", false, Some(NameProblem::Empty)),
+            ("   ", true, Some(NameProblem::Empty)),
+            ("a/b.rs", false, Some(NameProblem::Separator)),
+            (r"a\b.rs", false, Some(NameProblem::Separator)),
+            ("..", false, Some(NameProblem::Dots)),
+            (".", true, Some(NameProblem::Dots)),
+            ("a:b.rs", true, Some(NameProblem::Invalid)),
+            ("a:b.rs", false, None),
+            ("what?.md", true, Some(NameProblem::Invalid)),
+            ("trailing.", true, Some(NameProblem::Invalid)),
+            ("nul.txt", true, Some(NameProblem::Invalid)),
+            ("COM1", true, Some(NameProblem::Invalid)),
+            ("console.rs", true, None),
+            ("驱动.rs", true, None),
+            (".env", true, None),
+            ("main copy 2.rs", true, None),
+        ] {
+            assert_eq!(
+                name_problem_on(name, windows),
+                problem,
+                "{name:?} on windows={windows}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_drop_lands_in_the_folder_under_the_pointer_or_a_files_folder_or_the_root() {
+        let file = "src/main.rs";
+        assert_eq!(
+            drop_target(file, false, Some(("firmware", true))).as_deref(),
+            Some("firmware")
+        );
+        assert_eq!(
+            drop_target(file, false, Some(("firmware/Cargo.toml", false))).as_deref(),
+            Some("firmware")
+        );
+        assert_eq!(drop_target(file, false, None).as_deref(), Some(""));
+        // Already there: nothing to do, so nothing to offer.
+        assert_eq!(drop_target(file, false, Some(("src", true))), None);
+        assert_eq!(drop_target(file, false, Some(("src/lib.rs", false))), None);
+        assert_eq!(drop_target("Cargo.toml", false, None), None);
+    }
+
+    #[test]
+    fn a_folder_never_drops_into_itself_or_below() {
+        assert_eq!(drop_target("src", true, Some(("src", true))), None);
+        assert_eq!(drop_target("src", true, Some(("src/驱动", true))), None);
+        assert_eq!(drop_target("src", true, Some(("src/main.rs", false))), None);
+        assert_eq!(
+            drop_target("src", true, Some(("firmware", true))).as_deref(),
+            Some("firmware")
+        );
+        // `src2` is beside `src`, not inside it.
+        assert_eq!(
+            drop_target("src", true, Some(("src2", true))).as_deref(),
+            Some("src2")
+        );
+    }
+
+    #[test]
+    fn a_path_follows_a_move_by_its_separator_not_its_prefix() {
+        assert_eq!(
+            moved_path("src", "src", "core/src").as_deref(),
+            Some("core/src")
+        );
+        assert_eq!(
+            moved_path("src/驱动/mod.rs", "src", "core/src").as_deref(),
+            Some("core/src/驱动/mod.rs")
+        );
+        assert_eq!(moved_path("src2/a.rs", "src", "core/src"), None);
+        assert_eq!(moved_path("README.md", "src", "lib"), None);
+        // Out to the root.
+        assert_eq!(
+            moved_path("a/b/c.rs", "a/b", "b").as_deref(),
+            Some("b/c.rs")
+        );
+        assert!(is_within("src/main.rs", "src"));
+        assert!(!is_within("src2/main.rs", "src"));
+        assert!(is_within("anything", ""));
+        assert_eq!(parent_dir("src/main.rs"), "src");
+        assert_eq!(parent_dir("main.rs"), "");
     }
 
     #[test]

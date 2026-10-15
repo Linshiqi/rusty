@@ -72,7 +72,7 @@ is happening; **Wokwi** for the board beside the code.
 
 ```
 ┌ title bar ────────────────────────────────────────────────────────────────┐
-│ rustfly ▾  ⎇ main ▾              [▶ │ ▣ ▾]                             ⌕ ≡  ─ □ ✕ │
+│ ◉ rustfly ▾  ⎇ main ▾            [▶ │ ▣ ▾]                             ⌕ ≡  ─ □ ✕ │
 ├ left dock ┬ editor ──────────────────────────────────────┬ right dock ────┤
 │ Project   │ main.rs   estimator.rs ×                     │ Board          │
 │ Search    │                                              │ Assistant      │
@@ -84,7 +84,9 @@ is happening; **Wokwi** for the board beside the code.
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **The title bar is the run loop.** On the left, which project (its menu
+- **The title bar is the run loop.** On the left, rusty's mark — the
+  window's icon, which opens the window's menu as a Windows app's icon does
+  — then which project (its menu
   is recents, open, new, clone, the playgrounds) and which branch. In the
   middle, Xcode's shape: the run button, *where* it runs — the simulator, a
   serial port, a probe or a USB bootloader, one list — and stop; the button
@@ -215,7 +217,10 @@ tests green, and CLAUDE.md saying how it works.
    copy for both windows), its imports brought along, and the signature of
    the call being typed; F12 and Ctrl+click to a definition — a
    dependency's or a toolchain header's opened read-only — references and
-   implementations in the picker, Alt+Left and Alt+Right through the jumps,
+   implementations in the picker, Ctrl over a name drawn as a link where it
+   has a definition, Alt+Left and Alt+Right (and the mouse's side buttons)
+   through VS Code's navigation history — tabs picked, files opened, jumps
+   and long moves, following the edits — not only the jumps,
    Ctrl+. for the server's fixes and the same fixes on the hover card under
    the problem, a click away; the bracket beside the caret boxed with its
    partner, and the name under it washed where else it occurs; F2 to
@@ -550,6 +555,18 @@ tests green, and CLAUDE.md saying how it works.
    where its view was scrolled, so a tab comes back where it was left. The
    probe splits `lib.rs`, opens `Cargo.toml` on the right and types there,
    presses in the left view to move the keys, and types there.
+
+   Then VS Code's strip and divider, after v0.7.0-rc.1 drew the split
+   button over the last tab and left the divider fixed at half: each strip's
+   tabs sit in a lane ending where its buttons begin, scrolled sideways by
+   the wheel, with the tab in front brought into view as it changes; the
+   divider drags, keeps each group 220 px wide, goes back to half on a
+   double-click and is kept in `workbench.toml` with the docks' sizes; and a
+   tab's right-click menu has VS Code's rows — the closes, the paths, Reveal
+   and Split right (`app/tab_menu.rs`), each an action the palette also
+   offers for the tab in front. `RUSTY_PROBE_TABS` opens a book's chapters
+   until the strip overflows, wheels it, drags and double-clicks the
+   divider, and uses the menu on both strips.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
@@ -603,6 +620,26 @@ tests green, and CLAUDE.md saying how it works.
    offers them. The probe's `RUSTY_PROBE_NAV` drives all three on
    `draw-vectors`' example.
 
+   Then the tree's own verbs, reported from the release candidate as "the
+   tree cannot make, copy, paste or rename anything": VS Code's explorer
+   (`app/tree.rs`, the arithmetic in `crate::tree`). A right-click on a
+   folder, a file or the space below the rows opens its own menu; a new
+   entry is named in a box among its future siblings and a rename in its
+   own row, the name refused under the box as it is typed — committed text
+   only — by `rusty_edit::name_problem`, the rule the library's rename
+   keeps, and by the tree's entries for a name that is taken. Cut, copy and
+   paste are the menu's and Ctrl+X, C and V while the tree has the keys,
+   which a click on a row gives it (the file opens; a double-click or Enter
+   gives the keys to the file), with the arrows, Enter, Space, F2 and
+   Delete. Delete goes to the recycle bin after asking; a drag moves, the
+   folder it would land in lit by `rusty_edit::drop_target`. A rename, a
+   drop or a cut pasted carries every tab, document, draft, fold, open
+   folder and breakpoint with the path, and the servers hear the old name
+   closed and the new one opened. Reveal is `crate::reveal`, for the tabs'
+   menu as well. The rows are one model changed in place, so the box being
+   typed in survives a re-read of the tree. `RUSTY_PROBE_TREE` works all of
+   it by pointer events at the rows and keys, on a copy of `draw-vectors`.
+
    Then two the release candidate was missed for, in the user's words:
    no New Window, two projects never open at once, and no way to see the
    keys. New Window starts this executable again with `--new-window`
@@ -622,9 +659,13 @@ tests green, and CLAUDE.md saying how it works.
    its row. `actions::Keymap` is the table with the rebound keys over it,
    kept in `workbench.toml`'s `keybinds`, which the old window wrote and
    nothing had read since; the window's key handler, the palette, the
-   editor's menu, the debugger's tooltips and the welcome page all read it.
-   Two-stroke chords are new: a stroke that begins one is held, said in a
-   note, and the code hands its next key to the window. Proven by
+   editor's, the tabs' and the tree's menus, the debugger's tooltips and
+   the welcome page all read it. Two-stroke chords are new: a stroke that
+   begins one is held, said in a note, and while it is held the code asks
+   the window about its next key before taking it for its own — ahead of
+   the path by which the code hands every key it does not use to the
+   bindings (`Shell::invoke_key`), which is how any other key reaches the
+   keymap from the code. Proven by
    `RUSTY_PROBE_KEYS` (Ctrl+K Ctrl+S from the code, Save moved to Ctrl+F7
    and used, Ctrl+S then saving nothing) and `RUSTY_PROBE_WINDOWS` (a
    second rusty on the welcome page, another project opened there, the

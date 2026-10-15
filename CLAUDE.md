@@ -783,8 +783,9 @@ exactly as with Vim off.
   `start..end` — and using `end` for both was the first bug, visible as the
   cursor landing one past every word.
 - **What it does not know, it names**, in the status line beside the mode. A
-  key that vanishes teaches people the editor is broken. `Ctrl+O`'s jump list
-  says so today rather than pretending.
+  key that vanishes teaches people the editor is broken. `Ctrl+O` and
+  `Ctrl+I` walk the editor's own history (*Back and forward*, under *Two
+  editor groups*), the one Alt+Left walks, and say so at either end.
 - **The switch is `workbench.toml`** (`vim`), read as the window starts and
   written the moment it changes. Landing in the wrong mode is not a shrug, it
   is twenty keystrokes doing something else.
@@ -1255,6 +1256,37 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   the split.
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
   split comes back with them (`app/strip.rs`).
+- **The divider is dragged, and where it was left is kept** with the docks'
+  sizes (`WindowLayout.split`, the left group's share): a 7 px hold on the
+  1 px line with a resize cursor, each group at least VS Code's 220 px while
+  there is room for two, and a double-click puts it back at half. The share
+  is the window's, not a project's, as the docks' sizes are.
+- **A tab is named by its group as well as its id.** One file can be a tab in
+  both groups under one id, so whatever closes or acts on a tab says which
+  group (`App::close_tab_in`, `tab_in`): the other strip's × once closed the
+  keys group's tab of the same file.
+- **A strip's tabs sit in a lane that ends where its buttons begin**
+  (`TabStrip`, `ui/pages.slint`), VS Code's shape: the split button drawn
+  over the strip covered the last tab's name. More tabs than fit scroll the
+  lane sideways under the wheel, either way of turning it, and the tab in
+  front is brought into view whenever it changes or the lane is resized —
+  from a timer a millisecond on, because a new tab's place is not laid out
+  while the tab is being made, and asked for it then is a binding loop.
+- **A tab's right-click menu is VS Code's** (`app/tab_menu.rs`): Close,
+  Close others, Close to the right, Close saved, Close all; Copy path, Copy
+  relative path (the system's separator, as VS Code's `auto`); Reveal in
+  File Explorer (Finder, or the containing folder, named as each system
+  names it); Split right — the file in the group to its right, a new one
+  when the window is not split. The paths, Reveal and the new group are the
+  tree's (`app/tree.rs`, `crate::reveal`), words and all, so a tab and a row
+  of the tree do them one way. Each row is an action, named and keyed as
+  the palette names and keys it, and the palette's way in acts on the tab
+  in front. What would do nothing is left out rather than offered: nothing
+  to close beside it, no file on disk behind a page or an expansion, no
+  group to the right of the right one. Every close goes through the one
+  close path, so a file with changes asks, and keeping one ends the batch.
+  A row for another verb is one more id in `ROWS` and one more arm in
+  `tab_verb`.
 - **The picker is where navigation lands** (`picker.rs`, `app/navigate.rs`):
   the palette (Ctrl+Shift+P), the finder (Ctrl+P), a line (Ctrl+G opens it
   with `:` typed — `42`, `42:7`), references (Shift+F12), implementations
@@ -1263,11 +1295,73 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   type is a jump, as a definition is, and nothing found says so rather than
   being a key that seems to do nothing (`App::show_places`). Every place
   arrives with its line (`rusty_lsp::Place`), because a row of `lib.rs:41`
-  is a riddle. `App::jump` is the one jump, and remembers where the caret
-  was for Alt+Left. Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
+  is a riddle. `App::jump` is the one jump, and the place it lands is a
+  place of its own for Alt+Left however near (*Back and forward*, below).
+  Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
   that know them need not learn ours; type definitions, the call hierarchy
   and a macro's expansion have no key, as in VS Code — whose Shift+Alt+H
   for the hierarchy is an Alt-letter chord, left here to AltGr.
+- **Back and forward are VS Code's navigation history, not a list of
+  jumps** (`crate::trail`, pure and tested; `app/navigate.rs` feeds and walks
+  it). Alt+Left walked only what `App::jump` had recorded, so after picking
+  a tab or clicking around it did nothing — reported in those words. Now
+  every place the caret settles is told to the trail: another file is a new
+  place (a tab picked, a file from the tree, the finder, a search result, a
+  problem), a jump is one however near it lands, and a move of ten lines or
+  more in one file is — a click, Ctrl+Home/End, Go to Line, a find, each
+  measured from the last settling, so the arrow keys never make one.
+  Anything else replaces the current place, which is why Back from the
+  newest place goes to where the caret *was*, not where it first arrived;
+  the same line twice is one place; a place recorded after Back drops what
+  was ahead. **The caret settles once a turn** (`App::caret_moved`, a 0 ms
+  timer): a file opened at a line shows its document's caret and then the
+  line, and recorded at both, the first was a place nobody went to. **A
+  walk is not a move**: the trail ignores the caret until it is somewhere
+  other than where the step left it, so a file still being read does not
+  end the walk, and the arrival is the place walked to. Places follow the
+  edits (`Surface::on_lines`, every edit's `Change`, on screen or off); a
+  place in a closed file reopens it, and a macro's expansion closed since
+  is passed over and forgotten. From a page Back goes to the file that was
+  in front. The mouse's side buttons are Slint 1.18's `PointerEventButton.
+  back` and `.forward`, taken where the code is drawn (both groups and the
+  margin): every other touch area in the window takes the press as its
+  own, and Slint has no hook before them short of the unstable winit
+  accessor. **And Alt+Left never reached Back from the editor at all**:
+  the keys land in the `TextInput` that holds what an input method
+  composes, a key the editor rejects goes on to that `TextInput`, and it
+  moves its own (empty) cursor on any arrow, Alt or not, and accepts — so
+  the root `FocusScope` with the bindings never heard it. What the editor
+  does not take is handed to the bindings from the editor's own key handler
+  now (`Shell::invoke_key`), before the `TextInput` sees it; found by the
+  probe dispatching Alt+Left as the platform does, not by reading the code.
+- **Ctrl over a name draws it as a link** (`editor/link.rs`) —
+  underlined, in the link colour (`Theme.link`, VS Code's
+  `editorLink.activeForeground`), the hand — where the server has a
+  definition for it: the definition itself is asked, as VS Code asks, and
+  nothing is drawn for an empty answer. Asked when the pointer moves with
+  Ctrl held and when Ctrl goes down with the pointer still, once the pointer
+  has rested on a name 60 ms, numbered so a late answer for another word is
+  dropped; gone when Ctrl comes up (the root `FocusScope` hears that from
+  any panel), the pointer leaves the name, the editor loses the keys or a
+  key goes down — a modifier on its own puts neither the link nor the hover
+  card away, as in VS Code. The rows draw it: the name's characters are
+  pieces of their own in the link's colour (`rows::kinds`), not an overlay
+  over the text, and the line under them is a mark (kind 11) placed by
+  `inlays::ink` like every other. **Ctrl+click follows the link drawn**
+  (`Surface::link_under`, `App::follow_link`) rather than asking again
+  about the point the click puts the caret at, so what is underlined is
+  what the click does. **Slint chooses the pointer's shape only on a pointer
+  event**, so a hand that comes or goes with the pointer still is made by
+  dispatching the window's last move again (`pointer_again`). The row's
+  "left" arrives after the next row's move, so it counts only for the row
+  the pointer is on (`link_left`). **The `TextInput` at the caret has no
+  width while nothing is composed** (`ui/editor.slint`, `sink`): a
+  `TextInput` takes the pointer over it, and its few pixels (more than the
+  two it was given: an empty one measures wider) sat exactly where a click
+  had just put the caret — so Ctrl over the name just
+  clicked, a Ctrl+click there, the hover card and a second click of a
+  double-click at the caret all went to it and not to the code. The probe
+  aimed three pixels past the caret and got nothing at all until then.
 - **The editor's right-click menu is VS Code's** (`App::editor_menu`):
   where the name leads, then rename and the fixes, then the palette, each
   row an action named and keyed as the palette names and keys it, and the
@@ -1672,9 +1766,43 @@ two. A file's diff is a page of its own. `app/git.rs` reads and writes,
 
 Move, copy, rename and delete what the tree shows go through
 `rusty_edit::entries` — confined to the root like every other write, every
-answer the relative path it produced. The Slint window's tree does not offer
-them yet (no drag-and-drop, no right-click verbs, no reveal); the rules below
-are the library's, and the ones the window must keep when it does.
+answer the relative path it produced. The tree is VS Code's explorer
+(`app/tree.rs`, its pure half `crate::tree`): a right-click on a folder
+offers New file…, New folder…, Reveal in File Explorer, Cut, Copy, Paste,
+Copy path, Copy relative path, Rename… and Delete; on a file, Open to the
+side in place of the three that make something; below the rows, the root's
+New file, New folder and Paste. The same verbs are keys while the tree has
+them — the arrows, Enter, Space, F2, Delete, Ctrl+X, Ctrl+C, Ctrl+V,
+Escape — and drag and drop moves; a new file or folder in the folder
+selected is also the dock's buttons and the palette's. `RUSTY_PROBE_TREE` drives all of it by the
+pointer and the keys and photographs it.
+
+- **A new entry is named where it will be**, VS Code's box: a row among its
+  future siblings — a folder first in its folder, a file after the folders
+  — the folder opened first (`tree::with_box`), and a rename in the entry's
+  own row with the name before its extension selected. Enter makes it,
+  Escape puts it away, a click elsewhere makes it when it can be made and
+  puts it away when it cannot. A new file opens in the editor. A new entry
+  may be a path (`src/x.rs` makes `src`), as VS Code's may; a rename is a
+  name.
+- **A name is refused under the box while it is typed, by the library's
+  rule** (`rusty_edit::name_problem`, which `rename_entry` keeps — so the
+  box and the write cannot disagree) and by the tree's own entries for a
+  name that is taken, never the disk on the thread that draws. **Only
+  committed text is judged**: the box judges when the input method has
+  nothing composing (`preedit-text`), so `f'l'y` on the way to 飞 is never a
+  name anybody typed. Enter over a refused name leaves the box saying why.
+- **The box is never made again under the keys typing into it.** The rows
+  are one model changed in place (`patch`: the rows before and after a
+  change keep their elements), because replaced whole on every sync — the
+  watcher's re-read, a tab switch — the box was a new element each time,
+  and the text being typed and the keys went with the old one.
+- **A click keeps the keys in the tree; a double-click or Enter gives them
+  to the file**, VS Code's single click: the file opens and the arrows still
+  walk the tree (`open_file_then`, which takes the keys back after the
+  editor has put them in the code). The tree follows the file in front —
+  selected, the folders above it opened, brought into view — once each time
+  it changes, so a folder closed over it stays closed (`explorer.autoReveal`).
 
 - **Move refuses an existing name; copy takes a free one.** An editor that
   silently replaces a file eats work, so a move or rename onto a taken name
@@ -1692,13 +1820,29 @@ are the library's, and the ones the window must keep when it does.
   and a panic there becomes an error. Every tab under the entry closes
   without a second question: the file is gone and a draft of it has nowhere
   to be saved.
-- **Paths that move take their state with them, before the watcher hears**:
-  the tabs, the documents, the expanded folders, and the servers, which hear
-  a moved file's old name closed and its new one opened. A path is under a
-  folder by its separator, not its prefix — `src2/a.rs` is not under `src`.
-- **A drop target is a pure rule, and a highlight follows it**: a file's row
-  stands for its folder, a folder never accepts itself or anything below it,
-  and the folder an entry is already in is not a move.
+- **Paths that move take their state with them, before the watcher hears**
+  (`App::follow_move`, after a rename, a drop and a cut pasted): the tabs in
+  both groups, the documents with their text, cursors, folds and history
+  (`Surface::moved`, painted again where the extension changed), the drafts
+  kept for them, the expanded folders, the breakpoints, the selection and
+  what is cut, and the servers, which hear a moved file's old name closed
+  and its new one opened. A path is under a folder by its separator, not its
+  prefix — `src2/a.rs` is not under `src` (`rusty_edit::moved_path`).
+- **A drop target is a pure rule, and a highlight follows it**
+  (`rusty_edit::drop_target`): a file's row stands for its folder, a folder
+  never accepts itself or anything below it, and the folder an entry is
+  already in is not a move. The drag is the row's own: a press pulled four
+  pixels carries it, and the row it is let go over is counted from the
+  pressed row in rows, since the pointer is that row's until it is let go;
+  past the last row is the root, lit as a frame round the list. Escape gives
+  a drag up, then a cut. No question before a drop, unlike VS Code's
+  default — a move is undone by dragging it back.
+- **Paste goes into the folder right-clicked, the folder selected, or a
+  selected file's folder** — the root below the rows; Paste is listed only
+  when something was cut or copied, since a menu row cannot be greyed. A cut
+  is drawn faint and used up by its paste; a copy stays to be pasted again.
+- **Reveal is one function, `crate::reveal`**, the tree's and a tab's; the
+  menu names the platform's file manager (`reveal::label_key`).
 - **Reveal is Explorer's `/select,"<path>"` as one raw argument** — a space
   after the comma makes Explorer open the home folder, and **so does a
   forward slash in the path**. The tree and the tabs name a file relative to
@@ -1710,7 +1854,9 @@ are the library's, and the ones the window must keep when it does.
   `raw_arg` so a space in a folder name holds. A path a program takes and a
   command line is handed are two different contracts. `open -R` on macOS,
   and the containing folder through `xdg-open` elsewhere, where no file
-  manager takes a selection portably.
+  manager takes a selection portably. A tab's menu reveals, copies a path
+  and opens to the side through the tree's own functions (`tree_reveal`,
+  `tree_copy_path`, `open_to_side`), so the two menus cannot disagree.
 
 ## Two crates from the wizard
 
@@ -2224,7 +2370,9 @@ Settings ▸ Keyboard); `app/shortcuts.rs` runs it and `ui/keys.slint` draws
 it.
 
 - **The binding in force is the key shown, everywhere.** The window's key
-  handler, the palette, the editor's menu, the debugger's tooltips
+  handler, the palette, the editor's, the tabs' and the tree's menus (the
+  rows that are actions — the tree's cut, copy, paste, rename and delete
+  are its own keys, like the editor's), the debugger's tooltips
   (`Shell.key-of`, a pure callback handed `keys-version` so it is asked
   again when a key changes) and the welcome page's line all read the
   keymap — never `Action::chord`, which is only the default.
@@ -2256,8 +2404,12 @@ it.
   A stroke that begins a chord in force is held, said in a note VS Code's
   words ("(Ctrl+K) was pressed. Waiting for the second key of the chord…"),
   and the next stroke completes it or is said not to be a command — taken
-  either way. The code asks the window first while a chord is half pressed
-  (`Surface::on_chord`), so `Ctrl+K Ctrl+C` is never a copy; a text field
+  either way. Every key the code does not take reaches the keymap through
+  `Shell::invoke_key` (*Two editor groups*, where Alt+Left once never
+  reached Back), chords' first strokes
+  included; while a chord is half pressed the code asks the window before
+  its own keymap (`Surface::on_chord`), so `Ctrl+K Ctrl+C` is never a
+  copy. A text field
   other than the code still types a bare second stroke, which is why a
   chord's second stroke follows the first's rule.
 
@@ -2432,7 +2584,10 @@ files, which `build.rs` bundles as gettext from the same TOML.
 `docs/slint.md` (*The window, designed again*) is the design; these are the
 rules it settled, each the answer to something that went wrong.
 
-- **The title bar is the run loop.** On the left, which project (its menu is
+- **The title bar is the run loop.** On the left, rusty's mark — the
+  window's own icon, never a gear, which read as a Settings button that did
+  nothing — opening the window's menu as a Windows app's icon opens its own;
+  which project (its menu is
   recents, open, new, clone, the playgrounds) and which branch; in the
   middle, Xcode's shape — the run button and *where* it runs, the simulator,
   a serial port, a probe or a USB bootloader, one list chosen once
@@ -2553,7 +2708,8 @@ is no browser storage, and what the window remembers between runs is
   folder is the cloud-sync story.
 - `workbench.toml` (`config::WorkbenchState`) is the recents, the window's
   layout and theme and scale (`WindowLayout`: each dock's size, whether it is
-  open and which panel was in front), the editor's switches (`vim`,
+  open and which panel was in front, and where the editor groups part), the
+  editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so
   another spelling of the same directory finds it), the rebound keys
