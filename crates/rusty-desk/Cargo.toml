@@ -43,6 +43,8 @@ tokio = { version = "1.53.1", features = ["rt", "macros", "sync", "time"] }
 rfd = "0.16.0"
 arboard = "3.6.1"
 regex = "1.13.1"
+# A problem copied as VS Code copies one: JSON, its message escaped whole.
+serde_json = "1.0.151"
 sys-locale = "0.3.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 

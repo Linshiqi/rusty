@@ -13,6 +13,25 @@ use super::host::Strong;
 
 pub const TAB_COLUMNS: f32 = 4.0;
 
+/// The editor's text as designed, before Ctrl and the wheel scale it.
+const FONT: f32 = 12.5;
+/// A row as tall as its text is, times this: 19 pixels at 12.5.
+const LINE: f32 = 1.52;
+/// The margin's numbers as designed, beside the 20 pixels the fold's
+/// chevron takes.
+const NUMBERS: f32 = 44.0;
+
+/// What the editor's text is at `scale`: the font's size, the row height
+/// every layer reads — a whole number of pixels, since two layers rounding
+/// a fractional height their own way were a line apart by row eighty — and
+/// the margin's width, which grows with the numbers in it.
+pub fn text_size(scale: f32) -> (f32, f32, f32) {
+    let font = FONT * scale;
+    let row = (font * LINE).round().max(1.0);
+    let gutter = (NUMBERS * scale).round() + 20.0;
+    (font, row, gutter)
+}
+
 pub struct Metrics {
     ascii: f32,
     wide: HashMap<char, f32>,
@@ -105,4 +124,25 @@ impl Metrics {
 
 fn width_of(window: &Strong, text: &str) -> f32 {
     window.probe_width(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// At its own size the editor is what it always was — 12.5 pixels of
+    /// text on rows of 19, a margin of 64 — and every size gives whole
+    /// rows, growing with the text.
+    #[test]
+    fn the_text_size_is_whole_rows_that_grow_with_the_text() {
+        assert_eq!(text_size(1.0), (12.5, 19.0, 64.0));
+        let mut last = 0.0;
+        for tenths in 5..=30 {
+            let (font, row, gutter) = text_size(tenths as f32 / 10.0);
+            assert_eq!(row, row.round(), "{tenths}: a row of {row}");
+            assert!(row > font && row >= last, "{tenths}: {font} on {row}");
+            assert!(gutter >= 20.0 + font * 3.0, "{tenths}: {gutter}");
+            last = row;
+        }
+    }
 }

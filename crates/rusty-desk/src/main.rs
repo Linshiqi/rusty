@@ -19,6 +19,7 @@ mod lsp;
 mod markdown;
 mod picker;
 mod probe;
+mod probe_surfaces;
 mod project;
 mod reveal;
 mod run;

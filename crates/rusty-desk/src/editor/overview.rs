@@ -59,6 +59,14 @@ impl Default for Overview {
     }
 }
 
+impl Overview {
+    /// The stuck lines are placed again at the next look: the text's size
+    /// changed, which moves every character in them.
+    pub(super) fn forget_stuck(&self) {
+        *self.stuck.borrow_mut() = Default::default();
+    }
+}
+
 impl Surface {
     /// The switches in Settings ▸ Editor: what is drawn around the code.
     pub fn set_view(&self, view: rusty_embed::EditorView) {

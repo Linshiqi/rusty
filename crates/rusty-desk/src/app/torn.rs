@@ -33,9 +33,9 @@ pub(super) struct Torn {
     pub path: String,
     /// Puts away what the last key here could not do.
     message: Timer,
-    /// The interface's zoom last put on this window, over the display's
-    /// own factor, which is the window's factor divided by it.
-    zoomed: Cell<f32>,
+    /// The factor this window last asked for and the zoom it asked it at,
+    /// from which the display's own factor is worked back (`zoom::apply_to`).
+    asked: Cell<Option<(f32, f32)>>,
 }
 
 impl Torn {
@@ -175,17 +175,20 @@ impl App {
             surface: surface.clone(),
             path: path.clone(),
             message: Timer::default(),
-            zoomed: Cell::new(1.0),
+            asked: Cell::new(None),
         });
         // Off the main window's strip; the document stays open, since the
         // new window is a view of it now.
         self.drop_tab(other, &Tab::File(path.clone()).id());
-        let (view, vim) = {
+        let (view, vim, text) = {
             let state = self.state.borrow();
-            (state.view, state.vim)
+            (state.view, state.vim, state.layout.editor_zoom)
         };
         surface.set_view(view);
         surface.set_vim(vim);
+        // The editor's text at the size it has in every window, before the
+        // file is shown at it.
+        surface.take_scale(text);
         self.place_torn(&window, at);
         if let Err(error) = window.show() {
             self.note(2, error.to_string());
@@ -220,22 +223,25 @@ impl App {
 
     /// A window of its own takes the main window's theme and zoom: the
     /// zoom over its own display's factor, which may not be the main
-    /// window's display.
+    /// window's display, by the main window's rule (`zoom::apply_to`) —
+    /// called again whenever the window takes a new size, which is how its
+    /// display's factor arrives.
     fn dress_torn(&self, torn: &Torn) {
         let (theme, zoom) = {
             let state = self.state.borrow();
             (state.layout.theme.clone(), state.layout.zoom)
         };
         torn.window.global::<Shell>().set_theme_choice(theme.into());
-        let window = torn.window.window();
-        let display = window.scale_factor() / torn.zoomed.get();
-        let wanted = display * zoom;
-        if (window.scale_factor() - wanted).abs() > 0.001 {
-            window.dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
-                scale_factor: wanted,
-            });
+        crate::zoom::apply_to(torn.window.window(), &torn.asked, zoom);
+    }
+
+    /// The interface's zoom worked out again for the window `id`: it took
+    /// a new size.
+    fn torn_resized(&self, id: usize) {
+        let zoom = self.state.borrow().layout.zoom;
+        if let Some(torn) = self.torn.borrow().iter().find(|torn| torn.id() == id) {
+            crate::zoom::apply_to(torn.window.window(), &torn.asked, zoom);
         }
-        torn.zoomed.set(zoom);
     }
 
     fn wire_torn(self: &Rc<Self>, window: &TornWindow, surface: &Rc<Surface>) {
@@ -261,6 +267,20 @@ impl App {
         surface.on_lines(move |path, first, removed, added| {
             if let Some(app) = weak.upgrade() {
                 app.lines_moved(path, first, removed, added);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        window.on_resized(move || {
+            if let Some(app) = weak.upgrade() {
+                app.torn_resized(id);
+            }
+        });
+        // Ctrl and the wheel over the code here size the editor's text, in
+        // every window: one size for all (`Surface::set_scale`).
+        let weak = Rc::downgrade(self);
+        window.global::<crate::Code>().on_zoom(move |delta| {
+            if let Some(app) = weak.upgrade() {
+                app.content_zoom("editor", delta);
             }
         });
         let weak = Rc::downgrade(self);

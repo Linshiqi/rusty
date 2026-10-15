@@ -101,13 +101,18 @@ export component SearchPanel inherits Rectangle {
         }
         ListView {
             vertical-stretch: 1;
-            for row in Shell.search-rows: Rectangle {
+            for row[at] in Shell.search-rows: Rectangle {
                 height: 22px;
                 background: touch.has-hover && !row.file ? Theme.sunken : transparent;
                 touch := TouchArea {
                     clicked => {
                         if (!row.file) {
                             Shell.search-open(row.index);
+                        }
+                    }
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                            Shell.surface-menu("search", "", at, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                         }
                     }
                 }

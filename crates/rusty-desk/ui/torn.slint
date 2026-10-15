@@ -45,6 +45,17 @@ export component TornWindow inherits Window {
     // The tab back among the main window's.
     callback move-back();
 
+    // The window took a new size: made on its display, resized, or moved
+    // to a display of another scale — its zoom is worked out again, as the
+    // main window's is (`zoom::apply_to`).
+    callback resized();
+    changed width => {
+        root.resized();
+    }
+    changed height => {
+        root.resized();
+    }
+
     public function focus-code() {
         code.focus-input();
     }
