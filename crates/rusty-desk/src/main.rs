@@ -20,6 +20,7 @@ mod probe;
 mod project;
 mod reveal;
 mod run;
+mod trail;
 mod tree;
 mod work;
 mod zoom;

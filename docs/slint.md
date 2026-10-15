@@ -211,7 +211,10 @@ tests green, and CLAUDE.md saying how it works.
    copy for both windows), its imports brought along, and the signature of
    the call being typed; F12 and Ctrl+click to a definition — a
    dependency's or a toolchain header's opened read-only — references and
-   implementations in the picker, Alt+Left and Alt+Right through the jumps,
+   implementations in the picker, Ctrl over a name drawn as a link where it
+   has a definition, Alt+Left and Alt+Right (and the mouse's side buttons)
+   through VS Code's navigation history — tabs picked, files opened, jumps
+   and long moves, following the edits — not only the jumps,
    Ctrl+. for the server's fixes and the same fixes on the hover card under
    the problem, a click away; the bracket beside the caret boxed with its
    partner, and the name under it washed where else it occurs; F2 to

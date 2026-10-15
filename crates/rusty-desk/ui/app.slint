@@ -59,6 +59,12 @@ export component AppWindow inherits Window {
             }
             reject
         }
+        // Ctrl let go wherever the keys are: a name drawn as a link under a
+        // pointer that has not moved is put away with it.
+        key-released(event) => {
+            Code.key-released(event);
+            reject
+        }
 
         VerticalLayout {
             TitleBar {
