@@ -1,9 +1,15 @@
-//! What the installer carries: the app's files, zipped and appended to the
-//! installer's own executable, with a footer that says where they start.
+//! What the installer carries: the app's files, in one tar compressed whole
+//! with xz and appended to the installer's own executable, with a footer
+//! that says where they start.
 //!
 //! ```text
-//! [ the installer itself ][ zip of the install directory ][ length: u64 LE ][ MAGIC ]
+//! [ the installer itself ][ tar.xz of the install directory ][ length: u64 LE ][ MAGIC ]
 //! ```
+//!
+//! **Compressed whole, not per file.** The tools carry many files that are
+//! nearly each other — a gdb per chip, a ROM per revision — and LZMA over
+//! the whole tar compresses them against each other: measured on the
+//! bundle, 59 MB where per-file deflate made 124 and per-file xz 107.
 //!
 //! One file to download and run, as an NSIS installer is, with nothing for
 //! a packager to get wrong between the build and the release: the release
@@ -13,24 +19,28 @@
 //! `uninstall.exe`.
 
 use std::{
-    io::{self, Read, Seek, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
 /// The last eight bytes of an installer that carries a payload.
-pub const MAGIC: &[u8; 8] = b"RUSTYPK1";
+pub const MAGIC: &[u8; 8] = b"RUSTYPK2";
+
+/// The xz preset: the strongest without `--extreme`, which costs minutes in
+/// the release workflow for a percent.
+const PRESET: u32 = 9;
 
 /// The footer: the payload's length, then [`MAGIC`].
 const FOOTER: usize = 16;
 
-/// Zip every file under `dir` and write `stub` with it appended to `out`.
-/// The number of files carried.
+/// Every file under `dir` in one tar, xz-compressed, written to `out` after
+/// `stub`. The number of files carried.
 pub fn pack(stub: &[u8], dir: &Path, out: &mut impl Write) -> io::Result<usize> {
-    let mut zip = Vec::new();
-    let count = zip_dir(dir, io::Cursor::new(&mut zip))?;
+    let mut packed = Vec::new();
+    let count = tar_xz(dir, &mut packed)?;
     out.write_all(stub)?;
-    out.write_all(&zip)?;
-    out.write_all(&(zip.len() as u64).to_le_bytes())?;
+    out.write_all(&packed)?;
+    out.write_all(&(packed.len() as u64).to_le_bytes())?;
     out.write_all(MAGIC)?;
     Ok(count)
 }
@@ -74,67 +84,47 @@ fn slashed(rel: &Path) -> String {
         .join("/")
 }
 
-fn zip_dir(dir: &Path, sink: impl Write + Seek) -> io::Result<usize> {
-    let mut writer = zip::ZipWriter::new(sink);
+fn tar_xz(dir: &Path, sink: &mut Vec<u8>) -> io::Result<usize> {
     let files = files_under(dir)?;
+    let encoder = liblzma::write::XzEncoder::new_parallel(sink, PRESET);
+    let mut tar = tar::Builder::new(encoder);
+    // Names, sizes and modes; no owners or times, so the same tree packs to
+    // the same bytes.
+    tar.mode(tar::HeaderMode::Deterministic);
     for rel in &files {
-        let mut options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .large_file(true);
-        // Kept executable where that is a file's mode.
-        if let Some(mode) = mode_of(&dir.join(rel)) {
-            options = options.unix_permissions(mode);
-        }
-        writer
-            .start_file(rel.as_str(), options)
-            .map_err(io::Error::other)?;
-        let mut file = std::fs::File::open(dir.join(rel))?;
-        io::copy(&mut file, &mut writer)?;
+        tar.append_path_with_name(dir.join(rel), rel)?;
     }
-    writer.finish().map_err(io::Error::other)?;
+    tar.into_inner()?.finish()?;
     Ok(files.len())
 }
 
-#[cfg(unix)]
-fn mode_of(path: &Path) -> Option<u32> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).ok().map(|m| m.permissions().mode())
-}
-
-#[cfg(not(unix))]
-fn mode_of(_: &Path) -> Option<u32> {
-    None
-}
-
-/// Unpack `zip` into `to`: the relative paths written, in its order. A
+/// Unpack `payload` into `to`: the relative paths written, in its order. A
 /// name that would land outside `to` — `..`, an absolute path — is refused,
 /// not written somewhere else.
-pub fn unpack(zip: &[u8], to: &Path) -> io::Result<Vec<String>> {
-    let mut archive = zip::ZipArchive::new(io::Cursor::new(zip)).map_err(io::Error::other)?;
+pub fn unpack(payload: &[u8], to: &Path) -> io::Result<Vec<String>> {
+    let mut archive = tar::Archive::new(liblzma::read::XzDecoder::new_parallel(payload));
+    archive.set_preserve_permissions(true);
     let mut written = Vec::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(io::Error::other)?;
-        if entry.is_dir() {
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if !entry.header().entry_type().is_file() {
             continue;
         }
-        let Some(rel) = entry.enclosed_name() else {
+        let rel = entry.path()?.into_owned();
+        if !rel
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+        {
             return Err(io::Error::other(format!(
                 "the payload names a file outside the install: {}",
-                entry.name()
+                rel.display()
             )));
-        };
+        }
         let path = to.join(&rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut bytes)?;
-        std::fs::write(&path, bytes)?;
-        #[cfg(unix)]
-        if let Some(mode) = entry.unix_mode() {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))?;
-        }
+        entry.unpack(&path)?;
         written.push(slashed(&rel));
     }
     Ok(written)

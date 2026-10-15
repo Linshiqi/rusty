@@ -21,7 +21,7 @@ fn main() {
         .and_then(|path| std::fs::read(path).ok())
         .unwrap_or_default();
     let done = match rusty_setup::payload::find(&exe) {
-        Some((own, zip)) => windows::install(own, zip, &flags),
+        Some((own, payload)) => windows::install(own, payload, &flags),
         None => windows::uninstall(&flags),
     };
     if let Err(why) = done {
@@ -66,7 +66,7 @@ mod windows {
         )
     }
 
-    pub fn install(own: &[u8], zip: &[u8], flags: &Flags) -> Result<(), String> {
+    pub fn install(own: &[u8], payload: &[u8], flags: &Flags) -> Result<(), String> {
         let dir = flags
             .dir
             .clone()
@@ -86,7 +86,7 @@ mod windows {
         if let Some(pid) = flags.wait {
             shell::wait_for(pid);
         }
-        files::install(zip, &dir, &[UNINSTALLER])?;
+        files::install(payload, &dir, &[UNINSTALLER])?;
         // The installer without its payload is the uninstaller.
         let uninstaller = dir.join(UNINSTALLER);
         let _ = std::fs::remove_file(&uninstaller);

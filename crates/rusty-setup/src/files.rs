@@ -42,14 +42,14 @@ pub fn installed(dir: &Path) -> Vec<String> {
 /// Put the payload's files in `dir`, take away what an earlier install
 /// left that this one does not carry, and write down what is there now —
 /// `extra` too, the files the installer writes itself (`uninstall.exe`).
-pub fn install(zip: &[u8], dir: &Path, extra: &[&str]) -> Result<Vec<String>, String> {
+pub fn install(payload: &[u8], dir: &Path, extra: &[&str]) -> Result<Vec<String>, String> {
     let fail = |what: &str, e: std::io::Error| format!("{what}: {e}");
     std::fs::create_dir_all(dir).map_err(|e| fail(&dir.display().to_string(), e))?;
     sweep_old(dir);
     let before = installed(dir);
     let staging = dir.join(STAGING);
     let _ = std::fs::remove_dir_all(&staging);
-    let carried = payload::unpack(zip, &staging).map_err(|e| fail("unpacking", e))?;
+    let carried = payload::unpack(payload, &staging).map_err(|e| fail("unpacking", e))?;
     for rel in &carried {
         let target = dir.join(rel);
         if let Some(parent) = target.parent() {
@@ -151,8 +151,8 @@ mod tests {
         dir
     }
 
-    fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
-        let from = scratch(&format!("zip{}", files.len()));
+    fn payload_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let from = scratch(&format!("payload{}", files.len()));
         for (rel, bytes) in files {
             let path = from.join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -172,12 +172,12 @@ mod tests {
     fn the_list_decides_what_goes_and_nothing_else_does() {
         let dir = scratch("over");
         std::fs::write(dir.join("notes.txt"), b"mine").unwrap();
-        let zip = zip_of(&[
+        let payload = payload_of(&[
             ("rusty.exe", b"slint"),
             ("bundled/espflash.exe", b"espflash"),
             ("bundled/old-tool/tool.exe", b"tool"),
         ]);
-        let now = install(&zip, &dir, &["uninstall.exe"]).unwrap();
+        let now = install(&payload, &dir, &["uninstall.exe"]).unwrap();
         assert_eq!(
             now,
             [
@@ -190,8 +190,8 @@ mod tests {
         assert!(!dir.join(STAGING).exists());
 
         // The next version drops a tool and changes another.
-        let zip = zip_of(&[("rusty.exe", b"slint 2"), ("bundled/espflash.exe", b"new")]);
-        let now = install(&zip, &dir, &["uninstall.exe"]).unwrap();
+        let payload = payload_of(&[("rusty.exe", b"slint 2"), ("bundled/espflash.exe", b"new")]);
+        let now = install(&payload, &dir, &["uninstall.exe"]).unwrap();
         assert_eq!(now, ["bundled/espflash.exe", "rusty.exe", "uninstall.exe"]);
         assert_eq!(std::fs::read(dir.join("rusty.exe")).unwrap(), b"slint 2");
         assert_eq!(
@@ -208,8 +208,8 @@ mod tests {
         );
 
         // And the one after carries no tools at all.
-        let zip = zip_of(&[("rusty.exe", b"slint 3")]);
-        install(&zip, &dir, &["uninstall.exe"]).unwrap();
+        let payload = payload_of(&[("rusty.exe", b"slint 3")]);
+        install(&payload, &dir, &["uninstall.exe"]).unwrap();
         assert!(!dir.join("bundled").exists());
 
         std::fs::write(dir.join("uninstall.exe"), b"me").unwrap();
