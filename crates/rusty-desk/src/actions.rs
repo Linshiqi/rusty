@@ -14,6 +14,17 @@ pub struct Action {
     pub listed: bool,
 }
 
+/// What showing a file in the file manager is called where it runs, as VS
+/// Code calls it: Explorer and Finder select the file, and elsewhere its
+/// folder is opened.
+const REVEAL: &str = if cfg!(windows) {
+    "strip.reveal-explorer"
+} else if cfg!(target_os = "macos") {
+    "strip.reveal-finder"
+} else {
+    "strip.reveal-folder"
+};
+
 const fn action(id: &'static str, title: &'static str, chord: Option<&'static str>) -> Action {
     Action {
         id,
@@ -92,6 +103,15 @@ pub const ALL: &[Action] = &[
         Some("Shift+F8"),
     ),
     action("tab.close", "desk.close-tab", Some("Ctrl+W")),
+    // A tab's right-click menu (`app/tab_menu.rs`); from the palette, for
+    // the tab in front.
+    action("tab.close-others", "strip.close-others", None),
+    action("tab.close-right", "strip.close-right", None),
+    action("tab.close-saved", "strip.close-saved", None),
+    action("tab.close-all", "strip.close-all", None),
+    action("tab.copy-path", "strip.copy-path", None),
+    action("tab.copy-relative-path", "strip.copy-relative-path", None),
+    action("tab.reveal", REVEAL, None),
     action("dock.left", "desk.dock-left", Some("Ctrl+B")),
     action("dock.bottom", "desk.dock-bottom", Some("Ctrl+J")),
     action("dock.right", "desk.dock-right", Some("Ctrl+Alt+B")),
@@ -156,6 +176,14 @@ pub const ALL: &[Action] = &[
         chord: None,
         listed: false,
     },
+    // A tab's file opened in the group to its right; the palette has Split
+    // editor for the tab in front.
+    Action {
+        id: "tab.split-right",
+        title: "strip.split-right",
+        chord: None,
+        listed: false,
+    },
     // An update's steps, reached from Settings, a note and the status bar.
     Action {
         id: "update.download",
@@ -208,6 +236,19 @@ mod tests {
                     assert_ne!(a.chord, b.chord, "{} and {} share a key", a.id, b.id);
                 }
             }
+        }
+    }
+
+    /// Reveal is named per system, and a build only checks its own system's
+    /// name: the other two are held here.
+    #[test]
+    fn every_systems_reveal_is_in_the_catalogue() {
+        for key in [
+            "strip.reveal-explorer",
+            "strip.reveal-finder",
+            "strip.reveal-folder",
+        ] {
+            assert!(rusty_i18n::translate(key).is_some(), "{key} is missing");
         }
     }
 

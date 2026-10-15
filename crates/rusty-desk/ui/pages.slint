@@ -12,7 +12,7 @@ import { Transport } from "debug.slint";
 import { ScrollView, Switch } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
-import { Button, IconButton, RowButton, Caption, Segments } from "widgets.slint";
+import { Button, IconButton, RowButton, Caption, Segments, Splitter } from "widgets.slint";
 import { WizardPage } from "wizard.slint";
 import { Shell, DocTab } from "shell.slint";
 import { CodeView, ShadeView } from "editor.slint";
@@ -20,7 +20,11 @@ import { EnvironmentPage } from "environment.slint";
 import { NotYet } from "docks.slint";
 
 // A group's tabs: the one in front lit, the rust line over it while the
-// group has the keys, as VS Code marks the active group's.
+// group has the keys, as VS Code marks the active group's. VS Code's shape:
+// the tabs sit in a lane that ends where the strip's own buttons begin, so
+// no tab is ever under one, and when there are more than fit the lane
+// scrolls sideways under the wheel; the tab in front is brought into view
+// whenever it changes, or the lane is resized.
 component TabStrip inherits Rectangle {
     in property <[DocTab]> tabs;
     in property <string> active;
@@ -29,81 +33,174 @@ component TabStrip inherits Rectangle {
     in property <bool> splits;
     callback pick(string);
     callback close(string);
+    // A right-click on a tab, at a point of the window.
+    callback menu(string, length, length);
     height: 36px;
     background: Theme.window;
-    HorizontalLayout {
-        alignment: start;
-        for tab in root.tabs: Rectangle {
-            width: min(row.preferred-width, 240px);
-            background: tab.id == root.active ? Theme.content : touch.has-hover ? Theme.hover : transparent;
-            row := HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 6px;
-                spacing: 6px;
-                Text {
-                    text: tab.title;
-                    color: tab.id == root.active ? Theme.label : Theme.label-2;
-                    font-size: Theme.small;
-                    vertical-alignment: center;
-                }
-                if tab.hint != "": Text {
-                    text: tab.hint;
-                    color: Theme.label-3;
-                    font-size: Theme.caption;
-                    vertical-alignment: center;
-                }
-                Rectangle {
-                    width: 20px;
-                    if tab.dirty && !close-touch.has-hover: Rectangle {
-                        width: 7px;
-                        height: 7px;
-                        border-radius: 3.5px;
-                        background: Theme.label-2;
-                    }
-                    if !tab.dirty || close-touch.has-hover: Icon {
-                        path: Icons.close;
-                        size: 12px;
-                        color: close-touch.has-hover ? Theme.label : touch.has-hover || tab.id == root.active ? Theme.label-3 : transparent;
-                    }
-                    close-touch := TouchArea {
-                        clicked => {
-                            root.close(tab.id);
-                        }
-                    }
-                }
-            }
-            // The tab in front has the rust line on top, as VS Code's does.
-            if tab.id == root.active && root.focused: Rectangle {
-                y: 0;
-                height: 2px;
-                background: Theme.rust;
-            }
-            touch := TouchArea {
-                z: -1;
-                clicked => {
-                    root.pick(tab.id);
-                }
-                pointer-event(event) => {
-                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.middle) {
-                        root.close(tab.id);
-                    }
-                }
-            }
-            Rectangle {
-                x: parent.width - 1px;
-                width: 1px;
-                background: Theme.line;
-            }
+
+    // How far the lane is scrolled, as last set; what is drawn is that kept
+    // inside how far the tabs can travel, so closing tabs never leaves the
+    // lane scrolled past its end.
+    property <length> scroll;
+    property <length> travel: max(0px, lane.preferred-width - view.width);
+    property <length> offset: clamp(root.scroll, 0px, root.travel);
+
+    changed travel => {
+        root.scroll = root.offset;
+    }
+
+    // A tab at `x` of the lane, `w` wide: scrolled just far enough to show
+    // it whole, and not at all when it is.
+    function reveal(x: length, w: length) {
+        if (x < root.offset) {
+            root.scroll = x;
+        } else if (x + w > root.offset + view.width) {
+            root.scroll = min(x, x + w - view.width);
+        } else {
+            root.scroll = root.offset;
         }
     }
-    // Ctrl+\: the file in front, beside itself.
-    if root.splits && root.tabs.length > 0: IconButton {
-        x: parent.width - self.width - 6px;
-        y: (parent.height - self.height) / 2;
-        icon: Icons.columns;
-        tip: @tr("desk.split");
-        clicked => {
-            Shell.act("editor.split");
+
+    HorizontalLayout {
+        view := Rectangle {
+            horizontal-stretch: 1;
+            clip: true;
+            // Under the tabs, which leave the wheel alone: either way of
+            // turning it moves the lane sideways, as VS Code's does.
+            TouchArea {
+                scroll-event(event) => {
+                    if (root.travel <= 0px) {
+                        return reject;
+                    }
+                    root.scroll = clamp(root.offset - (abs(event.delta-x) > abs(event.delta-y) ? event.delta-x : event.delta-y), 0px, root.travel);
+                    accept
+                }
+            }
+            lane := HorizontalLayout {
+                x: -root.offset;
+                width: self.preferred-width;
+                height: parent.height;
+                alignment: start;
+                for tab in root.tabs: tab-box := Rectangle {
+                    // In front, and where it is: either changing brings it
+                    // into view, once the lane has been laid out again.
+                    property <bool> front: tab.id == root.active;
+                    property <length> at: self.x;
+                    property <length> room: view.width;
+                    changed front => {
+                        if (self.front) {
+                            show.running = true;
+                        }
+                    }
+                    changed at => {
+                        if (self.front) {
+                            show.running = true;
+                        }
+                    }
+                    changed room => {
+                        if (self.front) {
+                            show.running = true;
+                        }
+                    }
+                    init => {
+                        if (self.front) {
+                            show.running = true;
+                        }
+                    }
+                    show := Timer {
+                        interval: 1ms;
+                        running: false;
+                        triggered => {
+                            self.running = false;
+                            root.reveal(tab-box.x, tab-box.width);
+                        }
+                    }
+                    width: min(row.preferred-width, 240px);
+                    background: tab.id == root.active ? Theme.content : touch.has-hover ? Theme.hover : transparent;
+                    row := HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 6px;
+                        spacing: 6px;
+                        Text {
+                            text: tab.title;
+                            color: tab.id == root.active ? Theme.label : Theme.label-2;
+                            font-size: Theme.small;
+                            vertical-alignment: center;
+                        }
+                        if tab.hint != "": Text {
+                            text: tab.hint;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            width: 20px;
+                            if tab.dirty && !close-touch.has-hover: Rectangle {
+                                width: 7px;
+                                height: 7px;
+                                border-radius: 3.5px;
+                                background: Theme.label-2;
+                            }
+                            if !tab.dirty || close-touch.has-hover: Icon {
+                                path: Icons.close;
+                                size: 12px;
+                                color: close-touch.has-hover ? Theme.label : touch.has-hover || tab.id == root.active ? Theme.label-3 : transparent;
+                            }
+                            close-touch := TouchArea {
+                                clicked => {
+                                    root.close(tab.id);
+                                }
+                                pointer-event(event) => {
+                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                        root.menu(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // The tab in front has the rust line on top, as VS Code's does.
+                    if tab.id == root.active && root.focused: Rectangle {
+                        y: 0;
+                        height: 2px;
+                        background: Theme.rust;
+                    }
+                    touch := TouchArea {
+                        z: -1;
+                        clicked => {
+                            root.pick(tab.id);
+                        }
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.middle) {
+                                root.close(tab.id);
+                            }
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                root.menu(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            }
+                        }
+                    }
+                    Rectangle {
+                        x: parent.width - 1px;
+                        width: 1px;
+                        background: Theme.line;
+                    }
+                }
+            }
+        }
+        // The strip's own buttons, after the lane rather than over it.
+        // Ctrl+\: the file in front, beside itself.
+        if root.splits && root.tabs.length > 0: HorizontalLayout {
+            // As wide as its buttons: the lane takes the rest.
+            horizontal-stretch: 0;
+            padding-left: 4px;
+            padding-right: 6px;
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: Icons.columns;
+                tip: @tr("desk.split");
+                clicked => {
+                    Shell.act("editor.split");
+                }
+            }
         }
     }
     Rectangle {
@@ -133,10 +230,12 @@ component Welcome inherits Rectangle {
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Icon {
-                        path: Icons.settings;
-                        size: 34px;
-                        color: Theme.rust;
+                    Image {
+                        source: @image-url("../icons/rusty.png");
+                        width: 40px;
+                        height: 40px;
+                        image-rendering: smooth;
+                        y: (parent.height - self.height) / 2;
                     }
                     VerticalLayout {
                         alignment: center;
@@ -614,7 +713,11 @@ export component EditorArea inherits Rectangle {
     VerticalLayout {
         if Shell.playground != "": PlaygroundBar { }
         panes := Rectangle {
-            property <length> left: Shell.split ? round(self.width / 2 / 1px) * 1px : self.width;
+            // Where the groups part: the share the divider was left at,
+            // each side kept at least VS Code's minimum while there is
+            // room for two.
+            property <length> least: min(220px, (self.width - 1px) / 2);
+            property <length> left: Shell.split ? clamp(round(self.width * Shell.split-share / 1px) * 1px, self.least, self.width - 1px - self.least) : self.width;
             property <length> right: self.width - self.left - 1px;
             property <bool> on-right: Shell.split && Shell.focus-group == 1;
             live := Rectangle {
@@ -630,6 +733,9 @@ export component EditorArea inherits Rectangle {
                         }
                         close(id) => {
                             Shell.close-tab(id);
+                        }
+                        menu(id, x, y) => {
+                            Shell.tab-menu(id, false, x, y);
                         }
                     }
                     Rectangle {
@@ -690,6 +796,9 @@ export component EditorArea inherits Rectangle {
                         close(id) => {
                             Shell.shade-close(id);
                         }
+                        menu(id, x, y) => {
+                            Shell.tab-menu(id, true, x, y);
+                        }
                     }
                     Rectangle {
                         if Shell.shade-kind == "file": ShadeView { }
@@ -700,10 +809,26 @@ export component EditorArea inherits Rectangle {
                     }
                 }
             }
-            if Shell.split: Rectangle {
+            // The divider: dragged, the groups part elsewhere, and the share
+            // is kept when it is let go; a double-click puts it at half.
+            if Shell.split: Splitter {
+                property <float> start;
                 x: panes.left;
                 width: 1px;
-                background: Theme.line;
+                height: parent.height;
+                pressed => {
+                    self.start = panes.left / panes.width;
+                }
+                dragged(travel) => {
+                    Shell.split-share = clamp(self.start + travel / panes.width, panes.least / panes.width, 1 - (panes.least + 1px) / panes.width);
+                }
+                released => {
+                    Shell.split-resized(Shell.split-share);
+                }
+                reset => {
+                    Shell.split-share = 0.5;
+                    Shell.split-resized(0.5);
+                }
             }
         }
     }

@@ -15,6 +15,7 @@ mod keys;
 mod language;
 mod lsp;
 mod markdown;
+mod os_paths;
 mod picker;
 mod probe;
 mod project;

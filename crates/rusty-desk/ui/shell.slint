@@ -792,6 +792,9 @@ export global Shell {
     in property <string> shade-kind;
     in property <string> shade-title;
     in property <string> active-title;
+    // The share of the editor area the left group takes while split, as
+    // dragged; kept in `workbench.toml` with the docks' sizes.
+    in-out property <float> split-share: 0.5;
 
     // The status bar.
     in property <int> errors;
@@ -1367,6 +1370,11 @@ export global Shell {
     // The other group's strip: its group to front, and the tab.
     callback shade-pick(string);
     callback shade-close(string);
+    // A right-click on a tab: its id, whether it is the other group's, and
+    // where in the window.
+    callback tab-menu(string, bool, length, length);
+    // The divider between the two groups let go of, or put back at half.
+    callback split-resized(float);
     callback tree-click(int);
     callback open-recent(string);
     callback picker-query(string);
