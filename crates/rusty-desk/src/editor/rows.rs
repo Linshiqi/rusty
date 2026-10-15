@@ -7,6 +7,8 @@
 //! the marks behind it — the selections crossing it, the carets on it other
 //! than the primary one (which the view draws on its own), and where the
 //! caret rests: the bracket pair outlined, the name's occurrences washed.
+//! A name drawn as a link while Ctrl is held is both: its characters are
+//! pieces of the link's colour, and the line under them is a mark.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -233,11 +235,9 @@ impl Model for Rows {
         });
         let coloured = rusty_edit::semantic::overlay(base, &semantic_marks(&doc, row));
         let hints = inlays::on(&doc, row);
-        let (pieces, drawn) = place_hinted(
-            &metrics,
-            coloured.spans.iter().map(|s| (s.text.as_str(), s.token)),
-            hints,
-        );
+        let link = self.resting.borrow().link_on(&doc.path, doc.version, row);
+        let (pieces, drawn) =
+            place_hinted(&metrics, kinds(&coloured.spans, link).into_iter(), hints);
         let end = inlays::end_x(&metrics, text, hints);
         let gutter = self.gutter.borrow();
         let line = row as u32;
@@ -393,6 +393,9 @@ fn marks(
     for col in resting.brackets_on(&doc.path, doc.version, row) {
         marks.extend(ink(col, col + 1, 9));
     }
+    if let Some((from, to)) = resting.link_on(&doc.path, doc.version, row) {
+        marks.extend(ink(from, to, LINK));
+    }
     // Worst last, so an error is drawn over the warning it shares a word
     // with; hints are not problems, and are not drawn.
     let mut squiggles: Vec<(rusty_lsp::DiagSeverity, f32, f32)> = problems
@@ -464,10 +467,7 @@ fn wave(width: f32) -> String {
 /// A painted line drawn on its own, as the hover card draws a signature:
 /// its pieces placed as the editor places code, and nothing behind them.
 pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
-    let pieces = place(
-        metrics,
-        line.spans.iter().map(|s| (s.text.as_str(), s.token)),
-    );
+    let pieces = place(metrics, kinds(&line.spans, None).into_iter());
     Row {
         number: 0,
         fold: 0,
@@ -502,11 +502,8 @@ fn semantic_marks(doc: &Document, line: usize) -> Vec<(u32, u32, Token)> {
 pub fn line_row(metrics: &Metrics, doc: &Document, line: usize) -> Row {
     let text = doc.lines.text(&doc.text, line);
     let pieces = match doc.painted.get(line).filter(|l| painted_is(l, text)) {
-        Some(painted) => place(
-            metrics,
-            painted.spans.iter().map(|s| (s.text.as_str(), s.token)),
-        ),
-        None => place(metrics, std::iter::once((text, Token::Plain))),
+        Some(painted) => place(metrics, kinds(&painted.spans, None).into_iter()),
+        None => place(metrics, std::iter::once((text, kind(Token::Plain)))),
     };
     Row {
         number: line as i32 + 1,
@@ -528,9 +525,46 @@ pub fn painted_is(line: &Line, text: &str) -> bool {
     rest.is_empty()
 }
 
-/// Runs of one token placed along the line. A tab ends a piece: it is drawn
+/// What a name drawn as a link is, as a piece's kind and as a mark's.
+const LINK: i32 = 11;
+
+/// A line's spans as they are drawn: each with its token's kind, and the
+/// characters `link` covers — columns, from and to — cut out of whatever
+/// spans they are in and given the link's.
+fn kinds(spans: &[rusty_edit::Span], link: Option<(usize, usize)>) -> Vec<(&str, i32)> {
+    let mut out = Vec::with_capacity(spans.len() + 2);
+    let mut col = 0;
+    for span in spans {
+        let (text, token) = (span.text.as_str(), kind(span.token));
+        let count = text.chars().count();
+        let cut = link.filter(|&(from, to)| from < col + count && to > col);
+        if let Some((from, to)) = cut {
+            let byte = |c: usize| {
+                text.char_indices()
+                    .nth(c - col)
+                    .map_or(text.len(), |(at, _)| at)
+            };
+            let (a, b) = (byte(from.max(col)), byte(to.min(col + count)));
+            for (piece, k) in [
+                (&text[..a], token),
+                (&text[a..b], LINK),
+                (&text[b..], token),
+            ] {
+                if !piece.is_empty() {
+                    out.push((piece, k));
+                }
+            }
+        } else {
+            out.push((text, token));
+        }
+        col += count;
+    }
+    out
+}
+
+/// Runs of one kind placed along the line. A tab ends a piece: it is drawn
 /// as the gap to the next stop, not as a glyph.
-fn place<'t>(metrics: &Metrics, spans: impl Iterator<Item = (&'t str, Token)>) -> Vec<Piece> {
+fn place<'t>(metrics: &Metrics, spans: impl Iterator<Item = (&'t str, i32)>) -> Vec<Piece> {
     place_hinted(metrics, spans, &[]).0
 }
 
@@ -538,7 +572,7 @@ fn place<'t>(metrics: &Metrics, spans: impl Iterator<Item = (&'t str, Token)>) -
 /// width before the column it stands at, as `inlays` measures it.
 fn place_hinted<'t>(
     metrics: &Metrics,
-    spans: impl Iterator<Item = (&'t str, Token)>,
+    spans: impl Iterator<Item = (&'t str, i32)>,
     hints: &[rusty_lsp::InlayHint],
 ) -> (Vec<Piece>, Vec<Hint>) {
     let mut pieces = Vec::new();
@@ -604,11 +638,11 @@ fn hints_at(
     }
 }
 
-fn piece(text: String, x: f32, token: Token) -> Piece {
+fn piece(text: String, x: f32, kind: i32) -> Piece {
     Piece {
         text: SharedString::from(text),
         x,
-        kind: kind(token),
+        kind,
     }
 }
 
@@ -626,5 +660,59 @@ pub(crate) fn kind(token: Token) -> i32 {
         Token::Punctuation => 8,
         Token::Variable => 9,
         Token::Namespace => 10,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(text: &str, token: Token) -> rusty_edit::Span {
+        rusty_edit::Span {
+            text: text.into(),
+            token,
+        }
+    }
+
+    /// The link takes its characters out of the spans they are in —
+    /// whichever, and however many — and leaves the rest as they were;
+    /// columns are characters, so a `中` before the name does not move it.
+    #[test]
+    fn a_link_recolours_exactly_its_characters() {
+        let spans = [
+            span("let ", Token::Keyword),
+            span("中x", Token::Variable),
+            span(" = ", Token::Plain),
+            span("norm", Token::Function),
+            span("()", Token::Punctuation),
+        ];
+        let plain = kinds(&spans, None);
+        assert_eq!(
+            plain,
+            [("let ", 1), ("中x", 9), (" = ", 0), ("norm", 6), ("()", 8)]
+        );
+        assert_eq!(
+            kinds(&spans, Some((9, 13))),
+            [
+                ("let ", 1),
+                ("中x", 9),
+                (" = ", 0),
+                ("norm", LINK),
+                ("()", 8)
+            ]
+        );
+        assert_eq!(
+            kinds(&spans, Some((5, 10))),
+            [
+                ("let ", 1),
+                ("中", 9),
+                ("x", LINK),
+                (" = ", LINK),
+                ("n", LINK),
+                ("orm", 6),
+                ("()", 8)
+            ]
+        );
+        assert_eq!(kinds(&spans, Some((40, 44))), plain, "past the line");
     }
 }
