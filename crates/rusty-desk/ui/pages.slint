@@ -17,6 +17,7 @@ import { WizardPage } from "wizard.slint";
 import { Shell, DocTab } from "shell.slint";
 import { CodeView, ShadeView } from "editor.slint";
 import { EnvironmentPage } from "environment.slint";
+import { KeysPage } from "keys.slint";
 import { NotYet } from "docks.slint";
 
 // A group's tabs: the one in front lit, the rust line over it while the
@@ -330,14 +331,20 @@ component Welcome inherits Rectangle {
                     Caption {
                         text: @tr("chrome.recent");
                     }
-                    for recent in Shell.recents: RowButton {
+                    // Here, or with Ctrl held or by the row's button in a
+                    // window of its own, as VS Code's recents open.
+                    for recent in Shell.recents: recent-row := RowButton {
                         height: 28px;
                         clicked => {
-                            Shell.open-recent(recent.path);
+                            if (self.ctrl) {
+                                Shell.open-recent-new-window(recent.path);
+                            } else {
+                                Shell.open-recent(recent.path);
+                            }
                         }
                         HorizontalLayout {
                             padding-left: 8px;
-                            padding-right: 8px;
+                            padding-right: 30px;
                             spacing: 10px;
                             Icon {
                                 y: (parent.height - self.height) / 2;
@@ -361,10 +368,25 @@ component Welcome inherits Rectangle {
                                 horizontal-stretch: 1;
                             }
                         }
+                        IconButton {
+                            x: parent.width - self.width - 2px;
+                            y: (parent.height - self.height) / 2;
+                            width: 24px;
+                            height: 24px;
+                            glyph: 14px;
+                            visible: recent-row.hovered || self.hovered;
+                            icon: Icons.window;
+                            tip: @tr("windows.open-new");
+                            clicked => {
+                                Shell.open-recent-new-window(recent.path);
+                            }
+                        }
                     }
                 }
-                Text {
-                    text: @tr("desk.keys-hint");
+                // The keys in force, not the table's: a rebound key is the
+                // key shown.
+                if Shell.keys-hint != "": Text {
+                    text: Shell.keys-hint;
                     color: Theme.label-4;
                     font-size: Theme.small;
                 }
@@ -471,6 +493,18 @@ component SettingsPage inherits Rectangle {
                         value: Shell.zoom == 0.9 ? "0.9" : Shell.zoom == 1.1 ? "1.1" : Shell.zoom == 1.25 ? "1.25" : "1";
                         picked(value) => {
                             Shell.set-zoom(value.to-float());
+                        }
+                    }
+                }
+            }
+            Group {
+                title: @tr("shortcuts.settings-group");
+                Setting {
+                    label: @tr("shortcuts.title");
+                    Button {
+                        text: @tr("shortcuts.open");
+                        clicked => {
+                            Shell.act("keys.open");
                         }
                     }
                 }
@@ -689,7 +723,8 @@ component PageBody inherits Rectangle {
     if root.kind == "memory": MemoryPage { }
     if root.kind == "crates": CratesPage { }
     if root.kind == "math": MathPage { }
-    if root.kind != "file" && root.kind != "welcome" && root.kind != "settings" && root.kind != "environment" && root.kind != "wizard" && root.kind != "git" && root.kind != "gitdiff" && root.kind != "memory" && root.kind != "crates" && root.kind != "math" && root.kind != "": NotYet {
+    if root.kind == "keys": KeysPage { }
+    if root.kind != "file" && root.kind != "welcome" && root.kind != "settings" && root.kind != "environment" && root.kind != "wizard" && root.kind != "git" && root.kind != "gitdiff" && root.kind != "memory" && root.kind != "crates" && root.kind != "math" && root.kind != "keys" && root.kind != "": NotYet {
         name: root.title;
     }
     if root.kind == "": Welcome { }

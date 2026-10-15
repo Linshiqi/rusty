@@ -271,6 +271,11 @@ export component Picker inherits Rectangle {
                             Shell.picker-selected = Math.max(Shell.picker-selected - 1, 0);
                             return accept;
                         }
+                        // Ctrl+Enter: a project in a new window, as in VS Code.
+                        if (event.text == Key.Return && (event.modifiers.control || event.modifiers.meta)) {
+                            Shell.picker-pick-new-window(Shell.picker-selected);
+                            return accept;
+                        }
                         if (event.text == Key.Return) {
                             Shell.picker-pick(Shell.picker-selected);
                             return accept;
@@ -321,6 +326,21 @@ export component Picker inherits Rectangle {
                 touch := TouchArea {
                     clicked => {
                         Shell.picker-pick(i);
+                    }
+                }
+                // A project's row opens it in a window of its own too, by
+                // this button on the row under the pointer or the keys.
+                if row.windowed: IconButton {
+                    x: parent.width - self.width - 4px;
+                    y: (parent.height - self.height) / 2;
+                    width: 24px;
+                    height: 24px;
+                    glyph: 14px;
+                    visible: i == Shell.picker-selected || touch.has-hover || self.hovered;
+                    icon: Icons.window;
+                    tip: @tr("windows.open-new");
+                    clicked => {
+                        Shell.picker-pick-new-window(i);
                     }
                 }
             }
