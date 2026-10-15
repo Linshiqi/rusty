@@ -695,7 +695,7 @@ pub(crate) mod bosch {
 // reader every other part goes through — so a fixture cannot drift from
 // what a user's own part would get. That reader touches the disk, hence the
 // feature gate; the arithmetic below is wasm-safe and has no other door.
-#[cfg(all(test, feature = "backend"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

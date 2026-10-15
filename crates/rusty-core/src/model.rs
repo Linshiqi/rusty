@@ -1,13 +1,10 @@
-//! The wire contract between `rusty-core` and every frontend.
+//! What `rusty-core`'s analyses answer with.
 //!
-//! These types are the single source of truth for the Tauri backend, the CLI,
-//! and the Leptos frontend — which `use` them directly rather than through
-//! generated bindings, so the contract cannot drift.
-//!
-//! This module must stay free of IO and of anything that will not compile to
-//! `wasm32-unknown-unknown`: it is the only part of the crate the frontend
-//! links against. Versions and paths are plain strings so the JSON stays
-//! decoupled from whatever crate versions the backend happens to build with.
+//! One set of types for the window, the CLI and the assistant's tools, so
+//! the three cannot describe a workspace three ways. Data and no IO.
+//! Versions and paths are plain strings, so a report — the CLI's `--json`,
+//! a tool's answer — stays decoupled from whatever crate versions the
+//! analysis happens to be built with.
 
 use serde::{Deserialize, Serialize};
 

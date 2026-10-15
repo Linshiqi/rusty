@@ -8,69 +8,51 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# The chip catalogue and the wire types are rendered by the frontend, so the
-# unconditional half of this crate must compile to wasm32.
 serde = { version = "1.0.229", features = ["derive"] }
 
-toml = { version = "1.1.4", optional = true }
+toml = "1.1.4"
 # In-process downloads for tool installs: rustls instead of the OS TLS —
 # Windows schannel aborts on some CDNs — and a mirror can be tried in turn.
-ureq = { version = "3.4.0", optional = true, features = ["socks-proxy"] }
-# Two fields out of GitHub's release answer. Already in the tree via the
-# frontend and the CLI, so this costs nothing a build did not already pay.
-serde_json = { version = "1.0.151", optional = true }
+ureq = { version = "3.4.0", features = ["socks-proxy"] }
+# Two fields out of GitHub's release answer, and the feeds and files that
+# are JSON.
+serde_json = "1.0.151"
 # SVD is XML, and hand-rolling an XML reader for vendor files is how a
 # register view ends up wrong about the one chip nobody tested.
-quick-xml = { version = "0.41.0", optional = true }
-thiserror = { version = "2.0.20", optional = true }
-object = { version = "0.40.0", optional = true }
-rustc-demangle = { version = "0.1.28", optional = true }
+quick-xml = "0.41.0"
+thiserror = "2.0.20"
+object = "0.40.0"
+rustc-demangle = "0.1.28"
 # The DWARF a firmware image carries, read for which C or C++ file each
 # address was compiled from: a symbol C wrote demangles to nothing, and the
 # memory report would otherwise call all of it unattributed.
-gimli = { version = "0.34.0", optional = true, default-features = false, features = ["read", "std"] }
+gimli = { version = "0.34.0", default-features = false, features = ["read", "std"] }
 # `libudev` is what supplies USB vendor/product ids on Linux, which is how a
 # dev board is told apart from a modem. It costs a system library at build
 # time; the default feature set keeps it, and a packager who cannot have it can
 # turn it off and lose only the board-name guess.
-serialport = { version = "4.9.0", optional = true }
+serialport = "4.9.0"
 # The updater: which release is newer, and whether a download is what the
 # release workflow signed with the updater key.
-semver = { version = "1.0.28", optional = true }
-minisign-verify = { version = "0.2.5", optional = true }
+semver = "1.0.28"
+minisign-verify = "0.2.5"
 # One rule for "a repository with no commits", shared with the Git panel —
 # the wizard removes such a `.git` after esp-generate, and the panel offers
 # to for a project generated before it did.
-rusty-git = { path = "../rusty-git", optional = true }
+rusty-git = { path = "../rusty-git" }
 # The CH32V003, emulated in-process: nobody's QEMU models a WCH part, and
 # this one is small enough that a machine of its own costs less than one.
-rusty-mcu = { path = "../rusty-mcu", optional = true }
+rusty-mcu = { path = "../rusty-mcu" }
 
 # Finding Visual Studio's `link.exe` the way rustc does, so the Toolchain
 # panel cannot call a linker missing that rustc would use. Already in the
 # tree through a dozen build scripts.
 [target.'cfg(windows)'.dependencies]
-cc = { version = "1.4", optional = true }
+cc = "1.4"
 
 # build.rs reads data/templates/*/template.toml to compile the templates in.
 [build-dependencies]
 toml = "1.1.4"
-
-[features]
-default = ["backend"]
-backend = [
-    "dep:toml",
-    "dep:ureq", "dep:thiserror", "dep:serde_json", "dep:quick-xml",
-    "dep:object",
-    "dep:rustc-demangle",
-    "dep:gimli",
-    "dep:serialport",
-    "dep:rusty-git",
-    "dep:rusty-mcu",
-    "dep:cc",
-    "dep:semver",
-    "dep:minisign-verify",
-]
 
 [lints]
 workspace = true

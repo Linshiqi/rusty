@@ -1,7 +1,7 @@
 //! What painting a file costs, whole and after an edit — the check that a
 //! keystroke in a long file costs its own line and not the file.
 //!
-//! `cargo run -p rusty-edit --features backend --release --example highlight_cost -- <file>`
+//! `cargo run -p rusty-edit --release --example highlight_cost -- <file>`
 //!
 //! Paints the file whole, then changes one line halfway down, then opens a
 //! block comment at the top — the edit that genuinely repaints everything

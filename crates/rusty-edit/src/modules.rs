@@ -196,7 +196,6 @@ fn in_a_crates_src(path: &str, manifests: &[String]) -> bool {
 /// the ones under a crate's `src/`, plus every `.rs` in the project for the
 /// `mod` declarations — a declaration can sit anywhere, and a `src/lib.rs`
 /// that was not read is a crate whose whole module tree reads as unlinked.
-#[cfg(feature = "backend")]
 pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
     let mut manifests: Vec<String> = Vec::new();
     let mut sources: Vec<(String, String)> = Vec::new();

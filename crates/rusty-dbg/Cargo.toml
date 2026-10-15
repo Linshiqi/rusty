@@ -13,12 +13,11 @@ serde = { version = "1.0.229", features = ["derive"] }
 # The session side: a gdb to talk to, and a thread to pump it. Same major as
 # every other crate here — two thiserror majors in one lock file is two copies
 # of the derive machinery built for nothing.
-thiserror = { version = "2.0.20", optional = true }
+thiserror = "2.0.20"
 
 # The Debug Adapter Protocol is JSON, where gdb's machine interface is its own
-# grammar (`mi.rs`). Backend-only: the frontend takes the model and none of
-# the transport.
-serde_json = { version = "1.0.151", optional = true }
+# grammar (`mi.rs`).
+serde_json = "1.0.151"
 
 [dev-dependencies]
 # `dap_probe` only. Adapter discovery is tool discovery, which lives with
@@ -26,17 +25,6 @@ serde_json = { version = "1.0.151", optional = true }
 # keeping a second copy that could disagree about where to look. No cycle:
 # rusty-embed does not depend on this crate.
 rusty-embed = { path = "../rusty-embed" }
-
-[features]
-default = ["backend"]
-backend = ["dep:thiserror", "dep:serde_json"]
-
-# The probe drives a real debug adapter, so it needs the half of this crate
-# that starts one. Without this, `--all-targets` builds it with default
-# features off and stops on a missing `DapSession`.
-[[example]]
-name = "dap_probe"
-required-features = ["backend"]
 
 [lints]
 workspace = true

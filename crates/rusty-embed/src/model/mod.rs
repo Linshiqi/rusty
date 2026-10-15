@@ -1,7 +1,7 @@
-//! Wire types for the embedded workbench.
+//! The embedded workbench's data types.
 //!
-//! Like `rusty_core::model`, this is compiled unconditionally and must stay
-//! free of IO so the Leptos frontend can `use` these types directly.
+//! Like `rusty_core::model`, free of IO: what the window, the CLI and the
+//! assistant's tools all read.
 //!
 //! One module per concern, all re-exported here so every existing path —
 //! `rusty_embed::model::Chip` and `rusty_embed::Chip` alike — keeps working.
@@ -15,8 +15,8 @@
 //! `config.rs` parse TOML into their own private structs and convert to these.
 //! The file format is a public contract with users who write board definitions
 //! and edit `workbench.toml`; these types are an internal contract with the
-//! frontend, and tying them together means a UI refactor silently breaking
-//! everybody's files (rule 2).
+//! window and the CLI, and tying them together means a UI refactor silently
+//! breaking everybody's files (rule 2).
 
 mod command;
 mod device;
@@ -58,7 +58,6 @@ pub use repo::{REPO, REPO_ISSUES, REPO_RELEASES};
 // Only the `.rusty/sim.toml` writer needs it, and that is backend-side; on
 // wasm the re-export would be an unused import.
 pub use sheet::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
-#[cfg(feature = "backend")]
 pub(crate) use sim::is_upright;
 pub use sim::{Drive, Emulator, SimDebug, SimLimit, SimPlan, SimTool};
 pub use symbol::{Fill, Graphic, MM_PX, Pin, PinKind, Symbol};
