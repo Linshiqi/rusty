@@ -102,7 +102,24 @@ fn tar_xz(dir: &Path, sink: &mut Vec<u8>) -> io::Result<usize> {
 /// name that would land outside `to` — `..`, an absolute path — is refused,
 /// not written somewhere else.
 pub fn unpack(payload: &[u8], to: &Path) -> io::Result<Vec<String>> {
-    let mut archive = tar::Archive::new(liblzma::read::XzDecoder::new_parallel(payload));
+    unpack_counted(payload, to, &mut |_| {})
+}
+
+/// [`unpack`], saying how far it has got as it goes: the share of the
+/// compressed payload read, 0 to 1, which is as even a measure of the work
+/// as there is — the files it makes are anything from a few bytes to sixty
+/// megabytes.
+pub fn unpack_counted(
+    payload: &[u8],
+    to: &Path,
+    progress: &mut dyn FnMut(f32),
+) -> io::Result<Vec<String>> {
+    let read = Counted {
+        rest: payload,
+        total: payload.len().max(1),
+        progress,
+    };
+    let mut archive = tar::Archive::new(liblzma::read::XzDecoder::new_parallel(read));
     archive.set_preserve_permissions(true);
     let mut written = Vec::new();
     for entry in archive.entries()? {
@@ -128,6 +145,21 @@ pub fn unpack(payload: &[u8], to: &Path) -> io::Result<Vec<String>> {
         written.push(slashed(&rel));
     }
     Ok(written)
+}
+
+/// The payload as it is read, reporting the share read so far.
+struct Counted<'a, 'p> {
+    rest: &'a [u8],
+    total: usize,
+    progress: &'p mut dyn FnMut(f32),
+}
+
+impl io::Read for Counted<'_, '_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.rest.read(buf)?;
+        (self.progress)(1.0 - self.rest.len() as f32 / self.total as f32);
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
