@@ -140,6 +140,11 @@ pub const ALL: &[Action] = &[
     action("view.zoom-in", "desk.zoom-in", Some("Ctrl+=")),
     action("view.zoom-out", "desk.zoom-out", Some("Ctrl+-")),
     action("view.zoom-reset", "desk.zoom-reset", Some("Ctrl+0")),
+    // Ctrl and the wheel size the text under the pointer; these put each
+    // back, keyless as VS Code's own resets are.
+    action("editor.zoom-reset", "desk.editor-zoom-reset", None),
+    action("page.zoom-reset", "desk.page-zoom-reset", None),
+    action("terminal.zoom-reset", "desk.terminal-zoom-reset", None),
     action("theme.system", "menu.view.theme-system", None),
     action("theme.dark", "menu.view.theme-dark", None),
     action("theme.light", "menu.view.theme-light", None),

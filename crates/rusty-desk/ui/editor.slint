@@ -98,8 +98,14 @@ export global Code {
     in property <length> caret-width: 2px;
     in property <bool> has-document;
     in property <length> content-width: 2000px;
+    // The text's size, the one row height every layer reads and the
+    // margin's width, set together by `Surface::set_scale` — never
+    // computed here.
     in property <length> row-height: 19px;
     in property <length> font-size: 12.5px;
+    in property <length> gutter: 64px;
+    // Ctrl and the wheel over the code, by how far: up is larger.
+    callback zoom(length);
     in-out property <length> scroll-y;
     in-out property <length> scroll-x;
     in-out property <length> view-height;
@@ -874,8 +880,18 @@ export global Shade {
 }
 
 export component ShadeView inherits Rectangle {
-    in property <length> gutter: 64px;
+    property <length> gutter: Code.gutter;
     background: Theme.content;
+
+    // The wheel over the other group, as over the code (`CodeView`'s).
+    function wheel(control: bool, shift: bool, dx: length, dy: length) {
+        if (control) {
+            Code.zoom(dy);
+        } else {
+            Shade.scroll-x = max(min(0px, Shade.scroll-x + (shift && dx == 0px ? dy : dx)), min(0px, shade-list.visible-width - shade-list.content-width));
+            Shade.scroll-y = max(min(0px, Shade.scroll-y + (shift && dx == 0px ? 0px : dy)), min(0px, shade-list.visible-height - Shade.rows.length * Code.row-height));
+        }
+    }
     shade-list := ListView {
         width: parent.width;
         height: parent.height;
@@ -899,15 +915,47 @@ export component ShadeView inherits Rectangle {
                         Code.navigate(event.button == PointerEventButton.back);
                     }
                 }
+                scroll-event(event) => {
+                    root.wheel(event.modifiers.control, event.modifiers.shift, event.delta-x, event.delta-y);
+                    accept
+                }
             }
         }
     }
 }
 
 export component CodeView inherits Rectangle {
-    in property <length> gutter: 64px;
+    property <length> gutter: Code.gutter;
 
     background: Theme.content;
+
+    // The wheel over the code is taken by the rows and not left to the
+    // list: with Ctrl it is the text's size, VS Code's
+    // `editor.mouseWheelZoom`; alone it moves the view by as far as it
+    // turned, at once, as VS Code scrolls. Left to the list, a wheel turned
+    // within a moment of its own scroll — the pointer still — was the
+    // list's whatever was held, and Ctrl scrolled instead of sizing. How far
+    // down it can go is the rows' own height, every row being one: the
+    // list's measure of itself, just after a zoom, still knew none.
+    function wheel(control: bool, shift: bool, dx: length, dy: length) {
+        if (control) {
+            Code.zoom(dy);
+        } else {
+            Code.scroll-x = max(min(0px, Code.scroll-x + (shift && dx == 0px ? dy : dx)), min(0px, list.visible-width - list.content-width));
+            Code.scroll-y = max(min(0px, Code.scroll-y + (shift && dx == 0px ? 0px : dy)), min(0px, list.visible-height - Code.rows.length * Code.row-height));
+        }
+    }
+
+    // Ctrl and the wheel where no row is: below a short file.
+    TouchArea {
+        scroll-event(event) => {
+            if (event.modifiers.control) {
+                Code.zoom(event.delta-y);
+                return accept;
+            }
+            reject
+        }
+    }
 
     public function focus-input() {
         sink.focus();
@@ -960,6 +1008,10 @@ export component CodeView inherits Rectangle {
                 changed has-hover => {
                     Code.gutter-hover = self.has-hover;
                 }
+                scroll-event(event) => {
+                    root.wheel(event.modifiers.control, event.modifiers.shift, event.delta-x, event.delta-y);
+                    accept
+                }
             }
             touch := TouchArea {
                 x: root.gutter - 20px;
@@ -998,6 +1050,10 @@ export component CodeView inherits Rectangle {
                         Code.hovered(-1, 0, 0);
                         Code.link-left(index);
                     }
+                }
+                scroll-event(event) => {
+                    root.wheel(event.modifiers.control, event.modifiers.shift, event.delta-x, event.delta-y);
+                    accept
                 }
             }
             // The chevron right of the number, hard against the code, as
@@ -1198,7 +1254,11 @@ export component CodeView inherits Rectangle {
                     Code.sticky-pick(i);
                 }
                 scroll-event(event) => {
-                    Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - list.content-height));
+                    if (event.modifiers.control) {
+                        Code.zoom(event.delta-y);
+                        return accept;
+                    }
+                    Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - Code.rows.length * Code.row-height));
                     accept
                 }
             }
@@ -1245,7 +1305,11 @@ export component CodeView inherits Rectangle {
                 }
             }
             scroll-event(event) => {
-                Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - list.content-height));
+                if (event.modifiers.control) {
+                    Code.zoom(event.delta-y);
+                    return accept;
+                }
+                Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - Code.rows.length * Code.row-height));
                 accept
             }
         }

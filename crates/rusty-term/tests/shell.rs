@@ -63,6 +63,34 @@ fn a_shell_starts_and_answers() {
     );
 }
 
+/// Clear takes what was printed off the screen and out of the history, and
+/// it stays gone: a shell redrawing its prompt must not bring it back.
+#[test]
+fn clearing_forgets_what_was_printed() {
+    let (terminal, _updates) = Terminal::spawn(None, 80, 24, None).expect("a pseudo-terminal");
+    terminal
+        .write(b"echo rusty-before-clear\r")
+        .expect("write to the shell");
+    let seen = wait_for(&terminal, "rusty-before-clear", Duration::from_secs(20));
+    terminal.clear().expect("clear");
+    std::thread::sleep(Duration::from_millis(1500));
+    let after = text(&terminal);
+    // And not in the history either.
+    terminal.scroll(100);
+    let back = text(&terminal);
+    terminal.kill();
+
+    assert!(seen, "the shell never echoed the marker");
+    assert!(
+        !after.contains("rusty-before-clear"),
+        "cleared, the screen still says:\n{after}"
+    );
+    assert!(
+        !back.contains("rusty-before-clear"),
+        "cleared, the history still says:\n{back}"
+    );
+}
+
 #[test]
 fn resizing_reaches_the_emulator() {
     let (terminal, _updates) = Terminal::spawn(None, 80, 24, None).expect("a pseudo-terminal");

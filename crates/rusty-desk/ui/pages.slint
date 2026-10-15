@@ -782,16 +782,46 @@ export component EditorArea inherits Rectangle {
                             background: Theme.content;
                             ScrollView {
                                 // A reading column, centred: margins from the page's own
-                                // width, never the column's, which is what it decides.
+                                // width, never the column's, which is what it decides. It
+                                // widens with the text, so a line holds the same words. Its
+                                // blocks keep their own heights: a page shorter than the view
+                                // spread the room left over between them, which read as gaps
+                                // that grew and shrank with the text's size.
                                 VerticalLayout {
+                                    alignment: start;
                                     padding-top: 28px;
                                     padding-bottom: 28px;
-                                    padding-left: max(32px, (md-area.width - 820px) / 2);
-                                    padding-right: max(32px, (md-area.width - 820px) / 2);
+                                    padding-left: max(32px, (md-area.width - 820px * Shell.page-zoom) / 2);
+                                    padding-right: max(32px, (md-area.width - 820px * Shell.page-zoom) / 2);
                                     MarkdownView {
                                         blocks: Shell.md-blocks;
-                                        font-size: Theme.body;
+                                        font-size: Theme.body * Shell.page-zoom;
                                     }
+                                }
+                            }
+                            // Over the page, short of its scrollbar: Ctrl and the wheel
+                            // size its text, and a right-click opens its menu — the text
+                            // takes every press itself, so nothing under it would hear the
+                            // right button. A click is made again underneath, with this
+                            // stepped aside, so a link still answers.
+                            TouchArea {
+                                x: 0;
+                                width: parent.width - 14px;
+                                enabled: !Shell.page-through;
+                                scroll-event(event) => {
+                                    if (event.modifiers.control) {
+                                        Shell.content-zoom("page", event.delta-y);
+                                        return accept;
+                                    }
+                                    reject
+                                }
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                        Shell.surface-menu("page", "", -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                    }
+                                }
+                                clicked => {
+                                    Shell.page-click(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                                 }
                             }
                         }
