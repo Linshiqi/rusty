@@ -917,6 +917,7 @@ impl App {
                 }
             }
         }
+        self.torn_moved(from, to);
         self.editor.gutter_changed();
         self.front_tab();
     }
@@ -945,6 +946,7 @@ impl App {
             }
             self.drop_tab_anywhere(&id);
         }
+        self.torn_deleted(path);
         let mut state = self.state.borrow_mut();
         if let Some(project) = state.project.as_mut() {
             project

@@ -13,7 +13,7 @@
 use std::cell::{Cell, RefCell};
 
 use rusty_edit::{Line, Span, Token, guides::TAB_SIZE, minimap, sticky};
-use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
 use super::{Document, Surface, rows};
 use crate::{Code, Theme};
@@ -93,6 +93,12 @@ impl Surface {
             return;
         };
         let code = window.global::<Code>();
+        // Above the top is the list view's mistake, not a place
+        // (`shade::within`); put back, the view lays out right from there.
+        let y = code.get_scroll_y();
+        if super::shade::within(y) != y {
+            code.set_scroll_y(super::shade::within(y));
+        }
         let Some(doc) = self.doc() else {
             code.set_sticky_rows(ModelRc::default());
             code.set_minimap_on(false);
@@ -137,7 +143,7 @@ impl Surface {
 
     /// The minimap's slider and its image, painted again only when what it
     /// shows changed.
-    fn minimap(&self, window: &crate::AppWindow, code: &Code, doc: &Document) {
+    fn minimap(&self, window: &super::host::Strong, code: &Code, doc: &Document) {
         let on = self.overview.minimap.get();
         code.set_minimap_on(on);
         if !on {

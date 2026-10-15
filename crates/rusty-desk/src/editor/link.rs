@@ -28,7 +28,7 @@ use std::{
 
 use rusty_lsp::Location;
 use slint::{
-    ComponentHandle, LogicalPosition, Timer, TimerMode,
+    LogicalPosition, Timer, TimerMode,
     platform::{Key, WindowEvent},
 };
 
@@ -263,11 +263,18 @@ impl Surface {
         };
         let asked = self.linking.asks.ask();
         let (line, col) = (name.line as u32, name.col as u32);
+        // The surface that asked, by number: a window a tab was moved into
+        // draws its own links, and one closed since drops the answer.
+        let asker = self.id;
         self.servers.ask(
             &name.path.clone(),
             Some(draft),
             move |client, path| client.definition(path, line, col),
-            move |app, found| app.editor().linked(asked, name, found),
+            move |app, found| {
+                if let Some(this) = app.editor().view(asker) {
+                    this.linked(asked, name, found);
+                }
+            },
         );
     }
 

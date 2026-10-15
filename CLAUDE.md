@@ -1257,7 +1257,18 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   other's edits. Closing one view of a file with changes asks nothing while
   the other holds it; the last view to close is the one that asks.
 - **Each document keeps where its view was scrolled**, so a tab comes back
-  where it was left, whichever group it comes back in.
+  where it was left, whichever group it comes back in. **And never above
+  the top, which Slint's `ListView` will put it** (1.18.1,
+  `model/repeater.rs`): a model reset keeps the rows' layout state, and a
+  new model with fewer rows than the first one on screen clamps the offset
+  to its last row but not the first row's place, so the rows are laid out
+  from far down the view and the offset is set positive to match. A short
+  file shown after a long one scrolled down sat twenty rows below the top,
+  and the offset, kept with the document, carried the gap into a window of
+  its own. Every offset read from a view, kept or put back goes through
+  `shade::within`, and a view the list moved above the top is put back at
+  it (`view_changed`, `Shade.scrolled`), from where the list lays out
+  right.
 - **The split never shows an empty pane**: a group left with no tabs ends
   the split.
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
@@ -1406,6 +1417,100 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   `workspace.symbol.search.kind` is `all_symbols`, since rust-analyzer's
   default finds structs and not functions, and a symbol answer is kept with
   its ask so a slow reply to `#gp` is never shown under `#gpio`.
+
+## A tab in a window of its own
+
+VS Code's Move into New Window: `editor.detach` in the palette and in a
+tab's right-click menu — for the tab clicked, in its own group — or a tab
+let go of beyond the main window's edge (`Shell.tab-dropped`, which names
+the group too, since one file can be a tab in both). One process, a second
+Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
+`app/torn.rs` for when it opens, what its keys do and how it closes.
+
+- **A second window is a second surface, not a second editor.** Slint gives
+  every window its own instance of each global, so a torn window's `Code`
+  and `Find` are the main window's properties and callbacks again, of the
+  same Rust type. `editor/host.rs` is the one place that knows there are two
+  kinds of window (`Host`, `Strong::global`), and every `self.window` in
+  `src/editor/` goes through it. `Surface::beside` makes the new window's
+  surface, which shares the main surface's documents (`Open`), servers,
+  painting, margin and metrics, and keeps a view of its own: rows, caret,
+  popups, the hover card, the find bar, the Vim machine.
+- **One file open in two windows is one document, the split's rule.** An
+  edit in either draws both (`Surface::follows`, called where the split's
+  shade already followed: an edit, a painting, the server's colours and
+  hints, what a server found), the history is the document's, the servers
+  hear about the file once — from whichever surface made the edit — and
+  the last view to close asks about changes not saved (`App::views_of`
+  counts the windows). The cursors and the folds are the document's too,
+  as they are across the split, so typing in one window moves the caret
+  the other draws; what the other view had open over the text — a popup,
+  the card, the caret's marks — goes, since it was about the text before.
+- **An answer finds the surface that asked by number** (`Surface::id`,
+  `Views`). Work comes back through `work::spawn`, whose answer must be
+  `Send`, and a surface is not: a completion, a hover, a signature, the
+  colours, a repaint name their surface, and `app.editor().view(id)` finds
+  it or drops the answer, its window having closed. A repaint, which frees
+  its document for the next one, lands on the main surface then.
+- **What is about the file happens in its window; what is about the
+  project is the main window's, which comes forward.** Typing, completion,
+  the hover card and its fixes, find, folds, save, undo, Vim's `:w` and `:q`
+  (`Surface::on_act`) belong to the torn window. The palette, the finder, a
+  list of places, a run and a jump to another file land in the main
+  window, brought to the front with winit's `focus_window` — the one use of
+  Slint's `unstable-winit-030` feature. An action asked for there runs with
+  `App::keyed` set to its surface, so F12, Shift+F12, Ctrl+., F2, F8 and the
+  call hierarchy ask about the caret in that window, and the quick fix
+  picked from the main window's list is applied to the surface that asked;
+  a definition in the same file is gone to in the torn window. Go to Line
+  and the split are refused there, in its status line, since both act on
+  the main window's editor. A right-click there has no menu yet: the menu
+  is the main window's overlay.
+- **Its keys are the main window's keymap** (`App::key_in`,
+  `chord_key_in`). A key the code there does not take goes from the code
+  straight to that window's own handler (`Strong::invoke_key`), as the main
+  window's goes to its shell rather than bubbling, and is looked up in the
+  one `Keymap`, rebound keys included; the action runs as one asked for
+  there (`torn_act`). A chord's first stroke there is said in its status
+  line, and its second is the chord's there too — the code asks first
+  (`Surface::on_chord`). Alt+Left, Alt+Right and the mouse's side buttons
+  walk the main window's history, which comes forward, and an edit there
+  moves the history's places as one in the main window does (`on_lines`).
+  Ctrl over a name draws the link there, and a click follows it as a
+  definition found from there goes (`App::follow_link` takes the asking
+  surface): in the same file, in that window.
+- **The editor's text is one size in every window.** Ctrl and the wheel
+  over the code there are `content_zoom("editor")`, the main window's, and
+  `Surface::set_scale` sizes every live view: the windows measure their
+  characters into one table and keep one place per document, both in
+  pixels of the size the text is drawn at, so a window at a size of its
+  own would be measured wrong by the others. The table and the places are
+  done once (`set_scale`), each view is drawn again (`fit_text`, `refit`),
+  and a new window takes the size before it shows its file (`take_scale`).
+  Its rows take the wheel as the main window's do — the same `CodeView`.
+  The interface's zoom is worked out per window by the main window's rule
+  (`zoom::apply_to`, with what that window last asked for), again whenever
+  it takes a new size, since it may be on another display.
+- **It belongs to its process.** New Window is a second process with its
+  own `App` and main window, sharing no memory; a window a tab was moved
+  into is the `App`'s it was moved out of, Move into Main Window means that
+  process's main window, it closes with that main window through its exit,
+  and it is no instance (`instances.rs` lists processes, not windows).
+- **Closing.** A torn window closes with its tab — its ×, Ctrl+W, `:q`, the
+  system's close button — and its file's last view with changes asks first
+  (`After::CloseWindow` when the answer is save). Closing it never closes
+  the main window. The main window closing, or the project switching, keeps
+  every draft first (one map of documents) and then closes every torn window
+  without a question; a torn file is written to the remembered strip after
+  the main window's left group, so a restart opens it there. A window let go
+  of from inside its own callback is dropped a turn later
+  (`Timer::single_shot`). Move into Main Window, the icon on its strip, puts
+  the tab back in the group with the keys, where its view was scrolled.
+- **It follows the tree as a tab does.** A rename or a move there moves the
+  document for every window at once (`Surface::moved`, the map being one),
+  and the torn window takes the new name (`App::torn_moved`, from
+  `follow_move`); a delete closes the window without a question and keeps
+  nothing for the file (`App::torn_deleted`, from `follow_delete`).
 
 ## What the editor draws beside the text
 

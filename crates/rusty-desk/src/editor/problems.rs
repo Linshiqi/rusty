@@ -38,7 +38,7 @@ impl Surface {
     /// What a server found in `path` changed: the rows its squiggles were
     /// on and are on now are asked for again, and no others.
     pub fn problems_changed(&self, path: &str) {
-        self.shade_follows_path(path);
+        self.follows_path(path);
         let Some(doc) = self.doc() else { return };
         if doc.borrow().path != path {
             return;

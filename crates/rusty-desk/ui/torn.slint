@@ -1,0 +1,194 @@
+// A tab moved into a window of its own: VS Code's Move into New Window.
+//
+// The same code view as the main window's, over the same document — Slint
+// gives each window its own `Code` and `Find`, and the editor's Rust half
+// (`src/editor/`) drives whichever window's it was made for. One file per
+// window: its tab, the code, and a status line with the caret. The window's
+// own frame carries its title, the file, the project and rusty.
+
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { IconButton } from "widgets.slint";
+import { Code, CodeView } from "editor.slint";
+import { Tooltip } from "chrome.slint";
+
+export component TornWindow inherits Window {
+    // What the task bar calls the window: the file, the project, rusty.
+    in property <string> caption: "rusty";
+    title: root.caption;
+    icon: @image-url("../icons/rusty.png");
+    preferred-width: 960px;
+    preferred-height: 720px;
+    min-width: 360px;
+    min-height: 240px;
+    background: Theme.window;
+    default-font-size: Theme.body;
+
+    // What the editor measures its characters with (`src/editor/metrics.rs`).
+    in property <string> probe-text;
+    out property <length> probe-width: probe.preferred-width;
+
+    // The file's tab: its name, what tells it from another of the same name,
+    // and whether it has changes not saved.
+    in property <string> name;
+    in property <string> hint;
+    in property <bool> dirty;
+    // The caret as people number it, Vim's mode when Vim is on, and what the
+    // last key here could not do.
+    in property <string> caret;
+    in property <string> mode;
+    in property <string> message;
+
+    // Keys the code view did not take: the bindings get them.
+    callback key(KeyEvent) -> bool;
+    callback close-tab();
+    // The tab back among the main window's.
+    callback move-back();
+
+    // The window took a new size: made on its display, resized, or moved
+    // to a display of another scale — its zoom is worked out again, as the
+    // main window's is (`zoom::apply_to`).
+    callback resized();
+    changed width => {
+        root.resized();
+    }
+    changed height => {
+        root.resized();
+    }
+
+    public function focus-code() {
+        code.focus-input();
+    }
+
+    public function focus-find(replace: bool) {
+        code.focus-find(replace);
+    }
+
+    probe := Text {
+        visible: false;
+        text: root.probe-text;
+        font-family: Theme.mono;
+        font-size: Code.font-size;
+    }
+
+    FocusScope {
+        key-pressed(event) => {
+            if (root.key(event)) {
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            Rectangle {
+                height: 36px;
+                background: Theme.window;
+                HorizontalLayout {
+                    alignment: start;
+                    Rectangle {
+                        width: min(row.preferred-width, 320px);
+                        background: Theme.content;
+                        row := HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 6px;
+                            spacing: 6px;
+                            Text {
+                                text: root.name;
+                                color: Theme.label;
+                                font-size: Theme.small;
+                                vertical-alignment: center;
+                            }
+                            if root.hint != "": Text {
+                                text: root.hint;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                                vertical-alignment: center;
+                            }
+                            Rectangle {
+                                width: 20px;
+                                if root.dirty && !close-touch.has-hover: Rectangle {
+                                    width: 7px;
+                                    height: 7px;
+                                    border-radius: 3.5px;
+                                    background: Theme.label-2;
+                                }
+                                if !root.dirty || close-touch.has-hover: Icon {
+                                    path: Icons.close;
+                                    size: 12px;
+                                    color: close-touch.has-hover ? Theme.label : Theme.label-3;
+                                }
+                                close-touch := TouchArea {
+                                    clicked => {
+                                        root.close-tab();
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            y: 0;
+                            height: 2px;
+                            background: Theme.rust;
+                        }
+                        Rectangle {
+                            x: parent.width - 1px;
+                            width: 1px;
+                            background: Theme.line;
+                        }
+                    }
+                }
+                IconButton {
+                    x: parent.width - self.width - 6px;
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.restore;
+                    tip: @tr("desk.attach");
+                    clicked => {
+                        root.move-back();
+                    }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.line;
+                }
+            }
+            code := CodeView { }
+            Rectangle {
+                height: 24px;
+                background: Theme.window;
+                Rectangle {
+                    y: 0;
+                    height: 1px;
+                    background: Theme.line;
+                }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 14px;
+                    Text {
+                        text: root.message;
+                        color: Theme.amber;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    if root.mode != "": Text {
+                        text: root.mode;
+                        color: Theme.label-2;
+                        font-size: Theme.caption;
+                        font-family: Theme.mono;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.caret;
+                        color: Theme.label-2;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    Tooltip { }
+}

@@ -104,6 +104,8 @@ pub const ALL: &[Action] = &[
     ),
     action("editor.vim", "menu.view.vim", None),
     action("editor.split", "desk.split", Some("Ctrl+\\")),
+    // No key of its own, as in VS Code.
+    action("editor.detach", "desk.detach", None),
     action("update.check", "menu.help.check-updates", None),
     action(
         "editor.unfold-all",

@@ -88,14 +88,15 @@ impl App {
     /// "Show call hierarchy": the function at the caret, the calls into it
     /// (or out of it) asked for at once, in the Calls panel.
     pub(super) fn show_call_hierarchy(self: &Rc<Self>) {
-        let Some((path, line, col, draft)) = self.editor.caret_question() else {
+        let asker = self.keyed();
+        let Some((path, line, col, draft)) = asker.caret_question() else {
             return;
         };
         if !self.servers.serves(&path) {
             self.note_transient(0, t!("desk.nothing-found"));
             return;
         }
-        let word = self.editor.caret_word().unwrap_or_default();
+        let word = asker.caret_word().unwrap_or_default();
         let serial = {
             let mut state = self.state.borrow_mut();
             let calls = &mut state.calls;
