@@ -1887,6 +1887,7 @@ yaw = "偏航"
 instrument = "机头高于地平线 {nose} · 右翼下沉 {bank} · 航向 {heading}"
 
 [desk]
+split = "拆分编辑器"
 fold-region = "折叠"
 unfold-region = "展开"
 debug-no-host-gdb = "PATH 中没有本机的 gdb。芯片的调试器不能调试为本机构建的程序；请安装本平台自己的 gdb。"

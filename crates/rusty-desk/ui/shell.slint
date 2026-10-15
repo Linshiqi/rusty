@@ -760,6 +760,15 @@ export global Shell {
     in property <[DocTab]> tabs;
     in property <string> active-tab;
     in property <string> active-kind;
+    // Two editor groups: whether the window is split, which side has the
+    // keys (0 left, 1 right) — `tabs` is that group's — and the other
+    // group's strip and what its front tab is.
+    in property <bool> split;
+    in property <int> focus-group;
+    in property <[DocTab]> shade-tabs;
+    in property <string> shade-active;
+    in property <string> shade-kind;
+    in property <string> shade-title;
     in property <string> active-title;
 
     // The status bar.
@@ -1319,6 +1328,9 @@ export global Shell {
     callback dock-resized(string /* dock */, length);
     callback pick-tab(string);
     callback close-tab(string);
+    // The other group's strip: its group to front, and the tab.
+    callback shade-pick(string);
+    callback shade-close(string);
     callback tree-click(int);
     callback open-recent(string);
     callback picker-query(string);

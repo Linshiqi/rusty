@@ -15,25 +15,34 @@ import { Icons, Icon } from "icons.slint";
 import { Button, IconButton, RowButton, Caption, Segments } from "widgets.slint";
 import { WizardPage } from "wizard.slint";
 import { Shell, DocTab } from "shell.slint";
-import { CodeView } from "editor.slint";
+import { CodeView, ShadeView } from "editor.slint";
 import { EnvironmentPage } from "environment.slint";
 import { NotYet } from "docks.slint";
 
+// A group's tabs: the one in front lit, the rust line over it while the
+// group has the keys, as VS Code marks the active group's.
 component TabStrip inherits Rectangle {
+    in property <[DocTab]> tabs;
+    in property <string> active;
+    in property <bool> focused: true;
+    // The split button, on the strip of the group being edited.
+    in property <bool> splits;
+    callback pick(string);
+    callback close(string);
     height: 36px;
     background: Theme.window;
     HorizontalLayout {
         alignment: start;
-        for tab in Shell.tabs: Rectangle {
+        for tab in root.tabs: Rectangle {
             width: min(row.preferred-width, 240px);
-            background: tab.id == Shell.active-tab ? Theme.content : touch.has-hover ? Theme.hover : transparent;
+            background: tab.id == root.active ? Theme.content : touch.has-hover ? Theme.hover : transparent;
             row := HorizontalLayout {
                 padding-left: 12px;
                 padding-right: 6px;
                 spacing: 6px;
                 Text {
                     text: tab.title;
-                    color: tab.id == Shell.active-tab ? Theme.label : Theme.label-2;
+                    color: tab.id == root.active ? Theme.label : Theme.label-2;
                     font-size: Theme.small;
                     vertical-alignment: center;
                 }
@@ -54,17 +63,17 @@ component TabStrip inherits Rectangle {
                     if !tab.dirty || close-touch.has-hover: Icon {
                         path: Icons.close;
                         size: 12px;
-                        color: close-touch.has-hover ? Theme.label : touch.has-hover || tab.id == Shell.active-tab ? Theme.label-3 : transparent;
+                        color: close-touch.has-hover ? Theme.label : touch.has-hover || tab.id == root.active ? Theme.label-3 : transparent;
                     }
                     close-touch := TouchArea {
                         clicked => {
-                            Shell.close-tab(tab.id);
+                            root.close(tab.id);
                         }
                     }
                 }
             }
             // The tab in front has the rust line on top, as VS Code's does.
-            if tab.id == Shell.active-tab: Rectangle {
+            if tab.id == root.active && root.focused: Rectangle {
                 y: 0;
                 height: 2px;
                 background: Theme.rust;
@@ -72,11 +81,11 @@ component TabStrip inherits Rectangle {
             touch := TouchArea {
                 z: -1;
                 clicked => {
-                    Shell.pick-tab(tab.id);
+                    root.pick(tab.id);
                 }
                 pointer-event(event) => {
                     if (event.kind == PointerEventKind.up && event.button == PointerEventButton.middle) {
-                        Shell.close-tab(tab.id);
+                        root.close(tab.id);
                     }
                 }
             }
@@ -85,6 +94,16 @@ component TabStrip inherits Rectangle {
                 width: 1px;
                 background: Theme.line;
             }
+        }
+    }
+    // Ctrl+\: the file in front, beside itself.
+    if root.splits && root.tabs.length > 0: IconButton {
+        x: parent.width - self.width - 6px;
+        y: (parent.height - self.height) / 2;
+        icon: Icons.columns;
+        tip: @tr("desk.split");
+        clicked => {
+            Shell.act("editor.split");
         }
     }
     Rectangle {
@@ -484,6 +503,29 @@ component PlaygroundBar inherits Rectangle {
     }
 }
 
+// What a group shows when its tab is not a file: the page it is.
+component PageBody inherits Rectangle {
+    in property <string> kind;
+    in property <string> title;
+    if root.kind == "welcome": Welcome { }
+    if root.kind == "settings": SettingsPage { }
+    if root.kind == "environment": EnvironmentPage { }
+    if root.kind == "wizard": WizardPage { }
+    if root.kind == "git": GitPage { }
+    if root.kind == "gitdiff": GitDiffPage { }
+    if root.kind == "memory": MemoryPage { }
+    if root.kind == "crates": CratesPage { }
+    if root.kind == "math": MathPage { }
+    if root.kind != "file" && root.kind != "welcome" && root.kind != "settings" && root.kind != "environment" && root.kind != "wizard" && root.kind != "git" && root.kind != "gitdiff" && root.kind != "memory" && root.kind != "crates" && root.kind != "math" && root.kind != "": NotYet {
+        name: root.title;
+    }
+    if root.kind == "": Welcome { }
+}
+
+// The editor groups: the one with the keys — its strip, the code view or
+// its page — and, split, the other beside it, drawn from `Shade`. Which
+// side the one with the keys is on is `Shell.focus-group`; it moves there,
+// so the code view is one component however the groups are arranged.
 export component EditorArea inherits Rectangle {
     background: Theme.content;
 
@@ -497,56 +539,97 @@ export component EditorArea inherits Rectangle {
 
     VerticalLayout {
         if Shell.playground != "": PlaygroundBar { }
-        TabStrip { }
-        Rectangle {
-            code := CodeView {
-                visible: Shell.active-kind == "file";
-            }
-            // A Markdown file read as a page, over its source.
-            if Shell.active-kind == "file" && Shell.md-page: md-area := Rectangle {
-                background: Theme.content;
-                ScrollView {
-                    // A reading column, centred: margins from the page's own
-                    // width, never the column's, which is what it decides.
-                    VerticalLayout {
-                        padding-top: 28px;
-                        padding-bottom: 28px;
-                        padding-left: max(32px, (md-area.width - 820px) / 2);
-                        padding-right: max(32px, (md-area.width - 820px) / 2);
-                        MarkdownView {
-                            blocks: Shell.md-blocks;
-                            font-size: Theme.body;
+        panes := Rectangle {
+            property <length> left: Shell.split ? round(self.width / 2 / 1px) * 1px : self.width;
+            property <length> right: self.width - self.left - 1px;
+            property <bool> on-right: Shell.split && Shell.focus-group == 1;
+            live := Rectangle {
+                x: panes.on-right ? panes.left + 1px : 0;
+                width: panes.on-right ? panes.right : panes.left;
+                VerticalLayout {
+                    TabStrip {
+                        tabs: Shell.tabs;
+                        active: Shell.active-tab;
+                        splits: true;
+                        pick(id) => {
+                            Shell.pick-tab(id);
+                        }
+                        close(id) => {
+                            Shell.close-tab(id);
+                        }
+                    }
+                    Rectangle {
+                        code := CodeView {
+                            visible: Shell.active-kind == "file";
+                        }
+                        // A Markdown file read as a page, over its source.
+                        if Shell.active-kind == "file" && Shell.md-page: md-area := Rectangle {
+                            background: Theme.content;
+                            ScrollView {
+                                // A reading column, centred: margins from the page's own
+                                // width, never the column's, which is what it decides.
+                                VerticalLayout {
+                                    padding-top: 28px;
+                                    padding-bottom: 28px;
+                                    padding-left: max(32px, (md-area.width - 820px) / 2);
+                                    padding-right: max(32px, (md-area.width - 820px) / 2);
+                                    MarkdownView {
+                                        blocks: Shell.md-blocks;
+                                        font-size: Theme.body;
+                                    }
+                                }
+                            }
+                        }
+                        if Shell.active-kind == "file" && Shell.md-file: IconButton {
+                            x: parent.width - self.width - 22px;
+                            y: 8px;
+                            icon: Shell.md-page ? Icons.code : Icons.files;
+                            tip: Shell.md-page ? @tr("markdown.show-source") : @tr("markdown.show-preview");
+                            clicked => {
+                                Shell.act("markdown.toggle");
+                            }
+                        }
+                        if Shell.active-kind != "file": PageBody {
+                            kind: Shell.active-kind;
+                            title: Shell.active-title;
+                        }
+                        // The debugger's transport, over the code while a session is
+                        // live: an overlay, so its arrival moves nothing.
+                        if Shell.debug-live: Transport {
+                            x: (parent.width - self.width) / 2;
+                            y: 8px;
                         }
                     }
                 }
             }
-            if Shell.active-kind == "file" && Shell.md-file: IconButton {
-                x: parent.width - self.width - 22px;
-                y: 8px;
-                icon: Shell.md-page ? Icons.code : Icons.files;
-                tip: Shell.md-page ? @tr("markdown.show-source") : @tr("markdown.show-preview");
-                clicked => {
-                    Shell.act("markdown.toggle");
+            if Shell.split: Rectangle {
+                x: panes.on-right ? 0 : panes.left + 1px;
+                width: panes.on-right ? panes.left : panes.right;
+                VerticalLayout {
+                    TabStrip {
+                        tabs: Shell.shade-tabs;
+                        active: Shell.shade-active;
+                        focused: false;
+                        pick(id) => {
+                            Shell.shade-pick(id);
+                        }
+                        close(id) => {
+                            Shell.shade-close(id);
+                        }
+                    }
+                    Rectangle {
+                        if Shell.shade-kind == "file": ShadeView { }
+                        if Shell.shade-kind != "file": PageBody {
+                            kind: Shell.shade-kind;
+                            title: Shell.shade-title;
+                        }
+                    }
                 }
             }
-            if Shell.active-kind == "welcome": Welcome { }
-            if Shell.active-kind == "settings": SettingsPage { }
-            if Shell.active-kind == "environment": EnvironmentPage { }
-            if Shell.active-kind == "wizard": WizardPage { }
-            if Shell.active-kind == "git": GitPage { }
-            if Shell.active-kind == "gitdiff": GitDiffPage { }
-            if Shell.active-kind == "memory": MemoryPage { }
-            if Shell.active-kind == "crates": CratesPage { }
-            if Shell.active-kind == "math": MathPage { }
-            if Shell.active-kind != "file" && Shell.active-kind != "welcome" && Shell.active-kind != "settings" && Shell.active-kind != "environment" && Shell.active-kind != "wizard" && Shell.active-kind != "git" && Shell.active-kind != "gitdiff" && Shell.active-kind != "memory" && Shell.active-kind != "crates" && Shell.active-kind != "math" && Shell.active-kind != "": NotYet {
-                name: Shell.active-title;
-            }
-            if Shell.active-kind == "": Welcome { }
-            // The debugger's transport, over the code while a session is
-            // live: an overlay, so its arrival moves nothing.
-            if Shell.debug-live: Transport {
-                x: (parent.width - self.width) / 2;
-                y: 8px;
+            if Shell.split: Rectangle {
+                x: panes.left;
+                width: 1px;
+                background: Theme.line;
             }
         }
     }

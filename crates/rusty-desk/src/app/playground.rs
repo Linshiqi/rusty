@@ -106,6 +106,8 @@ impl App {
             let mut state = self.state.borrow_mut();
             state.tabs = vec![super::Tab::Page("welcome")];
             state.active = Some(0);
+            state.other.clear();
+            (state.split, state.other_active, state.focus) = (false, None, 0);
         }
         self.sync_tabs();
         work::spawn(

@@ -71,6 +71,9 @@ pub struct Document {
     pub semantic: Vec<rusty_lsp::SemanticSpan>,
     /// The server's inlay hints, by line and column, carried the same way.
     pub hints: Vec<rusty_lsp::InlayHint>,
+    /// Where the code view was scrolled when it last showed this, to be
+    /// found there again.
+    pub scroll: (f32, f32),
     saved: u64,
 }
 
@@ -102,6 +105,7 @@ impl Document {
             folds_moved: false,
             semantic: Vec::new(),
             hints: Vec::new(),
+            scroll: (0.0, 0.0),
         }
     }
 

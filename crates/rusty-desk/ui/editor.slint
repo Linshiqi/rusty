@@ -680,6 +680,141 @@ component FindBar inherits Rectangle {
     }
 }
 
+// What a code row draws, behind and under any touch: the stop, the marks,
+// the breakpoint, the number, the coloured pieces and the hints. The view
+// being edited and the other group's view both draw a row with it.
+component RowPaint inherits Rectangle {
+    in property <Row> line;
+    in property <length> gutter;
+    // The caret's row: its number is bright.
+    in property <bool> current;
+    // Where the debugger stopped, the whole line.
+    if root.line.stopped: Rectangle {
+        background: Theme.amber-fill;
+    }
+    for mark in root.line.marks: Rectangle {
+        x: root.gutter + mark.x;
+        y: mark.kind == 1 ? 2px : mark.kind >= 5 && mark.kind <= 7 ? parent.height - 4px : 0;
+        // A caret, and a match of nothing (`^`), are a bar; an
+        // indent guide (8) a hairline.
+        width: mark.kind == 1 ? 2px : mark.kind == 8 ? 1px : max(mark.width, 2px);
+        height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : parent.height;
+        background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind >= 5 ? transparent : Theme.text-selection;
+        // Drawn where the commands say: the default fit scales a
+        // path into its box less the stroke, and a wave 3 px tall
+        // shrank to two thirds of its width, centred.
+        if mark.kind >= 5 && mark.kind <= 7: Path {
+            width: parent.width;
+            height: parent.height;
+            fit: preserve;
+            commands: mark.path;
+            stroke: mark.kind == 5 ? Theme.crimson : mark.kind == 6 ? Theme.amber : Theme.slate;
+            stroke-width: 1px;
+        }
+    }
+    // The breakpoint's dot, left of the number; the stop's arrow on
+    // it. A click there sets or clears one.
+    if root.line.breakpoint > 0: Rectangle {
+        x: 4px;
+        y: (parent.height - self.height) / 2;
+        width: min(10px, parent.height - 4px);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.line.breakpoint == 1 ? #e5484d : transparent;
+        border-width: root.line.breakpoint == 2 ? 1.5px : 0;
+        border-color: #e5484d;
+    }
+    if root.line.stopped: Path {
+        x: 2px;
+        y: (parent.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        commands: "M 2 3 H 7 L 10 6 L 7 9 H 2 Z";
+        fill: Theme.amber;
+        stroke: transparent;
+    }
+    Text {
+        x: 0;
+        width: root.gutter - 20px;
+        height: parent.height;
+        text: root.line.number;
+        color: root.current ? Theme.label : Theme.label-4;
+        font-family: Theme.mono;
+        font-size: Code.font-size;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    for piece in root.line.pieces: Text {
+        x: root.gutter + piece.x;
+        height: parent.height;
+        text: piece.text;
+        color: Theme.token(piece.kind);
+        font-italic: piece.kind == 4;
+        font-family: Theme.mono;
+        font-size: Code.font-size;
+        vertical-alignment: center;
+    }
+    // The hints, in the room the pieces left them.
+    for hint in root.line.hints: Rectangle {
+        x: root.gutter + hint.x;
+        y: 2px;
+        width: hint.width;
+        height: parent.height - 4px;
+        border-radius: 3px;
+        background: Theme.hover;
+        Text {
+            text: hint.text;
+            color: Theme.label-3;
+            font-family: Theme.mono;
+            font-size: Code.font-size;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The other editor group's file while the keys are in this one, filled by
+// `src/editor/shade.rs`: drawn and scrolled, and not edited — a press
+// brings its group to front and lands where it was made.
+export global Shade {
+    in property <[Row]> rows;
+    in property <bool> has-document;
+    in property <length> content-width: 2000px;
+    in-out property <length> scroll-y;
+    in-out property <length> scroll-x;
+    callback pressed(int /* row */, length /* x */, length /* y */);
+}
+
+export component ShadeView inherits Rectangle {
+    in property <length> gutter: 64px;
+    background: Theme.content;
+    shade-list := ListView {
+        width: parent.width;
+        height: parent.height;
+        content-width: max(self.visible-width, Shade.content-width);
+        content-y <=> Shade.scroll-y;
+        content-x <=> Shade.scroll-x;
+        for shaded[index] in Shade.rows: Rectangle {
+            height: Code.row-height;
+            width: max(shade-list.visible-width, Shade.content-width);
+            RowPaint {
+                line: shaded;
+                gutter: root.gutter;
+            }
+            TouchArea {
+                mouse-cursor: text;
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        Shade.pressed(index, self.mouse-x - root.gutter, self.mouse-y);
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component CodeView inherits Rectangle {
     in property <length> gutter: 64px;
 
@@ -716,90 +851,10 @@ export component CodeView inherits Rectangle {
         for row[index] in Code.rows: Rectangle {
             height: Code.row-height;
             width: max(list.visible-width, Code.content-width);
-            // Where the debugger stopped, the whole line.
-            if row.stopped: Rectangle {
-                background: Theme.amber-fill;
-            }
-            for mark in row.marks: Rectangle {
-                x: root.gutter + mark.x;
-                y: mark.kind == 1 ? 2px : mark.kind >= 5 && mark.kind <= 7 ? parent.height - 4px : 0;
-                // A caret, and a match of nothing (`^`), are a bar; an
-                // indent guide (8) a hairline.
-                width: mark.kind == 1 ? 2px : mark.kind == 8 ? 1px : max(mark.width, 2px);
-                height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : parent.height;
-                background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind >= 5 ? transparent : Theme.text-selection;
-                // Drawn where the commands say: the default fit scales a
-                // path into its box less the stroke, and a wave 3 px tall
-                // shrank to two thirds of its width, centred.
-                if mark.kind >= 5 && mark.kind <= 7: Path {
-                    width: parent.width;
-                    height: parent.height;
-                    fit: preserve;
-                    commands: mark.path;
-                    stroke: mark.kind == 5 ? Theme.crimson : mark.kind == 6 ? Theme.amber : Theme.slate;
-                    stroke-width: 1px;
-                }
-            }
-            // The breakpoint's dot, left of the number; the stop's arrow on
-            // it. A click there sets or clears one.
-            if row.breakpoint > 0: Rectangle {
-                x: 4px;
-                y: (parent.height - self.height) / 2;
-                width: min(10px, parent.height - 4px);
-                height: self.width;
-                border-radius: self.width / 2;
-                background: row.breakpoint == 1 ? #e5484d : transparent;
-                border-width: row.breakpoint == 2 ? 1.5px : 0;
-                border-color: #e5484d;
-            }
-            if row.stopped: Path {
-                x: 2px;
-                y: (parent.height - self.height) / 2;
-                width: 12px;
-                height: 12px;
-                viewbox-width: 12;
-                viewbox-height: 12;
-                commands: "M 2 3 H 7 L 10 6 L 7 9 H 2 Z";
-                fill: Theme.amber;
-                stroke: transparent;
-            }
-            Text {
-                x: 0;
-                width: root.gutter - 20px;
-                height: parent.height;
-                text: row.number;
-                color: index == Code.caret-line ? Theme.label : Theme.label-4;
-                font-family: Theme.mono;
-                font-size: Code.font-size;
-                horizontal-alignment: right;
-                vertical-alignment: center;
-            }
-            for piece in row.pieces: Text {
-                x: root.gutter + piece.x;
-                height: parent.height;
-                text: piece.text;
-                color: Theme.token(piece.kind);
-                font-italic: piece.kind == 4;
-                font-family: Theme.mono;
-                font-size: Code.font-size;
-                vertical-alignment: center;
-            }
-            // The hints, in the room the pieces left them.
-            for hint in row.hints: Rectangle {
-                x: root.gutter + hint.x;
-                y: 2px;
-                width: hint.width;
-                height: parent.height - 4px;
-                border-radius: 3px;
-                background: Theme.hover;
-                Text {
-                    text: hint.text;
-                    color: Theme.label-3;
-                    font-family: Theme.mono;
-                    font-size: Code.font-size;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            RowPaint {
+                line: row;
+                gutter: root.gutter;
+                current: index == Code.caret-line;
             }
             TouchArea {
                 x: 0;
