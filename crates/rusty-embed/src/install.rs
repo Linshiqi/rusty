@@ -480,7 +480,18 @@ const RESUMES_PER_ROUTE: u32 = 8;
 /// delivering is asked again before the ladder moves on. A server that
 /// answers a range request with the whole file starts the file over, since
 /// appending its answer would corrupt the archive.
-pub fn download(urls: &[String], dest: &Path, mut progress: impl FnMut(String)) -> Result<()> {
+pub fn download(urls: &[String], dest: &Path, progress: impl FnMut(String)) -> Result<()> {
+    download_counted(urls, dest, progress, |_| {})
+}
+
+/// [`download`], with the bytes received so far — and the whole, when the
+/// server said — as they arrive, for a bar rather than a log.
+pub fn download_counted(
+    urls: &[String],
+    dest: &Path,
+    mut progress: impl FnMut(String),
+    mut counted: impl FnMut(crate::model::UpdateProgress),
+) -> Result<()> {
     use std::io::{Read, Write};
     use std::time::Duration;
 
@@ -615,6 +626,10 @@ pub fn download(urls: &[String], dest: &Path, mut progress: impl FnMut(String)) 
                 Ok(n) => {
                     file.write_all(&buffer[..n]).map_err(write_failed)?;
                     have += n as u64;
+                    counted(crate::model::UpdateProgress {
+                        received: have,
+                        total: expected,
+                    });
                     if have - last_mark >= 4 * 1024 * 1024 {
                         last_mark = have;
                         match expected {

@@ -1,0 +1,2 @@
+// The executable's icon on Windows: Explorer, the taskbar, shortcuts.
+1 ICON "rusty.ico"

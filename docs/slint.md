@@ -544,6 +544,34 @@ tests green, and CLAUDE.md saying how it works.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
+   *Done:* `rusty_embed::update` is the feed (`latest.json`, Tauri's
+   format), the version comparison and the signature check (minisign,
+   `minisign-verify`), against the key the Tauri updater carried — checked:
+   the secret key the repository holds signs, and the key in the code
+   verifies — so every copy of rusty installed before Slint finds, verifies
+   and installs this one. A signature must name the version the feed
+   announces. The window checks quietly a moment after it opens and says
+   only a newer release, in a note; Check for updates opens Settings ▸
+   Updates and says whatever it found; the download runs in the
+   background, its progress in the status bar, and the restart that
+   installs it is asked for. On Windows the installer is our own
+   (`crates/rusty-setup`): the app and its tools zipped and appended to it,
+   installed per user where the Tauri installer put rusty, taking over its
+   uninstall entry and shortcuts, answering its command line
+   (`/P /UPDATE /R /ARGS`), and, cut down to its own part, the uninstaller.
+   Staged beside the install and moved into place, with a list of what it
+   put there, so an update removes what it no longer carries and the
+   uninstaller removes exactly that. macOS gets an app bundle, ad-hoc
+   signed, in a disk image and as `.app.tar.gz`; Linux an AppImage and a
+   `.deb`. `crates/rusty-release` packs the installer and signs and checks
+   every updater artifact in the workflow. The tools are found beside the
+   executable (`bundled_dir`), wherever each package puts them. Proven
+   here: a silent install over a copy of the Tauri layout and an uninstall
+   back to nothing, in a sandbox; a debug build pointed at a local feed
+   found 0.6.78, downloaded it, verified it and offered the restart. The
+   macOS and Linux packaging is the release workflow's, and is proven by
+   its first run.
+
 Then `rusty-ui`, `rusty-app` and `rusty-ipc` are deleted, and with them the
 `backend` feature split, which existed for the wasm frontend.
 

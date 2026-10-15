@@ -1,0 +1,22 @@
+[package]
+name = "rusty-release"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Packs and signs rusty's release artifacts for the release workflow"
+publish = false
+
+[dependencies]
+rusty-setup = { path = "../rusty-setup" }
+# The updater's own signature check, run on every artifact before upload.
+rusty-embed = { path = "../rusty-embed" }
+# Signs as the Tauri CLI did, with the same key, so the copies of rusty
+# installed before the window moved to Slint verify what they download.
+minisign = "0.9"
+base64 = "0.22.1"
+
+[lints]
+workspace = true

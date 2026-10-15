@@ -1351,6 +1351,17 @@ export global Shell {
     // Vim's keys: on or off, and the mode of the document on screen with
     // what is pending or refused — empty while off.
     in property <bool> vim-on;
+    // Updating rusty itself: nothing asked yet (0), checking (1), the
+    // newest (2), a newer one offered (3), downloading (4), downloaded and
+    // verified (5), the feed unreachable (6), the download failed (7); what
+    // to say about it, how far a download is (-1 unsized), the version
+    // running, and the release's notes.
+    in property <int> update-state;
+    in property <string> update-title;
+    in property <string> update-detail;
+    in property <float> update-progress;
+    in property <string> update-version;
+    in property <[MdBlock]> update-notes;
     in property <string> vim-mode;
     in property <string> vim-hint;
     callback set-vim(bool);

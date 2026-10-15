@@ -35,6 +35,12 @@ gimli = { version = "0.34.0", optional = true, default-features = false, feature
 # time; the default feature set keeps it, and a packager who cannot have it can
 # turn it off and lose only the board-name guess.
 serialport = { version = "4.9.0", optional = true }
+# The updater: which release is newer, and whether a download is what the
+# release workflow signed — the minisign key the Tauri updater checked, so
+# copies installed before the window moved to Slint update onto it.
+semver = { version = "1.0.28", optional = true }
+minisign-verify = { version = "0.2.5", optional = true }
+base64 = { version = "0.22.1", optional = true }
 # One rule for "a repository with no commits", shared with the Git panel —
 # the wizard removes such a `.git` after esp-generate, and the panel offers
 # to for a project generated before it did.
@@ -65,12 +71,18 @@ backend = [
     "dep:rusty-git",
     "dep:rusty-mcu",
     "dep:cc",
+    "dep:semver",
+    "dep:minisign-verify",
+    "dep:base64",
 ]
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+# Signs as the release workflow does, so the updater's check is held to a
+# real signature rather than to a copy of one.
+minisign = "0.9"
 # The writer of the drawing protocol, so a test can hold `draw`'s reader to
 # what the crate actually writes rather than to a copy of its format.
 rusty-draw = { path = "../rusty-draw" }

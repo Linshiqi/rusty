@@ -38,6 +38,15 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(|arg| std::path::absolute(&arg).unwrap_or_else(|_| arg.into()));
     let file = args.next();
 
+    // The tools the installer ships — the emulator, the debuggers, the
+    // flasher — under `bundled/` beside the executable, in the app
+    // bundle's Resources on macOS, or under `lib/rusty` where a package
+    // puts the program in `bin`; `target/bundled` in a checkout, where
+    // `scripts/bundle-tools.sh` writes them. They join the finder's ladder
+    // after anything the user installed.
+    if let Some(dir) = bundled_dir() {
+        rusty_embed::tools::set_bundled_dir(dir);
+    }
     let saved = rusty_embed::config::workbench();
     let window = AppWindow::new()?;
     // After the window: Slint's translations are bundled with the component,
@@ -74,4 +83,18 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     probe::start(&window);
     slint::run_event_loop()
+}
+
+/// Where the installed tools are, of the places an install puts them.
+fn bundled_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    [
+        dir.join("bundled"),
+        dir.join("../Resources/bundled"),
+        dir.join("../lib/rusty/bundled"),
+        dir.join("../bundled"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_dir())
 }

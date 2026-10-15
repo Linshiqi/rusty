@@ -32,6 +32,16 @@ fn main() {
         .with_bundled_translations(&bundle)
         .with_default_translation_context(slint_build::DefaultTranslationContext::None);
     slint_build::compile_with_config("ui/app.slint", config).expect("the .slint files compile");
+    // The executable's own icon on Windows — what Explorer, the taskbar
+    // and a shortcut show; the window's is `icons/rusty.png`. Tauri's build
+    // embedded it until the window moved to Slint.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=icons/rusty.rc");
+        println!("cargo:rerun-if-changed=icons/rusty.ico");
+        embed_resource::compile("icons/rusty.rc", embed_resource::NONE)
+            .manifest_optional()
+            .expect("the icon resource compiles");
+    }
 }
 
 /// Every string of a catalogue under its dotted key: `[menu.file]` `exit`

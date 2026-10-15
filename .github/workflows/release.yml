@@ -1,20 +1,30 @@
 # Tag → installers for every desktop → one GitHub Release.
 #
-# Push `v0.2.0` and three runners build: Windows NSIS, macOS universal DMG
-# (Intel + Apple Silicon in one image), Ubuntu deb + AppImage — plus the
-# headless rusty-cli for each. A final job publishes everything on one
-# Release, with the body taken from CHANGELOG.md — never generated from the
-# commit log, which is written for whoever maintains this rather than for
-# whoever downloads it.
+# Push `v0.7.0` and three runners build the window (rusty-desk, drawn with
+# Slint) and the headless rusty-cli, and package them with no Tauri left in
+# the chain:
 #
-# Upgrades: with the Tauri updater keypair in the repo secrets
-# (TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD, made once with
-# `cargo tauri signer generate`), each build also emits signed updater
-# artifacts and the publish job merges them into latest.json — the feed the
-# in-app updater polls. Without the secrets the release still ships.
+#   Windows  rusty-setup (crates/rusty-setup) with the app and its tools
+#            appended: one .exe that installs per user, takes over an
+#            earlier install, updates, and — cut down to its own part —
+#            uninstalls.
+#   macOS    rusty.app, universal (Intel and Apple Silicon), ad-hoc signed,
+#            in a disk image; and as .app.tar.gz, which the updater unpacks.
+#   Linux    an AppImage (linuxdeploy, as Tauri's bundler used) and a .deb.
 #
-# Everything installs as prebuilt binaries (binstall): a cold `cargo install
-# trunk tauri-cli` would cost ten minutes per platform for nothing.
+# A final job publishes everything on one Release, the body taken from
+# CHANGELOG.md — never generated from the commit log, which is written for
+# whoever maintains this rather than for whoever downloads it.
+#
+# Updates: with the updater key in the repo secrets
+# (TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD — the Tauri CLI's names, and its
+# key, which every copy of rusty installed before the window moved to Slint
+# checks downloads against), each build signs its updater artifact with
+# `rusty-release sign`, checks the signature with the updater's own check
+# (`rusty-release verify`), and the publish job merges them into
+# latest.json — the feed both kinds of install poll, in the format both
+# read. Without the secrets the release still ships, and nothing updates
+# onto it.
 
 name: release
 
@@ -34,41 +44,34 @@ jobs:
           - os: windows-latest
             cli: rusty-cli.exe
             cli_asset: rusty-cli-windows-x86_64.exe
-            tauri_args: "--bundles nsis"
           - os: macos-latest
             cli: rusty-cli
             cli_asset: rusty-cli-macos-universal
-            tauri_args: "--target universal-apple-darwin --bundles app,dmg"
           - os: ubuntu-22.04
             cli: rusty-cli
             cli_asset: rusty-cli-linux-x86_64
-            tauri_args: "--bundles deb,appimage"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      # Tauri's own list, plus the two this workbench adds. Named explicitly
-      # even where a runner image happens to ship them: a dependency that
-      # comes from whatever the image includes is a dependency nobody chose,
-      # and an apt package already present costs a line and no time.
+      # What Slint's window needs to build on Linux, and what this workbench
+      # adds. Named explicitly even where a runner image happens to ship
+      # them: a dependency that comes from whatever the image includes is a
+      # dependency nobody chose.
       #
-      # libudev-dev: `serialport` enumerates ports through udev on Linux, and
-      #   it is what carries the USB identity — the VID/PID rusty matches
-      #   against the board catalogue to say "Espressif native USB" rather
-      #   than "some COM port". Turning serialport's `libudev` feature off
-      #   would build without it and silently lose that.
-      # libdbus-1-dev: `libdbus-sys`, via tao, defaults to pkg-config.
-      - name: Linux system libraries (webkit2gtk and friends)
+      # libfontconfig1-dev, libxkbcommon-dev: Slint's text and keyboard.
+      # libudev-dev: `serialport` reads USB identity through udev — the
+      #   VID/PID rusty matches against the board catalogue.
+      # libdbus-1-dev: the accessibility bridge.
+      # libgtk-3-dev: the file and message dialogs.
+      - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl \
-            wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
-            librsvg2-dev libudev-dev libdbus-1-dev
+          sudo apt-get install -y build-essential file libfontconfig1-dev \
+            libxkbcommon-dev libudev-dev libdbus-1-dev libgtk-3-dev
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
 
       - name: macOS second architecture (universal binary)
         if: runner.os == 'macOS'
@@ -76,73 +79,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: cargo-bins/cargo-binstall@main
-
-      # Prebuilt or nothing, and the token is what makes that possible.
-      #
-      # binstall resolves a release through the GitHub API, and unauthenticated
-      # that is sixty requests an hour shared across every runner on the same
-      # egress — so it gets refused, falls back to `compile`, and spends ten
-      # minutes building trunk from source. That build then failed on macOS
-      # with a bare `exit status: 101`, which reads as "trunk is broken" rather
-      # than "the download was rate limited". `trunk-aarch64-apple-darwin.tar.gz`
-      # was there the whole time.
-      #
-      # `--disable-strategies compile` says the same thing the comment at the
-      # top of this file already claimed: prebuilt or nothing. A genuinely
-      # missing binary now fails here, immediately, naming the crate — instead
-      # of surfacing ten minutes later as somebody else's dependency error.
-      #
-      # Versions are pinned for the reason `Trunk.toml` pins tailwind: a tool
-      # taken from "whatever is latest" is not a version, and two releases cut
-      # a month apart would be built by different tools with nothing recording
-      # which. `tauri-cli` is a `~` requirement rather than an exact one — it
-      # has its own patch train (there is no `tauri-cli` 2.11.5 to match the
-      # `tauri` 2.11.5 in `crates/rusty-app/Cargo.toml`), and what has to
-      # match is the *minor*: a CLI from a different one bundles against a
-      # config schema it does not share.
-      - name: Install trunk and tauri-cli (prebuilt)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          cargo binstall --no-confirm
-          --disable-strategies compile
-          trunk@0.21.14 tauri-cli@~2.11
-
-      # The tools the installer ships beside the app: rusty's own QEMU — the
-      # one with the peripherals — both esp-gdbs, espflash and the LLDB
-      # adapter. That is the difference between a fresh install that is a
-      # workbench and one that cannot simulate, debug or flash until the user
-      # has found and fetched four things. Rust itself is deliberately not in
-      # there; the script says why.
-      #
-      # A tool with no build for this platform is said aloud and skipped, so
-      # this is a no-op rather than a failure on a desktop nothing publishes
-      # for. Through `bash`, not by executing the file: a script committed
-      # from a Windows checkout is mode 644, and macOS and Linux runners
-      # refuse to run it ("Permission denied", exit 126) — the first v0.6.12
-      # build.
-      - name: Bundle the tools the app drives
-        shell: bash
-        run: bash scripts/bundle-tools.sh
-
-      # The tag is the version. Stamping it here means a release is one
-      # gesture — the tag — not a version-bump commit plus a matching tag.
-      #
-      # Both files: tauri.conf.json is what the app and its updater call
-      # themselves, and the workspace manifest is `CARGO_PKG_VERSION` — what
-      # `rusty-cli --version` prints. Only the first was stamped for ten
-      # releases, so every CLI in that stretch reported 0.6.12.
-      - name: Stamp the tag's version into tauri.conf.json and Cargo.toml
+      # The tag is the version: a release is one gesture, not a version
+      # bump plus a matching tag. The repository said 0.6.12 for twelve
+      # releases while the installers were right, and every development
+      # build called itself 0.6.12 and was offered its own release.
+      - name: Stamp the tag's version into Cargo.toml
         shell: python
         run: |
-          import json, os, re
+          import os, re
           version = os.environ["GITHUB_REF_NAME"].lstrip("v")
-          path = "crates/rusty-app/tauri.conf.json"
-          conf = json.load(open(path, encoding="utf-8"))
-          conf["version"] = version
-          json.dump(conf, open(path, "w", encoding="utf-8"), indent=2)
-
           manifest = open("Cargo.toml", encoding="utf-8").read()
           head, sep, tail = manifest.partition("[workspace.package]")
           assert sep, "Cargo.toml has no [workspace.package] table"
@@ -153,94 +98,201 @@ jobs:
           with open("Cargo.toml", "w", encoding="utf-8", newline="") as out:
               out.write(head + sep + tail)
 
-      # The built-in shell as a console program of its own, among the bundled
-      # tools (`bundle.resources`), where the app looks for it first. Windows
-      # only, and not optional there: the app is a GUI-subsystem executable
-      # in a release build, a pseudoconsole hosts console programs only, and
-      # the app re-entered as the shell exited 0 having printed nothing —
-      # every installed terminal said "The shell exited with status 0." After
-      # the version stamp, so the app's build reuses what this one compiled.
-      - name: Build the built-in shell (Windows)
+      # The tools the installer ships beside the app: rusty's own QEMU — the
+      # one with the peripherals — both esp-gdbs, espflash and the LLDB
+      # adapter, into target/bundled. Through `bash`, not by executing the
+      # file: a script committed from a Windows checkout is mode 644, and
+      # macOS and Linux runners refuse to run it.
+      - name: Bundle the tools the app drives
+        shell: bash
+        run: bash scripts/bundle-tools.sh
+
+      - name: Build (Windows, Linux)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          packages="-p rusty-desk -p rusty-cli -p rusty-release"
+          if [ "$RUNNER_OS" = Windows ]; then packages="$packages -p rusty-setup"; fi
+          cargo build --release $packages
+
+      # Both architectures, joined: one app for every Mac, as the Tauri
+      # build's universal DMG was.
+      - name: Build (macOS, universal)
+        if: runner.os == 'macOS'
+        run: |
+          for arch in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release -p rusty-desk -p rusty-cli --target "$arch"
+          done
+          mkdir -p target/universal-apple-darwin/release
+          for bin in rusty rusty-cli; do
+            lipo -create -output "target/universal-apple-darwin/release/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" \
+              "target/x86_64-apple-darwin/release/$bin"
+          done
+          cargo build --release -p rusty-release
+
+      - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo build -p rusty-term --bin rusty-shell --release
-          mkdir -p crates/rusty-app/bundled
-          cp target/release/rusty-shell.exe crates/rusty-app/bundled/
+          v="${GITHUB_REF_NAME#v}"
+          mkdir -p stage pkg/payload
+          cp target/release/rusty.exe pkg/payload/
+          if [ -d target/bundled ]; then cp -r target/bundled pkg/payload/bundled; fi
+          target/release/rusty-release.exe pack --stub target/release/rusty-setup.exe \
+            --dir pkg/payload --out "stage/rusty-$v-windows-x86_64-setup.exe"
+          echo "UPDATER_ARTIFACT=stage/rusty-$v-windows-x86_64-setup.exe" >> "$GITHUB_ENV"
+          echo "UPDATER_KEYS=windows-x86_64" >> "$GITHUB_ENV"
 
-      - name: Build the app bundle
-        working-directory: crates/rusty-app
+      # A bundle by hand: what the executable is called, its icon, its
+      # version and identifier — the Tauri app's, so the system takes the
+      # new one for the same app — and the tools under Resources, where the
+      # window looks (`bundled_dir`). Ad-hoc signed: Apple Silicon runs
+      # nothing unsigned, and no identity is in the secrets.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir -p stage pkg
+          app=pkg/rusty.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp target/universal-apple-darwin/release/rusty "$app/Contents/MacOS/rusty"
+          if [ -d target/bundled ]; then cp -R target/bundled "$app/Contents/Resources/bundled"; fi
+          iconset=pkg/rusty.iconset
+          mkdir -p "$iconset"
+          for size in 16 32 64 128 256; do
+            sips -z $size $size crates/rusty-desk/icons/rusty-256.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+          done
+          for size in 16 32 64 128; do
+            cp "$iconset/icon_$((size * 2))x$((size * 2)).png" "$iconset/icon_${size}x${size}@2x.png"
+          done
+          rm "$iconset/icon_64x64.png" "$iconset/icon_64x64@2x.png"
+          iconutil -c icns "$iconset" -o "$app/Contents/Resources/rusty.icns"
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>rusty</string>
+            <key>CFBundleDisplayName</key><string>rusty</string>
+            <key>CFBundleExecutable</key><string>rusty</string>
+            <key>CFBundleIdentifier</key><string>dev.rusty.workbench</string>
+            <key>CFBundleIconFile</key><string>rusty</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$v</string>
+            <key>CFBundleVersion</key><string>$v</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          codesign --force --deep --sign - "$app"
+          tar -czf "stage/rusty-$v-macos-universal.app.tar.gz" -C pkg rusty.app
+          mkdir -p pkg/dmg
+          cp -R "$app" pkg/dmg/
+          ln -s /Applications pkg/dmg/Applications
+          hdiutil create -volname rusty -srcfolder pkg/dmg -ov -format UDZO \
+            "stage/rusty-$v-macos-universal.dmg"
+          echo "UPDATER_ARTIFACT=stage/rusty-$v-macos-universal.app.tar.gz" >> "$GITHUB_ENV"
+          echo "UPDATER_KEYS=darwin-x86_64 darwin-aarch64" >> "$GITHUB_ENV"
+
+      # The AppImage by linuxdeploy — pinned, as every tool here is — which
+      # brings along the libraries the app and the bundled tools link and a
+      # system may lack. `bundle-tools.sh` has already taken out what it
+      # cannot deploy (the python-linked gdbs, other machines' firmware);
+      # NO_STRIP keeps it from rewriting the sixty-megabyte QEMU binaries.
+      # The .deb puts the same files where a package does: the program in
+      # /usr/bin, its tools in /usr/lib/rusty.
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        env:
+          NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir -p stage pkg
+          desktop=pkg/rusty.desktop
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=rusty' \
+            'Comment=An embedded Rust workbench' 'Exec=rusty %F' 'Icon=rusty' \
+            'Terminal=false' 'Categories=Development;IDE;' > "$desktop"
+          cp crates/rusty-desk/icons/rusty-256.png pkg/rusty.png
+          appdir=pkg/AppDir
+          mkdir -p "$appdir/usr/bin" "$appdir/usr/lib/rusty"
+          cp target/release/rusty "$appdir/usr/bin/rusty"
+          if [ -d target/bundled ]; then cp -r target/bundled "$appdir/usr/lib/rusty/bundled"; fi
+          curl -fsSL -o pkg/linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          chmod +x pkg/linuxdeploy
+          (cd pkg && ./linuxdeploy --appdir AppDir --executable AppDir/usr/bin/rusty \
+            --desktop-file rusty.desktop --icon-file rusty.png --output appimage)
+          mv pkg/rusty-*.AppImage "stage/rusty-$v-linux-x86_64.AppImage"
+          deb=pkg/deb
+          mkdir -p "$deb/DEBIAN" "$deb/usr/bin" "$deb/usr/lib/rusty" \
+            "$deb/usr/share/applications" "$deb/usr/share/icons/hicolor/256x256/apps"
+          cp target/release/rusty "$deb/usr/bin/rusty"
+          if [ -d target/bundled ]; then cp -r target/bundled "$deb/usr/lib/rusty/bundled"; fi
+          cp "$desktop" "$deb/usr/share/applications/rusty.desktop"
+          cp pkg/rusty.png "$deb/usr/share/icons/hicolor/256x256/apps/rusty.png"
+          printf '%s\n' 'Package: rusty' "Version: $v" 'Architecture: amd64' \
+            'Maintainer: rusty <https://github.com/Linshiqi/rusty>' 'Section: devel' \
+            'Priority: optional' \
+            'Depends: libfontconfig1, libxkbcommon0, libudev1, libdbus-1-3, libgtk-3-0' \
+            'Description: An embedded Rust workbench' \
+            ' The editor, the simulator, the flasher and the debugger for embedded Rust.' \
+            > "$deb/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$deb" "stage/rusty_${v}_amd64.deb"
+          echo "UPDATER_ARTIFACT=stage/rusty-$v-linux-x86_64.AppImage" >> "$GITHUB_ENV"
+          echo "UPDATER_KEYS=linux-x86_64" >> "$GITHUB_ENV"
+
+      - name: The headless CLI
+        shell: bash
+        run: |
+          cli=target/release/${{ matrix.cli }}
+          if [ "$RUNNER_OS" = macOS ]; then cli=target/universal-apple-darwin/release/${{ matrix.cli }}; fi
+          cp "$cli" "stage/${{ matrix.cli_asset }}"
+
+      # Signed with the key the installed copies carry, and checked with
+      # their own check before anything is uploaded: a signature they would
+      # refuse is a release nobody's rusty ever installs, and nothing else
+      # would say so. Then the feed fragment: platform → {signature, url}.
+      - name: Sign the updater artifact
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # linuxdeploy strips every ELF it deploys into the AppImage, and the
-          # bundled QEMU binaries are sixty-megabyte ELFs it has no business
-          # rewriting; a strip that fails there fails the whole bundle.
-          NO_STRIP: "true"
         run: |
-          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            cargo tauri build ${{ matrix.tauri_args }} \
-              --config '{"bundle":{"createUpdaterArtifacts":true}}'
-          else
-            cargo tauri build ${{ matrix.tauri_args }}
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "no updater key in the secrets: this release ships, and nothing updates onto it"
+            exit 0
           fi
+          v="${GITHUB_REF_NAME#v}"
+          tool=target/release/rusty-release
+          "$tool" sign "$UPDATER_ARTIFACT" --version "$v"
+          "$tool" verify "$UPDATER_ARTIFACT" --version "$v"
+          # `python3` on macOS and Linux, `python` on the Windows runner.
+          python="$(command -v python3 || command -v python)"
+          "$python" - <<'PY'
+          import json, os
+          artifact = os.environ["UPDATER_ARTIFACT"]
+          name = os.path.basename(artifact)
+          url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['GITHUB_REF_NAME']}/{name}"
+          signature = open(artifact + ".sig", encoding="utf-8").read()
+          entries = {key: {"signature": signature, "url": url} for key in os.environ["UPDATER_KEYS"].split()}
+          json.dump(entries, open(f"stage/feed-{os.environ['RUNNER_OS']}.json", "w"))
+          PY
 
-      - name: Build the headless CLI
-        run: cargo build -p rusty-cli --release
-
-      # One staging directory per platform: the bundles, the renamed CLI,
-      # and — when the build signed — a feed fragment the publish job merges.
-      - name: Stage release assets
-        shell: python
+      # Refuse rather than ship half a release: a platform that built and
+      # packaged nothing is a failure here, not a green run with one
+      # installer missing.
+      - name: Check what was staged
+        shell: bash
         run: |
-          import glob, json, os, shutil
-          os.makedirs("stage", exist_ok=True)
-          roots = ["target/release/bundle", "target/universal-apple-darwin/release/bundle"]
-          patterns = [
-              "nsis/*-setup.exe", "nsis/*.sig",
-              "dmg/*.dmg", "macos/*.app.tar.gz", "macos/*.app.tar.gz.sig",
-              "deb/*.deb", "appimage/*.AppImage", "appimage/*.AppImage.sig",
-          ]
-          for root in roots:
-              for pattern in patterns:
-                  for path in glob.glob(f"{root}/{pattern}"):
-                      shutil.copy(path, "stage/")
-          # Refuse rather than ship half a release. `bundle.targets` was
-          # once `["nsis"]`, which is Windows-only, so macOS and Linux built
-          # the app, bundled nothing, staged the CLI alone — and the run went
-          # green while two of three platforms had no installer at all. The
-          # upload's own `if-no-files-found` cannot catch that: the directory
-          # is not empty, it is just missing the only thing anyone downloads.
-          if not os.listdir("stage"):
-              raise SystemExit(
-                  "no installer produced on ${{ matrix.os }} — check --bundles"
-                  " against what this platform can actually build"
-              )
-          cli = glob.glob("target/release/${{ matrix.cli }}") \
-              + glob.glob("target/universal-apple-darwin/release/${{ matrix.cli }}")
-          shutil.copy(cli[0], "stage/${{ matrix.cli_asset }}")
-
-          # Feed fragment: platform key -> {signature, url}, if signed.
-          tag = os.environ["GITHUB_REF_NAME"]
-          repo = os.environ["GITHUB_REPOSITORY"]
-          url = lambda name: (
-              f"https://github.com/{repo}/releases/download/{tag}/{name}"
-          )
-          entries = {}
-          def feed(pattern, keys):
-              sigs = glob.glob(f"stage/{pattern}")
-              if not sigs:
-                  return
-              sig = open(sigs[0], encoding="utf-8").read()
-              artifact = os.path.basename(sigs[0])[: -len(".sig")]
-              for key in keys:
-                  entries[key] = {"signature": sig, "url": url(artifact)}
-          feed("*-setup.exe.sig", ["windows-x86_64"])
-          feed("*.app.tar.gz.sig", ["darwin-x86_64", "darwin-aarch64"])
-          feed("*.AppImage.sig", ["linux-x86_64"])
-          if entries:
-              json.dump(entries, open("stage/feed-${{ matrix.os }}.json", "w"))
+          ls -la stage
+          case "$RUNNER_OS" in
+            Windows) ls stage/*-setup.exe ;;
+            macOS) ls stage/*.dmg stage/*.app.tar.gz ;;
+            Linux) ls stage/*.AppImage stage/*.deb ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:
@@ -253,8 +305,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       # Into `source/`, because `assets/` is the upload set and everything in
-      # it is attached to the release — a checkout beside it would ship the
-      # whole tree as a release asset.
+      # it is attached to the release.
       - uses: actions/checkout@v4
         with:
           path: source
@@ -264,18 +315,9 @@ jobs:
           path: assets
           merge-multiple: true
 
-      # The body users read. Taken from CHANGELOG.md, never generated.
-      #
-      # `generate_release_notes: true` builds the body from the commits
-      # between tags — and those commits are in a *private* repository whose
-      # messages describe internals in detail. Publishing them into a public
-      # release would put the whole history where the source deliberately is
-      # not. Anything users should read is written for them by hand.
-      #
-      # Written to a file beside the assets rather than a step output: the
-      # feed below carries the same text as its `notes`, which is what the
-      # app's update sheet shows, so the release page and the sheet cannot
-      # say two different things.
+      # The body users read, from CHANGELOG.md, written to a file the feed
+      # reads too — so the release page and the update's notes cannot say
+      # two different things.
       - name: The section of CHANGELOG.md for this tag
         shell: python
         run: |
@@ -285,24 +327,19 @@ jobs:
               text = open("source/CHANGELOG.md", encoding="utf-8").read()
           except FileNotFoundError:
               text = ""
-          # Everything under `## <tag>` up to the next `## `.
           found = re.search(
               rf"^## +{re.escape(tag)}\b(.*?)(?=^## |\Z)", text, re.S | re.M
           )
           body = (found.group(1).strip() if found else
                   "Installers for Windows, macOS and Linux are attached below.")
           open("release-notes.md", "w", encoding="utf-8").write(body + "\n")
-          # The release page also carries Slint's badge. Not the feed's
-          # notes: the update sheet shows no remote picture, and a badge as
-          # alt text is noise in front of the changes.
           badge = ("[![Made with Slint](https://raw.githubusercontent.com/"
                    "slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)]"
                    "(https://slint.dev)")
           open("release-body.md", "w", encoding="utf-8").write(
               body + "\n\n" + badge + "\n")
 
-      # latest.json: every platform's signed entry in one feed, with the
-      # notes the sheet shows before anyone downloads.
+      # latest.json: every platform's signed entry in one feed.
       - name: Merge the updater feed
         shell: python
         run: |
@@ -321,9 +358,6 @@ jobs:
               }
               json.dump(feed, open("assets/latest.json", "w"), indent=2)
 
-      # Published here. It was a second, public repository while the source
-      # was private — GITHUB_TOKEN cannot cross repositories, so that needed a
-      # PAT — and going public collapsed the two back into one.
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: false

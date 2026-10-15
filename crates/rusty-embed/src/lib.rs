@@ -156,6 +156,9 @@ pub mod toolchain;
 #[cfg(feature = "backend")]
 pub mod tools;
 mod union_find;
+/// rusty updating itself: the release feed and the signature check.
+#[cfg(feature = "backend")]
+pub mod update;
 // The lines that put a rendered signal on the emulator and its account of
 // playing it. Wasm-safe with the protocol: the frontend reads the account
 // to line the signal it drew up with the conversions the emulator reports.
