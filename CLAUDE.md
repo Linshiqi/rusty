@@ -1252,6 +1252,37 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   the split.
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
   split comes back with them (`app/strip.rs`).
+- **The divider is dragged, and where it was left is kept** with the docks'
+  sizes (`WindowLayout.split`, the left group's share): a 7 px hold on the
+  1 px line with a resize cursor, each group at least VS Code's 220 px while
+  there is room for two, and a double-click puts it back at half. The share
+  is the window's, not a project's, as the docks' sizes are.
+- **A tab is named by its group as well as its id.** One file can be a tab in
+  both groups under one id, so whatever closes or acts on a tab says which
+  group (`App::close_tab_in`, `tab_in`): the other strip's × once closed the
+  keys group's tab of the same file.
+- **A strip's tabs sit in a lane that ends where its buttons begin**
+  (`TabStrip`, `ui/pages.slint`), VS Code's shape: the split button drawn
+  over the strip covered the last tab's name. More tabs than fit scroll the
+  lane sideways under the wheel, either way of turning it, and the tab in
+  front is brought into view whenever it changes or the lane is resized —
+  from a timer a millisecond on, because a new tab's place is not laid out
+  while the tab is being made, and asked for it then is a binding loop.
+- **A tab's right-click menu is VS Code's** (`app/tab_menu.rs`): Close,
+  Close others, Close to the right, Close saved, Close all; Copy path, Copy
+  relative path (the system's separator, as VS Code's `auto`); Reveal in
+  File Explorer (Finder, or the containing folder, named as each system
+  names it); Split right — the file in the group to its right, a new one
+  when the window is not split. The paths, Reveal and the new group are the
+  tree's (`app/tree.rs`, `crate::reveal`), words and all, so a tab and a row
+  of the tree do them one way. Each row is an action, named and keyed as
+  the palette names and keys it, and the palette's way in acts on the tab
+  in front. What would do nothing is left out rather than offered: nothing
+  to close beside it, no file on disk behind a page or an expansion, no
+  group to the right of the right one. Every close goes through the one
+  close path, so a file with changes asks, and keeping one ends the batch.
+  A row for another verb is one more id in `ROWS` and one more arm in
+  `tab_verb`.
 - **The picker is where navigation lands** (`picker.rs`, `app/navigate.rs`):
   the palette (Ctrl+Shift+P), the finder (Ctrl+P), a line (Ctrl+G opens it
   with `:` typed — `42`, `42:7`), references (Shift+F12), implementations
@@ -1306,9 +1337,11 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
 
 ## A tab in a window of its own
 
-VS Code's Move into New Window: `editor.detach` in the palette, or a tab let
-go of beyond the main window's edge (`Shell.tab-dropped`). One process, a
-second Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
+VS Code's Move into New Window: `editor.detach` in the palette and in a
+tab's right-click menu — for the tab clicked, in its own group — or a tab
+let go of beyond the main window's edge (`Shell.tab-dropped`, which names
+the group too, since one file can be a tab in both). One process, a second
+Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
 `app/torn.rs` for when it opens, what its keys do and how it closes.
 
 - **A second window is a second surface, not a second editor.** Slint gives
@@ -1360,6 +1393,11 @@ second Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
   of from inside its own callback is dropped a turn later
   (`Timer::single_shot`). Move into Main Window, the icon on its strip, puts
   the tab back in the group with the keys, where its view was scrolled.
+- **It follows the tree as a tab does.** A rename or a move there moves the
+  document for every window at once (`Surface::moved`, the map being one),
+  and the torn window takes the new name (`App::torn_moved`, from
+  `follow_move`); a delete closes the window without a question and keeps
+  nothing for the file (`App::torn_deleted`, from `follow_delete`).
 
 ## What the editor draws beside the text
 
@@ -1726,9 +1764,43 @@ two. A file's diff is a page of its own. `app/git.rs` reads and writes,
 
 Move, copy, rename and delete what the tree shows go through
 `rusty_edit::entries` — confined to the root like every other write, every
-answer the relative path it produced. The Slint window's tree does not offer
-them yet (no drag-and-drop, no right-click verbs, no reveal); the rules below
-are the library's, and the ones the window must keep when it does.
+answer the relative path it produced. The tree is VS Code's explorer
+(`app/tree.rs`, its pure half `crate::tree`): a right-click on a folder
+offers New file…, New folder…, Reveal in File Explorer, Cut, Copy, Paste,
+Copy path, Copy relative path, Rename… and Delete; on a file, Open to the
+side in place of the three that make something; below the rows, the root's
+New file, New folder and Paste. The same verbs are keys while the tree has
+them — the arrows, Enter, Space, F2, Delete, Ctrl+X, Ctrl+C, Ctrl+V,
+Escape — and drag and drop moves; a new file or folder in the folder
+selected is also the dock's buttons and the palette's. `RUSTY_PROBE_TREE` drives all of it by the
+pointer and the keys and photographs it.
+
+- **A new entry is named where it will be**, VS Code's box: a row among its
+  future siblings — a folder first in its folder, a file after the folders
+  — the folder opened first (`tree::with_box`), and a rename in the entry's
+  own row with the name before its extension selected. Enter makes it,
+  Escape puts it away, a click elsewhere makes it when it can be made and
+  puts it away when it cannot. A new file opens in the editor. A new entry
+  may be a path (`src/x.rs` makes `src`), as VS Code's may; a rename is a
+  name.
+- **A name is refused under the box while it is typed, by the library's
+  rule** (`rusty_edit::name_problem`, which `rename_entry` keeps — so the
+  box and the write cannot disagree) and by the tree's own entries for a
+  name that is taken, never the disk on the thread that draws. **Only
+  committed text is judged**: the box judges when the input method has
+  nothing composing (`preedit-text`), so `f'l'y` on the way to 飞 is never a
+  name anybody typed. Enter over a refused name leaves the box saying why.
+- **The box is never made again under the keys typing into it.** The rows
+  are one model changed in place (`patch`: the rows before and after a
+  change keep their elements), because replaced whole on every sync — the
+  watcher's re-read, a tab switch — the box was a new element each time,
+  and the text being typed and the keys went with the old one.
+- **A click keeps the keys in the tree; a double-click or Enter gives them
+  to the file**, VS Code's single click: the file opens and the arrows still
+  walk the tree (`open_file_then`, which takes the keys back after the
+  editor has put them in the code). The tree follows the file in front —
+  selected, the folders above it opened, brought into view — once each time
+  it changes, so a folder closed over it stays closed (`explorer.autoReveal`).
 
 - **Move refuses an existing name; copy takes a free one.** An editor that
   silently replaces a file eats work, so a move or rename onto a taken name
@@ -1746,13 +1818,29 @@ are the library's, and the ones the window must keep when it does.
   and a panic there becomes an error. Every tab under the entry closes
   without a second question: the file is gone and a draft of it has nowhere
   to be saved.
-- **Paths that move take their state with them, before the watcher hears**:
-  the tabs, the documents, the expanded folders, and the servers, which hear
-  a moved file's old name closed and its new one opened. A path is under a
-  folder by its separator, not its prefix — `src2/a.rs` is not under `src`.
-- **A drop target is a pure rule, and a highlight follows it**: a file's row
-  stands for its folder, a folder never accepts itself or anything below it,
-  and the folder an entry is already in is not a move.
+- **Paths that move take their state with them, before the watcher hears**
+  (`App::follow_move`, after a rename, a drop and a cut pasted): the tabs in
+  both groups, the documents with their text, cursors, folds and history
+  (`Surface::moved`, painted again where the extension changed), the drafts
+  kept for them, the expanded folders, the breakpoints, the selection and
+  what is cut, and the servers, which hear a moved file's old name closed
+  and its new one opened. A path is under a folder by its separator, not its
+  prefix — `src2/a.rs` is not under `src` (`rusty_edit::moved_path`).
+- **A drop target is a pure rule, and a highlight follows it**
+  (`rusty_edit::drop_target`): a file's row stands for its folder, a folder
+  never accepts itself or anything below it, and the folder an entry is
+  already in is not a move. The drag is the row's own: a press pulled four
+  pixels carries it, and the row it is let go over is counted from the
+  pressed row in rows, since the pointer is that row's until it is let go;
+  past the last row is the root, lit as a frame round the list. Escape gives
+  a drag up, then a cut. No question before a drop, unlike VS Code's
+  default — a move is undone by dragging it back.
+- **Paste goes into the folder right-clicked, the folder selected, or a
+  selected file's folder** — the root below the rows; Paste is listed only
+  when something was cut or copied, since a menu row cannot be greyed. A cut
+  is drawn faint and used up by its paste; a copy stays to be pasted again.
+- **Reveal is one function, `crate::reveal`**, the tree's and a tab's; the
+  menu names the platform's file manager (`reveal::label_key`).
 - **Reveal is Explorer's `/select,"<path>"` as one raw argument** — a space
   after the comma makes Explorer open the home folder, and **so does a
   forward slash in the path**. The tree and the tabs name a file relative to
@@ -1764,7 +1852,9 @@ are the library's, and the ones the window must keep when it does.
   `raw_arg` so a space in a folder name holds. A path a program takes and a
   command line is handed are two different contracts. `open -R` on macOS,
   and the containing folder through `xdg-open` elsewhere, where no file
-  manager takes a selection portably.
+  manager takes a selection portably. A tab's menu reveals, copies a path
+  and opens to the side through the tree's own functions (`tree_reveal`,
+  `tree_copy_path`, `open_to_side`), so the two menus cannot disagree.
 
 ## Two crates from the wizard
 
@@ -2383,7 +2473,10 @@ files, which `build.rs` bundles as gettext from the same TOML.
 `docs/slint.md` (*The window, designed again*) is the design; these are the
 rules it settled, each the answer to something that went wrong.
 
-- **The title bar is the run loop.** On the left, which project (its menu is
+- **The title bar is the run loop.** On the left, rusty's mark — the
+  window's own icon, never a gear, which read as a Settings button that did
+  nothing — opening the window's menu as a Windows app's icon opens its own;
+  which project (its menu is
   recents, open, new, clone, the playgrounds) and which branch; in the
   middle, Xcode's shape — the run button and *where* it runs, the simulator,
   a serial port, a probe or a USB bootloader, one list chosen once
@@ -2502,7 +2595,8 @@ is no browser storage, and what the window remembers between runs is
   folder is the cloud-sync story.
 - `workbench.toml` (`config::WorkbenchState`) is the recents, the window's
   layout and theme and scale (`WindowLayout`: each dock's size, whether it is
-  open and which panel was in front), the editor's switches (`vim`,
+  open and which panel was in front, and where the editor groups part), the
+  editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so
   another spelling of the same directory finds it), a skipped update and the

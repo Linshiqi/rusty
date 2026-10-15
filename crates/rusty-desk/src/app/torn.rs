@@ -119,11 +119,17 @@ impl App {
             .collect()
     }
 
-    /// Move into New Window: the tab `id` — the file in front when none is
-    /// named — into a window of its own, put at `at` on the screen (where a
-    /// dragged tab was let go) or beside the main window.
-    pub(super) fn detach(self: &Rc<Self>, id: Option<String>, at: Option<PhysicalPosition>) {
-        let (tab, in_front, in_shade) = {
+    /// Move into New Window: the tab `id` of a group — `other` for the group
+    /// without the keys, since one file can be a tab in both — or the file
+    /// in front when none is named, into a window of its own, put at `at`
+    /// on the screen (where a dragged tab was let go) or beside the main
+    /// window.
+    pub(super) fn detach(
+        self: &Rc<Self>,
+        tab: Option<(bool, String)>,
+        at: Option<PhysicalPosition>,
+    ) {
+        let (other, tab, in_front, in_shade) = {
             let state = self.state.borrow();
             let front = state.active.and_then(|at| state.tabs.get(at)).cloned();
             let shade = state
@@ -131,18 +137,13 @@ impl App {
                 .and_then(|at| state.other.get(at))
                 .filter(|_| state.split)
                 .cloned();
-            let tab = match &id {
-                Some(id) => state
-                    .tabs
-                    .iter()
-                    .chain(&state.other)
-                    .find(|tab| tab.id() == *id)
-                    .cloned(),
-                None => front.clone(),
+            let (other, tab) = match tab {
+                Some((other, id)) => (other, self.tab_in(other, &id)),
+                None => (false, front.clone()),
             };
-            let in_front = tab.is_some() && tab == front;
-            let in_shade = tab.is_some() && tab == shade;
-            (tab, in_front, in_shade)
+            let in_front = !other && tab.is_some() && tab == front;
+            let in_shade = other && tab.is_some() && tab == shade;
+            (other, tab, in_front, in_shade)
         };
         let path = match tab {
             Some(Tab::File(path)) if !rusty_edit::is_expansion(&path) => path,
@@ -178,7 +179,7 @@ impl App {
         });
         // Off the main window's strip; the document stays open, since the
         // new window is a view of it now.
-        self.drop_tab(&Tab::File(path.clone()).id());
+        self.drop_tab(other, &Tab::File(path.clone()).id());
         let (view, vim) = {
             let state = self.state.borrow();
             (state.view, state.vim)
@@ -460,9 +461,9 @@ impl App {
         }
     }
 
-    /// A tab let go of after a drag, at `x`, `y` in the main window: beyond
-    /// its edge, it moves into a window of its own there.
-    pub(super) fn tab_dropped(self: &Rc<Self>, id: &str, x: f32, y: f32) {
+    /// A tab of a group let go of after a drag, at `x`, `y` in the main
+    /// window: beyond its edge, it moves into a window of its own there.
+    pub(super) fn tab_dropped(self: &Rc<Self>, id: &str, other: bool, x: f32, y: f32) {
         let Some(main) = self.window() else { return };
         let window = main.window();
         let scale = window.scale_factor();
@@ -474,7 +475,40 @@ impl App {
         let corner = window.position();
         let at =
             PhysicalPosition::new(corner.x + (x * scale) as i32, corner.y + (y * scale) as i32);
-        self.detach(Some(id.to_string()), Some(at));
+        self.detach(Some((other, id.to_string())), Some(at));
+    }
+
+    /// `from` is `to` on disk now — the tree renamed or moved it: a window
+    /// of its own showing a file under it shows it by its new name. Its
+    /// document has moved already (`Surface::moved`), being the one the
+    /// main window's surface holds.
+    pub(super) fn torn_moved(&self, from: &str, to: &str) {
+        for torn in self.torn.borrow_mut().iter_mut() {
+            if let Some(new) = rusty_edit::moved_path(&torn.path, from, to) {
+                torn.path = new;
+            }
+        }
+        self.sync_torn();
+    }
+
+    /// `path` went to the recycle bin: a window of its own showing a file
+    /// under it closes without asking, as its tab would, and nothing is
+    /// kept for it.
+    pub(super) fn torn_deleted(self: &Rc<Self>, path: &str) {
+        let gone: Vec<(usize, String)> = self
+            .torn
+            .borrow()
+            .iter()
+            .filter(|torn| rusty_edit::is_within(&torn.path, path))
+            .map(|torn| (torn.id(), torn.path.clone()))
+            .collect();
+        let root = self.root();
+        for (id, file) in gone {
+            if let Some(root) = &root {
+                self.keeper.remove(root, &file);
+            }
+            self.torn_forget(id);
+        }
     }
 
     /// Each window of its own told what its file is and where its caret

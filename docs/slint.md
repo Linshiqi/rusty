@@ -72,7 +72,7 @@ is happening; **Wokwi** for the board beside the code.
 
 ```
 ┌ title bar ────────────────────────────────────────────────────────────────┐
-│ rustfly ▾  ⎇ main ▾              [▶ │ ▣ ▾]                             ⌕ ≡  ─ □ ✕ │
+│ ◉ rustfly ▾  ⎇ main ▾            [▶ │ ▣ ▾]                             ⌕ ≡  ─ □ ✕ │
 ├ left dock ┬ editor ──────────────────────────────────────┬ right dock ────┤
 │ Project   │ main.rs   estimator.rs ×                     │ Board          │
 │ Search    │                                              │ Assistant      │
@@ -84,7 +84,9 @@ is happening; **Wokwi** for the board beside the code.
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **The title bar is the run loop.** On the left, which project (its menu
+- **The title bar is the run loop.** On the left, rusty's mark — the
+  window's icon, which opens the window's menu as a Windows app's icon does
+  — then which project (its menu
   is recents, open, new, clone, the playgrounds) and which branch. In the
   middle, Xcode's shape: the run button, *where* it runs — the simulator, a
   serial port, a probe or a USB bootloader, one list — and stop; the button
@@ -545,10 +547,22 @@ tests green, and CLAUDE.md saying how it works.
    probe splits `lib.rs`, opens `Cargo.toml` on the right and types there,
    presses in the left view to move the keys, and types there.
 
+   Then VS Code's strip and divider, after v0.7.0-rc.1 drew the split
+   button over the last tab and left the divider fixed at half: each strip's
+   tabs sit in a lane ending where its buttons begin, scrolled sideways by
+   the wheel, with the tab in front brought into view as it changes; the
+   divider drags, keeps each group 220 px wide, goes back to half on a
+   double-click and is kept in `workbench.toml` with the docks' sizes; and a
+   tab's right-click menu has VS Code's rows — the closes, the paths, Reveal
+   and Split right (`app/tab_menu.rs`), each an action the palette also
+   offers for the tab in front. `RUSTY_PROBE_TABS` opens a book's chapters
+   until the strip overflows, wheels it, drags and double-clicks the
+   divider, and uses the menu on both strips.
+
    A tab in a window of its own, VS Code's Move into New Window: from the
-   palette or by letting a tab go beyond the main window's edge. A second
-   Slint window (`TornWindow`) with the same code view, and a second
-   surface driving it (`Surface::beside`) over the same documents — Slint
+   palette, from a tab's menu, or by letting a tab go beyond the main
+   window's edge. A second Slint window (`TornWindow`) with the same code
+   view, and a second surface driving it (`Surface::beside`) over the same documents — Slint
    gives each window its own `Code`, so the editor's Rust half only had to
    stop assuming which window it draws into (`editor/host.rs`), and an
    answer from another thread names the surface that asked rather than
@@ -558,7 +572,9 @@ tests green, and CLAUDE.md saying how it works.
    probe's `RUSTY_PROBE_TORN` moves the file into a window of its own,
    types there, opens it in the main window too and types there, undoes
    from the other window, saves and closes it, then drags `Cargo.toml` out
-   and moves it back.
+   and moves it back; a file moved out from its tab's menu is then renamed
+   in the tree, which the window follows, and deleted there, which closes
+   it.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
@@ -601,7 +617,7 @@ tests green, and CLAUDE.md saying how it works.
    this one did not, as v0.7.0's notes say: the call hierarchy, macro
    expansion, the finder's `@` and `#`, New window, a file or a commit in a
    window of its own, and a choice of the terminal's shell — a file in a
-   window of its own has since come back (below).
+   window of its own has since come back (item 8, above).
 
    Since then, navigation by what the code means: Go to type definition
    beside references and implementations in the picker; Expand macro
@@ -612,6 +628,26 @@ tests green, and CLAUDE.md saying how it works.
    tests, and `app/calls.rs`); and the editor's right-click menu that
    offers them. The probe's `RUSTY_PROBE_NAV` drives all three on
    `draw-vectors`' example.
+
+   Then the tree's own verbs, reported from the release candidate as "the
+   tree cannot make, copy, paste or rename anything": VS Code's explorer
+   (`app/tree.rs`, the arithmetic in `crate::tree`). A right-click on a
+   folder, a file or the space below the rows opens its own menu; a new
+   entry is named in a box among its future siblings and a rename in its
+   own row, the name refused under the box as it is typed — committed text
+   only — by `rusty_edit::name_problem`, the rule the library's rename
+   keeps, and by the tree's entries for a name that is taken. Cut, copy and
+   paste are the menu's and Ctrl+X, C and V while the tree has the keys,
+   which a click on a row gives it (the file opens; a double-click or Enter
+   gives the keys to the file), with the arrows, Enter, Space, F2 and
+   Delete. Delete goes to the recycle bin after asking; a drag moves, the
+   folder it would land in lit by `rusty_edit::drop_target`. A rename, a
+   drop or a cut pasted carries every tab, document, draft, fold, open
+   folder and breakpoint with the path, and the servers hear the old name
+   closed and the new one opened. Reveal is `crate::reveal`, for the tabs'
+   menu as well. The rows are one model changed in place, so the box being
+   typed in survives a re-read of the tree. `RUSTY_PROBE_TREE` works all of
+   it by pointer events at the rows and keys, on a copy of `draw-vectors`.
 
 ## Decided
 

@@ -18,12 +18,19 @@ export struct DocTab {
     kind: string,
 }
 
+// A row of the project tree: an entry, or the box a name is typed in
+// (`naming`) where a new entry will be or an entry is being renamed.
 export struct TreeRow {
     depth: int,
     name: string,
     dir: bool,
     open: bool,
     selected: bool,
+    naming: bool,
+    // Cut, to be pasted somewhere: drawn faint, as VS Code draws it.
+    cut: bool,
+    // Inside the folder a drag would drop into.
+    drop: bool,
 }
 
 export struct PickRow {
@@ -792,6 +799,9 @@ export global Shell {
     in property <string> shade-kind;
     in property <string> shade-title;
     in property <string> active-title;
+    // The share of the editor area the left group takes while split, as
+    // dragged; kept in `workbench.toml` with the docks' sizes.
+    in-out property <float> split-share: 0.5;
 
     // The status bar.
     in property <int> errors;
@@ -1329,6 +1339,32 @@ export global Shell {
 
     // The project's files.
     in property <[TreeRow]> tree;
+    // Moves when the tree is to take the keys, and when its selected row
+    // (`tree-reveal-row`) is to be brought into view.
+    in property <int> tree-focus;
+    in property <int> tree-reveal;
+    in property <int> tree-reveal-row;
+    // The name typed in the box, how many bytes of it to select as it
+    // opens, and what is wrong with it — empty when nothing is.
+    in-out property <string> tree-name;
+    in property <int> tree-name-select;
+    // The box's row, for what is wrong with the name to be said under it.
+    in property <int> tree-name-row;
+    in property <string> tree-name-problem;
+    // A drag would drop into the project's root.
+    in property <bool> tree-drop-root;
+    callback tree-double-click(int);
+    // A right-click on a row, or below the rows (-1), and where it was.
+    callback tree-menu(int, length, length);
+    callback tree-key(KeyEvent) -> bool;
+    callback tree-name-edited(string);
+    // Enter (true) or Escape (false) in the box, and the box losing the keys.
+    callback tree-name-done(bool);
+    callback tree-name-left();
+    // A row carried over another — the row count past the last is the
+    // space below the rows — and let go there.
+    callback tree-drag(int, int);
+    callback tree-drop(int, int);
 
     // The welcome page.
     in property <[Recent]> recents;
@@ -1366,10 +1402,15 @@ export global Shell {
     callback close-tab(string);
     // A tab let go of after a drag, where the pointer was in the window: let
     // go beyond the window's edge, it moves into a window of its own.
-    callback tab-dropped(string, length /* x */, length /* y */);
+    callback tab-dropped(string, bool /* the other group's */, length /* x */, length /* y */);
     // The other group's strip: its group to front, and the tab.
     callback shade-pick(string);
     callback shade-close(string);
+    // A right-click on a tab: its id, whether it is the other group's, and
+    // where in the window.
+    callback tab-menu(string, bool, length, length);
+    // The divider between the two groups let go of, or put back at half.
+    callback split-resized(float);
     callback tree-click(int);
     callback open-recent(string);
     callback picker-query(string);
