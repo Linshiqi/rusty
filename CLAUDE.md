@@ -1229,29 +1229,55 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   split comes back with them (`app/strip.rs`).
 - **The picker is where navigation lands** (`picker.rs`, `app/navigate.rs`):
   the palette (Ctrl+Shift+P), the finder (Ctrl+P), a line (Ctrl+G opens it
-  with `:` typed — `42`, `42:7`), references (Shift+F12) and implementations
-  (Ctrl+F12) under a heading naming what they are, sorted by file and line;
-  one implementation is a jump, as a definition is, and nothing found says so
-  rather than being a key that seems to do nothing (`App::show_places`).
-  Every place arrives with its line (`rusty_lsp::Place`), because a row of
-  `lib.rs:41` is a riddle. `App::jump` is the one jump, and remembers where
-  the caret was for Alt+Left. Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords,
-  so hands that know them need not learn ours.
-- **Not in this window yet, though the client answers them all**
+  with `:` typed — `42`, `42:7`), references (Shift+F12), implementations
+  (Ctrl+F12) and type definitions under a heading naming what they are,
+  sorted by file and line (`navigate::Places`); one implementation or one
+  type is a jump, as a definition is, and nothing found says so rather than
+  being a key that seems to do nothing (`App::show_places`). Every place
+  arrives with its line (`rusty_lsp::Place`), because a row of `lib.rs:41`
+  is a riddle. `App::jump` is the one jump, and remembers where the caret
+  was for Alt+Left. Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
+  that know them need not learn ours; type definitions, the call hierarchy
+  and a macro's expansion have no key, as in VS Code — whose Shift+Alt+H
+  for the hierarchy is an Alt-letter chord, left here to AltGr.
+- **The editor's right-click menu is VS Code's** (`App::editor_menu`):
+  where the name leads, then rename and the fixes, then the palette, each
+  row an action named and keyed as the palette names and keys it, and the
+  language's rows only where a server reads the file. The caret moves to
+  the click first unless the click is inside a selection.
+- **A macro's expansion is a document with no file** (`app/expansion.rs`,
+  rust-analyzer's `expandMacro`), read-only, painted as Rust and opened
+  beside the code — in the right group with the keys left in the code, as
+  VS Code's `ViewColumn.Beside` keeps focus; from the right group, in front
+  there. Its path is `rusty_edit::expansion_path`,
+  `expansion:/<file>:<line>/<macro>`, so its tab reads as the macro with the
+  call's place beside it, two calls of one macro are two tabs, and the same
+  call expanded again is the same tab. `is_expansion` is how everything
+  that would touch the disk or a server leaves it alone: `Servers::for_path`
+  refuses it — the one door every message to a server goes through — the
+  strip in `workbench.toml` leaves it out, no draft of it is kept, Ctrl+S,
+  F2 and a breakpoint pass it by, and a jump back to one since closed goes
+  nowhere.
+- **Who calls a function is a tree, in the bottom dock's Calls panel**
+  (`app/calls.rs`, `ui/calls.slint`) — VS Code's call hierarchy. Each level
+  is asked of the server when its row opens, handing back the item the
+  server sent exactly as it sent it (`CallItem.item`: the server puts what
+  it needs to answer the next level in `data`). The tree is a flat list of
+  rows with depths (`crate::calls`, pure and tested), and an answer finds
+  its row by number, so opening a row above one still asking cannot put the
+  answer in the wrong place; a tree started afresh, or turned the other
+  way, drops answers meant for the old one. A click goes where the call is
+  made — in the caller, the row itself for calls in and the row above for
+  calls out — a double-click to the function, and a count lists every call
+  from that place in the picker. A function under itself says *recursive*.
+  In or out is a pair of icons on the dock's row, and the next hierarchy
+  reads the way the last was turned.
+- **Not in this window yet, though the client answers them**
   (`rusty_lsp::client::navigate`): the finder's `@` (the file's outline) and
-  `#` (the workspace's symbols), type definitions, the call hierarchy and a
-  macro's expansion. What was learned building them stays true:
+  `#` (the workspace's symbols). What was learned building them stays true:
   `workspace.symbol.search.kind` is `all_symbols`, since rust-analyzer's
   default finds structs and not functions, and a symbol answer is kept with
-  its ask so a slow reply to `#gp` is never shown under `#gpio`; a call
-  hierarchy is a tree asked one level at a time, handing back the item the
-  server sent exactly as it sent it (the server puts what it needs to answer
-  the next level in `data`), and an answer finds its row by number so
-  opening a row above one still asking does not put the answer in the wrong
-  place; a macro's expansion is a document with no file
-  (`rusty_edit::expansion_path`, `is_expansion`) — no reveal, no window of
-  its own, not remembered with the strip, never announced to a server — and
-  the same call expanded again is the same tab.
+  its ask so a slow reply to `#gp` is never shown under `#gpio`.
 
 ## What the editor draws beside the text
 
@@ -2286,15 +2312,17 @@ rules it settled, each the answer to something that went wrong.
   user's verdict was that no IDE puts progress at the top centre — it is the
   status bar's, as in VS Code and JetBrains.
 - **Three docks, each a set of panels**, Zed's model (`docks.rs`): left the
-  project's tree, search and Git; bottom Output, Problems, the terminal and
-  what a run brings — Plot, Waves, Draw, Flight, Signals, Debug, Registers;
-  right the board and the assistant, so the board stands beside the code
-  for every project. Each dock opens and closes from the status bar and a
-  key, keeps its size, and remembers which panel was in front.
+  project's tree, search and Git; bottom Output, Problems, the terminal,
+  what a run brings — Plot, Waves, Draw, Flight, Signals, Debug, Registers
+  — and Calls, the call hierarchy; right the board and the assistant, so
+  the board stands beside the code for every project. Each dock opens and
+  closes from the status bar and a key, keeps its size, and remembers which
+  panel was in front.
 - **A run's panels are listed when they have something to say.** Output,
   Problems and Terminal always are; Plot arrives with the first sample or
   tunable, Waves with the first edge, Flight with a declared sensor, Draw
-  with the first scene, Debug and Registers with a session
+  with the first scene, Debug and Registers with a session, Calls with the
+  first hierarchy asked for — which, being asked for, comes forward
   (`App::sync_docks`). **Arriving is not taking the dock**: a panel that
   switched under somebody reading Output is a workspace that moves by
   itself, so a new panel is listed and only a run's first scene brings Draw

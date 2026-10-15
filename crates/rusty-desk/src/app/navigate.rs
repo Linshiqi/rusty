@@ -1,5 +1,6 @@
 //! Moving around the code by what it means: the definition of a name, its
-//! references and implementations, back and forward through the jumps;
+//! references and implementations, where its type is defined, back and
+//! forward through the jumps;
 //! and changing it by what it means: a fix the server offers, a rename
 //! across every file that uses it.
 //!
@@ -38,6 +39,14 @@ pub(super) struct Jumps {
 /// How many jumps are remembered.
 const JUMPS: usize = 50;
 
+/// What a list of places the server names is a list of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Places {
+    References,
+    Implementations,
+    TypeDefinitions,
+}
+
 impl App {
     fn here(&self) -> Option<Spot> {
         let path = self.editor.current_path()?;
@@ -64,6 +73,16 @@ impl App {
 
     fn arrive(self: &Rc<Self>, location: &Location) {
         let at = Some((location.line as usize, location.col as usize));
+        // A macro's expansion has no file to read again: it is there while
+        // its tab is, and a jump back to one closed since goes nowhere.
+        if rusty_edit::is_expansion(&location.path) {
+            if self.editor.holds(&location.path) {
+                self.open_tab(Tab::File(location.path.clone()));
+                self.editor
+                    .go_to(location.line as usize + 1, Some(location.col as usize + 1));
+            }
+            return;
+        }
         if location.external {
             self.open_outside(location.path.clone(), at);
         } else {
@@ -178,9 +197,11 @@ impl App {
         );
     }
 
-    /// Shift+F12 and Ctrl+F12: the references to the name at the caret, or
-    /// what implements it, in the picker. One implementation is a jump.
-    pub(super) fn find_places(self: &Rc<Self>, implementations: bool) {
+    /// Shift+F12, Ctrl+F12 and Go to type definition: the references to
+    /// the name at the caret, what implements it, or where its type is
+    /// defined, in the picker. One implementation or one type is a jump, as
+    /// a definition is.
+    pub(super) fn find_places(self: &Rc<Self>, kind: Places) {
         let Some((path, line, col, draft)) = self.editor.caret_question() else {
             return;
         };
@@ -188,52 +209,30 @@ impl App {
         self.servers.ask(
             &path,
             Some(draft),
-            move |client, path| {
-                if implementations {
-                    client.implementations(path, line, col)
-                } else {
-                    client.references(path, line, col)
-                }
+            move |client, path| match kind {
+                Places::References => client.references(path, line, col),
+                Places::Implementations => client.implementations(path, line, col),
+                Places::TypeDefinitions => client.type_definition(path, line, col),
             },
-            move |app, places| app.show_places(implementations, &name, places),
+            move |app, places| app.show_places(kind, &name, places),
         );
     }
 
-    fn show_places(self: &Rc<Self>, implementations: bool, name: &str, mut places: Vec<Place>) {
+    fn show_places(self: &Rc<Self>, kind: Places, name: &str, places: Vec<Place>) {
         if places.is_empty() {
             self.note_transient(0, t!("desk.nothing-found"));
             return;
         }
-        if implementations && places.len() == 1 {
+        if kind != Places::References && places.len() == 1 {
             self.jump(&places[0].location);
             return;
         }
-        places.sort_by(|a, b| {
-            (&a.location.path, a.location.line).cmp(&(&b.location.path, b.location.line))
-        });
-        let rows: Vec<(String, String, Pick)> = places
-            .into_iter()
-            .map(|place| {
-                let location = place.location;
-                let short = location
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&location.path)
-                    .to_string();
-                (
-                    place.text.trim().to_string(),
-                    format!("{short}:{}", location.line + 1),
-                    Pick::Place(location),
-                )
-            })
-            .collect();
-        let heading = if implementations {
-            t!("places.implementations", name = name)
-        } else {
-            t!("places.references", name = name)
+        let heading = match kind {
+            Places::References => t!("places.references", name = name),
+            Places::Implementations => t!("places.implementations", name = name),
+            Places::TypeDefinitions => t!("places.type-definition", name = name),
         };
-        self.open_list(Mode::Places, heading, rows);
+        self.open_list(Mode::Places, heading, place_rows(places));
     }
 
     /// Ctrl+.: what the server offers to do at the caret, in the picker.
@@ -319,6 +318,10 @@ impl App {
         let Some((path, line, col, _)) = self.editor.caret_question() else {
             return;
         };
+        // An expansion is no file: nothing in it is the symbol's to rename.
+        if rusty_edit::is_expansion(&path) {
+            return;
+        }
         let Some(name) = self.editor.caret_word() else {
             return;
         };
@@ -422,6 +425,31 @@ impl App {
             },
         );
     }
+}
+
+/// The picker's rows for places the server named, by file and line: the
+/// line as it reads, and where it is.
+pub(super) fn place_rows(mut places: Vec<Place>) -> Vec<(String, String, Pick)> {
+    places.sort_by(|a, b| {
+        (&a.location.path, a.location.line).cmp(&(&b.location.path, b.location.line))
+    });
+    places
+        .into_iter()
+        .map(|place| {
+            let location = place.location;
+            let short = location
+                .path
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&location.path)
+                .to_string();
+            (
+                place.text.trim().to_string(),
+                format!("{short}:{}", location.line + 1),
+                Pick::Place(location),
+            )
+        })
+        .collect()
 }
 
 /// `path` as the project at `root` names it — relative, `/` between —

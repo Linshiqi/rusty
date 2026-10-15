@@ -32,7 +32,13 @@
 //! deletes the LED — and prints the sheet file after each save. With
 //! `RUSTY_PROBE_STRIP` and no project named it waits for the last project
 //! to come back, prints its tabs as the strips show them, and opens its
-//! README before leaving.
+//! README before leaving. With `RUSTY_PROBE_NAV`, on a file with `let c =`,
+//! a `println!`, a `Vector::new` and a `c.norm()` in it (`draw-vectors`'
+//! `examples/cross.rs`), it waits for the server, goes to the type of `c`
+//! and back, expands the `println!` beside the code (twice: one tab), opens
+//! the call hierarchy of `new` with `cross` opened under it, turns it to
+//! calls out, and opens the calls out of `norm` with `dot` under it —
+//! photographing each, and printing what the strip keeps.
 
 use std::{
     cell::{Cell, RefCell},
@@ -100,6 +106,7 @@ pub fn start(window: &AppWindow) {
     let hinting = std::env::var_os("RUSTY_PROBE_HINTS").is_some();
     let modal = std::env::var_os("RUSTY_PROBE_VIM").is_some();
     let splitting = std::env::var_os("RUSTY_PROBE_SPLIT").is_some();
+    let navigating = std::env::var_os("RUSTY_PROBE_NAV").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     // Started with no project: the last one comes back with its strip.
     let strip = std::env::var_os("RUSTY_PROBE_STRIP").is_some();
@@ -107,6 +114,8 @@ pub fn start(window: &AppWindow) {
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
     let before: Rc<RefCell<Option<String>>> = Rc::default();
+    // The file a jump left, and then the expansion opened beside it.
+    let start_path: Rc<RefCell<String>> = Rc::default();
     std::fs::create_dir_all(&dir).expect("the probe's directory");
     let waiting: Rc<Cell<Option<Instant>>> = Rc::default();
     let latencies: Rc<RefCell<Vec<Duration>>> = Rc::default();
@@ -188,6 +197,15 @@ pub fn start(window: &AppWindow) {
                 .and_then(|path| editor.draft_of(&path))
                 .map(|(text, ..)| text)
         };
+        // Where `needle` first is in the file on screen, `offset` characters
+        // into it: a line and a column from one.
+        let find = |needle: &str, offset: usize| -> Option<(usize, usize)> {
+            let text = draft()?;
+            text.lines().enumerate().find_map(|(index, line)| {
+                let at = line.find(needle)?;
+                Some((index + 1, line[..at].chars().count() + offset + 1))
+            })
+        };
         match n {
             25 => {
                 snapshot(&window, &dir.join("open.png"));
@@ -251,6 +269,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if splitting {
                     step.set(2700);
+                }
+                if navigating {
+                    step.set(3000);
                 }
                 if updating {
                     step.set(2800);
@@ -1107,6 +1128,291 @@ pub fn start(window: &AppWindow) {
                 app.open_file("README.md".into());
             }
             2910 if strip => app.act("app.exit"),
+            // Navigation by what the code means, once the server has the
+            // file: the type of a binding, a macro expanded beside the
+            // code, and the call hierarchy both ways.
+            3000 if navigating => {
+                let colours = app.editor().told().map_or(0, |told| told.0);
+                if shell.get_active_kind() != "file" || colours == 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 3000 {
+                        step.set(3000);
+                        return;
+                    }
+                }
+                eprintln!("nav: the server painted {colours} spans after {} ticks", waited.get());
+                waited.set(0);
+                let Some((line, col)) = find("let c =", 4) else {
+                    eprintln!("nav: no `let c =` in the file");
+                    app.act("app.exit");
+                    return;
+                };
+                eprintln!("nav: type definition asked at {line}:{col}");
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+                app.editor().go_to(line, Some(col));
+                app.act("editor.type-definition");
+            }
+            3001 if navigating => {
+                let path = app.editor().current_path().unwrap_or_default();
+                if path == start_path.borrow().as_str() && waited.get() < 1500 {
+                    // A server still loading the workspace answers nothing:
+                    // asked again every four seconds, as a person would.
+                    waited.set(waited.get() + 1);
+                    if waited.get().is_multiple_of(100) {
+                        app.act("editor.type-definition");
+                    }
+                    step.set(3001);
+                    return;
+                }
+                eprintln!(
+                    "nav: type definition landed after {} ticks in {path} at {:?}; the line reads {:?}",
+                    waited.get(),
+                    app.editor().status().map(|s| (s.0, s.1)),
+                    app.editor()
+                        .status()
+                        .and_then(|s| draft().and_then(|t| t.lines().nth(s.0 - 1).map(str::to_string)))
+                );
+                snapshot(&window, &dir.join("type-definition.png"));
+                app.act("nav.back");
+            }
+            3002 if navigating => {
+                eprintln!(
+                    "nav: back in {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                waited.set(0);
+                let Some((line, col)) = find("println!", 1) else {
+                    eprintln!("nav: no println! in the file");
+                    return;
+                };
+                eprintln!("nav: expand the macro at {line}:{col}");
+                app.editor().go_to(line, Some(col));
+                app.act("editor.expand-macro");
+            }
+            3003 if navigating => {
+                let beside = shell
+                    .get_shade_tabs()
+                    .iter()
+                    .any(|t| t.id.contains("expansion:/"));
+                if !beside && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(3003);
+                    return;
+                }
+                let expansion = shell
+                    .get_shade_tabs()
+                    .iter()
+                    .find(|t| t.id.contains("expansion:/"))
+                    .map(|t| t.id.trim_start_matches("file:").to_string())
+                    .unwrap_or_default();
+                let text = app
+                    .editor()
+                    .draft_of(&expansion)
+                    .map(|(text, ..)| text)
+                    .unwrap_or_default();
+                eprintln!(
+                    "nav: expanded after {} ticks: split {} keys on {} | left {:?} in front {:?} | right {:?} in front {:?} | {} lines, starting {:?}",
+                    waited.get(),
+                    shell.get_split(),
+                    shell.get_focus_group(),
+                    shell.get_tabs().iter().map(|t| t.title.to_string()).collect::<Vec<_>>(),
+                    shell.get_active_tab(),
+                    shell
+                        .get_shade_tabs()
+                        .iter()
+                        .map(|t| format!("{} [{}]", t.title, t.hint))
+                        .collect::<Vec<_>>(),
+                    shell.get_shade_active(),
+                    text.lines().count(),
+                    text.lines().take(4).collect::<Vec<_>>()
+                );
+                *start_path.borrow_mut() = expansion;
+                *before.borrow_mut() = Some(text);
+                snapshot(&window, &dir.join("expansion.png"));
+                // The same call again: the same tab, not a second.
+                app.act("editor.expand-macro");
+            }
+            3040 if navigating => {
+                let tabs = shell
+                    .get_shade_tabs()
+                    .iter()
+                    .filter(|t| t.id.contains("expansion:/"))
+                    .count();
+                eprintln!("nav: expanded again: {tabs} expansion tab(s)");
+                // A press in the expansion moves the keys there: typed into
+                // and saved, it is to stay what it was and write nothing.
+                window.global::<crate::Shade>().invoke_pressed(3, 40.0, 5.0);
+            }
+            3041 if navigating => {
+                key("x".into());
+                chord(&[Key::Control], "s".into());
+            }
+            3050 if navigating => {
+                let expansion = start_path.borrow().clone();
+                let held = app.editor().draft_of(&expansion).map(|(text, ..)| text);
+                let written: Vec<String> = app
+                    .root_path()
+                    .and_then(|root| std::fs::read_dir(root).ok())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with("expansion"))
+                    .collect();
+                eprintln!(
+                    "nav: typed into and saved: keys on {} in front {:?}; text unchanged {}; dirty {}; kept as a draft {}; written to the project {written:?}; the status bar says {:?}",
+                    shell.get_focus_group(),
+                    shell.get_active_tab(),
+                    held.is_some() && held == *before.borrow(),
+                    app.editor().is_dirty(&expansion),
+                    app.editor().backup_of(&expansion).is_some(),
+                    shell.get_language(),
+                );
+                // And a press on the left gives the code its keys back.
+                window.global::<crate::Shade>().invoke_pressed(12, 40.0, 5.0);
+            }
+            3051 if navigating => {
+                eprintln!(
+                    "nav: back in the code: keys on {} in front {:?}",
+                    shell.get_focus_group(),
+                    shell.get_active_tab()
+                );
+                waited.set(0);
+                let Some((line, col)) = find("Vector::new", 9) else {
+                    eprintln!("nav: no Vector::new in the file");
+                    return;
+                };
+                eprintln!("nav: the call hierarchy of `new`, asked at {line}:{col} from the right-click menu");
+                app.editor().go_to(line, Some(col));
+                // A right-click on the caret: the menu, in the window.
+                code.invoke_context_menu(
+                    code.get_caret_line(),
+                    code.get_caret_x() + 1.0,
+                    5.0,
+                    560.0,
+                    300.0,
+                );
+            }
+            3052 if navigating => {
+                let items: Vec<String> = shell
+                    .get_menu_items()
+                    .iter()
+                    .map(|item| {
+                        if item.id.is_empty() {
+                            "—".to_string()
+                        } else if item.chord.is_empty() {
+                            item.label.to_string()
+                        } else {
+                            format!("{} ({})", item.label, item.chord)
+                        }
+                    })
+                    .collect();
+                eprintln!(
+                    "nav: the editor's menu (open {}): {items:?}; caret at {:?}",
+                    shell.get_menu_open(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                snapshot(&window, &dir.join("menu.png"));
+                shell.invoke_menu_picked("editor.call-hierarchy".into());
+            }
+            3053 if navigating => {
+                let rows = shell.get_calls_rows();
+                if rows.row_count() < 2 && shell.get_calls_empty().is_empty() && waited.get() < 750 {
+                    waited.set(waited.get() + 1);
+                    step.set(3053);
+                    return;
+                }
+                eprintln!("nav: calls in, after {} ticks: {}", waited.get(), calls_said(&shell));
+                waited.set(0);
+                let cross = rows.iter().find(|r| r.depth == 1 && r.name == "cross");
+                match cross {
+                    Some(row) => shell.invoke_calls_toggle(row.id),
+                    None => eprintln!("nav: no `cross` row to open"),
+                }
+            }
+            3054 if navigating => {
+                let rows = shell.get_calls_rows();
+                if !rows.iter().any(|r| r.depth == 2) && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(3054);
+                    return;
+                }
+                eprintln!("nav: `cross` opened: {}", calls_said(&shell));
+                snapshot(&window, &dir.join("calls-in.png"));
+                // A click on the row goes where its call is made.
+                if let Some(row) = rows.iter().find(|r| r.depth == 1 && r.name == "cross") {
+                    shell.invoke_calls_go(row.id, false);
+                }
+            }
+            3055 if navigating => {
+                eprintln!(
+                    "nav: a click on the `cross` row went to {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                app.act("nav.back");
+                shell.invoke_calls_direction(false);
+                waited.set(0);
+            }
+            3056 if navigating => {
+                let rows = shell.get_calls_rows();
+                if rows.row_count() < 2 && shell.get_calls_empty().is_empty() && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(3056);
+                    return;
+                }
+                eprintln!(
+                    "nav: turned to calls out (incoming {}): {}",
+                    shell.get_calls_incoming(),
+                    calls_said(&shell)
+                );
+                snapshot(&window, &dir.join("calls-out-new.png"));
+                waited.set(0);
+                // The next hierarchy reads the way the last was turned.
+                let Some((line, col)) = find("c.norm()", 3) else {
+                    eprintln!("nav: no c.norm() in the file");
+                    return;
+                };
+                eprintln!("nav: the call hierarchy of `norm`, asked at {line}:{col}");
+                app.editor().go_to(line, Some(col));
+                app.act("editor.call-hierarchy");
+            }
+            3057 if navigating => {
+                let rows = shell.get_calls_rows();
+                if rows.row_count() < 2 && shell.get_calls_empty().is_empty() && waited.get() < 750 {
+                    waited.set(waited.get() + 1);
+                    step.set(3057);
+                    return;
+                }
+                eprintln!("nav: calls out of `norm`: {}", calls_said(&shell));
+                waited.set(0);
+                if let Some(row) = rows.iter().find(|r| r.depth == 1 && r.name == "dot") {
+                    shell.invoke_calls_toggle(row.id);
+                }
+            }
+            3058 if navigating => {
+                let rows = shell.get_calls_rows();
+                let asking = rows.iter().any(|r| r.open == 1);
+                if asking && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(3058);
+                    return;
+                }
+                eprintln!("nav: `dot` opened: {}", calls_said(&shell));
+                snapshot(&window, &dir.join("calls-out.png"));
+            }
+            // What the strip keeps for next time: files, never the expansion.
+            3060 if navigating => {
+                let strip = app
+                    .root_path()
+                    .and_then(|root| rusty_embed::config::tabs_for(&root.to_string_lossy()));
+                eprintln!(
+                    "nav: the strip kept for next time: {:?}",
+                    strip.map(|s| (s.tabs, s.active, s.second, s.second_active))
+                );
+            }
+            3070 if navigating => app.act("app.exit"),
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -1695,7 +2001,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || updating) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || navigating || updating) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
@@ -1843,6 +2149,39 @@ fn report(what: &str, samples: &[Duration]) {
         at(0.9),
         ms[ms.len() - 1]
     );
+}
+
+/// The Calls panel as it reads: each row indented by its depth, with its
+/// place, its count and whether it is open; or what it says instead.
+fn calls_said(shell: &Shell) -> String {
+    let rows: Vec<String> = shell
+        .get_calls_rows()
+        .iter()
+        .map(|r| {
+            format!(
+                "{}{}{} {}{}{}",
+                "  ".repeat(r.depth as usize),
+                ["▸ ", "… ", "▾ ", "· "][r.open.clamp(0, 3) as usize],
+                r.name,
+                r.place,
+                if r.count > 1 {
+                    format!(" ×{}", r.count)
+                } else {
+                    String::new()
+                },
+                if r.recursive { " (recursive)" } else { "" }
+            )
+        })
+        .collect();
+    if rows.is_empty() {
+        format!("{:?}", shell.get_calls_said().as_str())
+    } else {
+        format!(
+            "{} {:?}",
+            rows.join(" | "),
+            shell.get_calls_empty().as_str()
+        )
+    }
 }
 
 /// What the terminal shows, a line a row.

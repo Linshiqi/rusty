@@ -66,20 +66,21 @@ impl Back {
 
 impl App {
     /// The strip as `workbench.toml` keeps it: files only, the left group
-    /// first, whichever has the keys.
+    /// first, whichever has the keys. A macro's expansion is no file, and
+    /// there would be nothing to put back.
     fn strip_now(&self) -> Option<ProjectTabs> {
         let state = self.state.borrow();
         let project = state.project.as_ref()?;
         let files = |tabs: &[Tab]| -> Vec<String> {
             tabs.iter()
                 .filter_map(|tab| match tab {
-                    Tab::File(path) => Some(path.clone()),
-                    Tab::Page(_) => None,
+                    Tab::File(path) if !rusty_edit::is_expansion(path) => Some(path.clone()),
+                    _ => None,
                 })
                 .collect()
         };
         let front = |tabs: &[Tab], at: Option<usize>| match at.and_then(|at| tabs.get(at)) {
-            Some(Tab::File(path)) => Some(path.clone()),
+            Some(Tab::File(path)) if !rusty_edit::is_expansion(path) => Some(path.clone()),
             _ => None,
         };
         let (left, left_at, right, right_at) = if state.focus == 0 {
@@ -220,19 +221,23 @@ impl App {
 }
 
 /// What each tab of a strip says beside its name: a page nothing, a file
-/// what [`tab_hints`] gives it among the strip's other files.
+/// what [`tab_hints`] gives it among the strip's other files, and a macro's
+/// expansion — named after its macro — the file and line it was called on.
 pub(super) fn strip_hints(tabs: &[Tab]) -> Vec<String> {
     let paths: Vec<String> = tabs
         .iter()
         .filter_map(|tab| match tab {
-            Tab::File(path) => Some(path.clone()),
-            Tab::Page(_) => None,
+            Tab::File(path) if !rusty_edit::is_expansion(path) => Some(path.clone()),
+            _ => None,
         })
         .collect();
     let mut hints = tab_hints(&paths).into_iter();
     tabs.iter()
         .map(|tab| match tab {
-            Tab::File(_) => hints.next().unwrap_or_default(),
+            Tab::File(path) => match rusty_edit::expansion_parts(path) {
+                Some((called, _)) => called.rsplit('/').next().unwrap_or(called).to_string(),
+                None => hints.next().unwrap_or_default(),
+            },
             Tab::Page(_) => String::new(),
         })
         .collect()
@@ -372,5 +377,23 @@ mod tests {
             Tab::File("firmware/Cargo.toml".into()),
         ];
         assert_eq!(strip_hints(&tabs), ["core", "", "firmware"]);
+    }
+
+    /// An expansion's tab reads as its macro, and says where it was called:
+    /// two of one macro are told apart by their calls, and neither is a
+    /// file's rival.
+    #[test]
+    fn an_expansion_says_where_its_macro_was_called() {
+        let tabs = [
+            Tab::File("src/main.rs".into()),
+            Tab::File(rusty_edit::expansion_path("src/main.rs", 7, "println!")),
+            Tab::File(rusty_edit::expansion_path("src/lib.rs", 40, "println!")),
+            Tab::File("core/src/main.rs".into()),
+        ];
+        assert_eq!(tabs[1].title(), "println!");
+        assert_eq!(
+            strip_hints(&tabs),
+            ["src", "main.rs:8", "lib.rs:41", "core/src"]
+        );
     }
 }
