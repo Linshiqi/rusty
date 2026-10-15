@@ -39,6 +39,29 @@ type definition, references, implementations, rename, the call hierarchy
 — who calls a function and what it calls, a tree in the panel below — and
 expanding a macro, which opens the expansion beside the code.
 
+**The file tree, the tabs and the window, VS Code's way.** The tree
+makes, renames, cuts, copies, pastes and deletes files and folders — from
+its right-click menu, F2, Delete and Ctrl+X/C/V — and a file dragged onto
+a folder moves there, its open tab and unsaved edits going with it. A tab
+has a right-click menu too (close others, close to the right, copy path,
+reveal in File Explorer, split right, move into a new window), the strip
+scrolls sideways when the tabs outgrow it, and the line between two
+editor groups drags. Ctrl over a name draws it as a link to where it is
+defined; Alt+Left and Alt+Right — and the mouse's side buttons — walk
+back and forward through where you have been. Ctrl and the wheel resize
+the text under the pointer: the code, a Markdown page or the terminal,
+each remembered. Output, Problems, the terminal, search results and the
+panels' tabs answer a right-click. File ▸ New Window (Ctrl+Shift+N) opens
+a second project beside the first, and Keyboard Shortcuts (Ctrl+K
+Ctrl+S) lists every key and lets you change it.
+
+**Mathematics and pictures.** A Markdown page draws its formulas, inline
+and displayed, in the page's colour and size, and its pictures and
+`<figure>`s. An image opened from the tree — PNG, JPEG, GIF, BMP, WebP,
+ICO, SVG — opens as a picture, which the wheel zooms; an SVG switches
+between the picture and its source. Text no longer blurs while a page
+scrolls.
+
 **A new installer.** On Windows the installer is a small window: where to
 install, a desktop shortcut, and what rusty can do while the files go in.
 The same window removes rusty again.
@@ -63,7 +86,7 @@ where that stands. Each download's signature is published beside it as a
 declares, and the finder's `@` (this file's symbols) and `#` (the
 workspace's). On the board: importing a KiCad or Wokwi schematic or an
 LCSC part, tidying the sheet, and the live readings under the pointer.
-Elsewhere: File ▸ New window, a commit in a window of its own,
+Elsewhere: a commit in a window of its own,
 pictures compared in the Git panel, a failed test's message on its line,
 choosing the terminal's shell (it starts PowerShell on Windows and your
 `$SHELL` elsewhere), moving the data directory, removing a project from
