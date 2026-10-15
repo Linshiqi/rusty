@@ -306,11 +306,24 @@ impl App {
         self.sync_tree();
         let pasting = self.state.borrow().tree.clip.is_some();
         let (path, dir) = target;
+        // New file and new folder are actions too, and show the key in
+        // force; the rest are the tree's own keys.
+        let keys = self.state.borrow().keys.map.clone();
         let mut rows: Vec<(&str, String, &str, bool)> = Vec::new();
         let divider = || ("", String::new(), "", false);
         if dir {
-            rows.push(("new-file", t!("context.tree-new-file"), "", false));
-            rows.push(("new-folder", t!("context.tree-new-folder"), "", false));
+            rows.push((
+                "new-file",
+                t!("context.tree-new-file"),
+                keys.chord("tree.new-file").unwrap_or_default(),
+                false,
+            ));
+            rows.push((
+                "new-folder",
+                t!("context.tree-new-folder"),
+                keys.chord("tree.new-folder").unwrap_or_default(),
+                false,
+            ));
         } else {
             rows.push(("open-side", t!("context.tree-open-side"), "", false));
         }

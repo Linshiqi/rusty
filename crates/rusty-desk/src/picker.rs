@@ -1,7 +1,7 @@
 //! The picker: the command palette and the file finder are one list with
 //! one set of keys, and what it lists is what it was opened for.
 
-use crate::actions::{self, Action};
+use crate::actions::{self, Action, Keymap};
 
 /// What the picker is listing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,8 +44,9 @@ pub enum Pick {
 /// How many rows are shown. Past this the query is what narrows it.
 pub const SHOWN: usize = 12;
 
-/// The commands matching `query`, best first: (title, chord, what it does).
-pub fn commands(query: &str) -> Vec<(String, String, Pick)> {
+/// The commands matching `query`, best first: (title, the key it has in
+/// `keys` — a rebound key is the key shown — and what it does).
+pub fn commands(query: &str, keys: &Keymap) -> Vec<(String, String, Pick)> {
     // Not the palette itself: it is open.
     let listed: Vec<&Action> = actions::ALL
         .iter()
@@ -59,7 +60,7 @@ pub fn commands(query: &str) -> Vec<(String, String, Pick)> {
             let action = listed[index];
             (
                 titles[index].clone(),
-                action.chord.unwrap_or_default().to_string(),
+                keys.chord(action.id).unwrap_or_default().to_string(),
                 Pick::Action(action.id),
             )
         })
@@ -99,8 +100,8 @@ pub fn line_target(query: &str) -> Option<(Option<usize>, Option<usize>)> {
     Some((Some(line.max(1)), col.map(|col| col.max(1))))
 }
 
-/// The recent projects matching `query`, then the ways to have another:
-/// (name, where it is, what it does).
+/// The recent projects matching `query`, then the ways to have another —
+/// here, or in a new window: (name, where it is, what it does).
 pub fn projects(query: &str, recents: &[String]) -> Vec<(String, String, Pick)> {
     let names: Vec<String> = recents.iter().map(|path| path.replace('\\', "/")).collect();
     let mut rows: Vec<(String, String, Pick)> = rank(query, &names)
@@ -116,7 +117,13 @@ pub fn projects(query: &str, recents: &[String]) -> Vec<(String, String, Pick)> 
             )
         })
         .collect();
-    for id in ["project.open", "project.new", "project.clone"] {
+    for id in [
+        "project.open",
+        "project.open-new-window",
+        "project.new",
+        "project.clone",
+        "window.new",
+    ] {
         if let Some(action) = actions::by_id(id) {
             let title = rusty_i18n::lookup(action.title);
             if rank(query, std::slice::from_ref(&title)).len() == 1 {

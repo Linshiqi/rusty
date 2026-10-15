@@ -1,0 +1,252 @@
+// Keyboard Shortcuts, VS Code's page: every action and the key it has now,
+// searched by name or by key. A click on a key records a new one — the
+// strokes pressed, then Enter to keep them or Escape to leave the key as it
+// was — and what a key collides with is said on its row (`src/app/
+// shortcuts.rs` decides all of it).
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Button, IconButton, Caption, Tip } from "widgets.slint";
+import { Shell } from "shell.slint";
+
+// A key as a pill in the code face; while it records, what has been pressed.
+component KeyPill inherits Rectangle {
+    in property <string> chord;
+    in property <bool> recording;
+    callback clicked;
+    height: 26px;
+    border-radius: 5px;
+    background: root.recording ? Theme.content : touch.has-hover ? Theme.hover : Theme.sunken;
+    border-width: 1px;
+    border-color: root.recording ? Theme.rust : Theme.line;
+    Text {
+        x: 8px;
+        width: parent.width - 16px;
+        height: parent.height;
+        text: root.recording && root.chord == "" ? @tr("shortcuts.press") : root.chord == "" ? "—" : root.chord;
+        color: root.recording ? Theme.rust : root.chord == "" ? Theme.label-4 : Theme.label;
+        font-family: root.recording && root.chord == "" ? "" : Theme.mono;
+        font-size: Theme.small;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    touch := TouchArea {
+        clicked => {
+            Tip.shown = false;
+            root.clicked();
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && !root.recording && !Tip.shown;
+        triggered => {
+            Tip.text = @tr("shortcuts.edit");
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
+export component KeysPage inherits Rectangle {
+    background: Theme.content;
+
+    // A row records: the keys come here until Enter or Escape, and leaving
+    // is Escape.
+    property <bool> recording: Shell.keys-recording;
+    changed recording => {
+        if (self.recording) {
+            recorder.focus();
+        }
+    }
+    recorder := FocusScope {
+        width: 0;
+        height: 0;
+        key-pressed(event) => {
+            if (Shell.keys-stroke(event)) {
+                return accept;
+            }
+            reject
+        }
+        changed has-focus => {
+            if (!self.has-focus && Shell.keys-recording) {
+                Shell.keys-lost();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        VerticalLayout {
+            width: min(960px, root.width - 48px);
+            padding-top: 28px;
+            padding-bottom: 12px;
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: @tr("shortcuts.title");
+                    color: Theme.label;
+                    font-size: Theme.title;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: @tr("shortcuts.reset-all");
+                    enabled: Shell.keys-rebound;
+                    clicked => {
+                        Shell.act("keys.reset-all");
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                Rectangle {
+                    height: 32px;
+                    border-radius: 7px;
+                    background: Theme.sunken;
+                    border-width: 1px;
+                    border-color: field.has-focus ? Theme.rust : Theme.line;
+                    if Shell.keys-query == "": Text {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        text: Shell.keys-search-keys ? @tr("shortcuts.search-keys-hint") : @tr("shortcuts.search");
+                        color: Theme.label-3;
+                        font-size: Theme.body;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    field := TextInput {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        text <=> Shell.keys-query;
+                        single-line: true;
+                        vertical-alignment: center;
+                        color: Theme.label;
+                        font-size: Theme.body;
+                        edited => {
+                            Shell.keys-query-edited(self.text);
+                        }
+                        // Searching by key: what is pressed is the query.
+                        key-pressed(event) => {
+                            if (Shell.keys-search-keys && Shell.keys-search-stroke(event)) {
+                                return accept;
+                            }
+                            reject
+                        }
+                    }
+                }
+                IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.keyboard;
+                    active: Shell.keys-search-keys;
+                    tip: @tr("shortcuts.search-keys");
+                    clicked => {
+                        Shell.act("keys.search-keys");
+                        field.focus();
+                    }
+                }
+            }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+                Caption {
+                    text: @tr("shortcuts.column-command");
+                    horizontal-stretch: 1;
+                }
+                Caption {
+                    text: @tr("shortcuts.column-key");
+                    width: 220px;
+                }
+                Caption {
+                    text: @tr("shortcuts.column-source");
+                    width: 64px;
+                }
+                Rectangle {
+                    width: 28px;
+                }
+            }
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+            scroll := ScrollView {
+                vertical-stretch: 1;
+                // From the top, each row its own height: a search that
+                // leaves a few rows does not spread them down the page.
+                VerticalLayout {
+                    width: scroll.visible-width;
+                    alignment: start;
+                    for row in Shell.keys-rows: Rectangle {
+                        border-radius: 6px;
+                        background: row.recording ? Theme.selection : hover.has-hover ? Theme.hover : transparent;
+                        hover := TouchArea { }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 5px;
+                            padding-bottom: 5px;
+                            spacing: 12px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: row.title;
+                                    color: Theme.label;
+                                    font-size: Theme.body;
+                                    overflow: elide;
+                                }
+                                if row.note != "": Text {
+                                    text: row.note;
+                                    color: row.warn ? Theme.amber : Theme.label-3;
+                                    font-size: Theme.small;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                width: 220px;
+                                alignment: center;
+                                KeyPill {
+                                    chord: row.chord;
+                                    recording: row.recording;
+                                    clicked => {
+                                        Shell.keys-record(row.id);
+                                    }
+                                }
+                            }
+                            Text {
+                                width: 64px;
+                                text: row.rebound ? @tr("shortcuts.source-user") : @tr("shortcuts.source-default");
+                                color: row.rebound ? Theme.label : Theme.label-3;
+                                font-size: Theme.small;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                width: 28px;
+                                alignment: center;
+                                if row.rebound: IconButton {
+                                    icon: Icons.undo;
+                                    tip: @tr("shortcuts.reset");
+                                    clicked => {
+                                        Shell.keys-reset(row.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

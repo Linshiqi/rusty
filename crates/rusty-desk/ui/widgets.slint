@@ -23,6 +23,7 @@ export component IconButton inherits Rectangle {
     in property <bool> active;
     in property <bool> enabled: true;
     in property <length> glyph: 16px;
+    out property <bool> hovered: touch.has-hover;
     callback clicked;
 
     width: 28px;
@@ -97,11 +98,19 @@ export component Button inherits Rectangle {
 export component RowButton inherits Rectangle {
     in property <bool> selected;
     out property <bool> hovered: touch.has-hover;
+    // Ctrl was held as the click was pressed: VS Code's other way to open
+    // something, a recent project in a new window.
+    out property <bool> ctrl;
     callback clicked;
     callback double-clicked;
     border-radius: 5px;
     background: root.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
     touch := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.ctrl = event.modifiers.control || event.modifiers.meta;
+            }
+        }
         clicked => {
             root.clicked();
         }
