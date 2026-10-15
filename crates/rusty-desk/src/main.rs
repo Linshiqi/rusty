@@ -18,7 +18,9 @@ mod markdown;
 mod picker;
 mod probe;
 mod project;
+mod reveal;
 mod run;
+mod tree;
 mod work;
 mod zoom;
 
