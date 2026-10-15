@@ -19,7 +19,10 @@ tar = "0.4.46"
 flate2 = "1.1.9"
 
 [dependencies]
-slint = "1.18.1"
+# `unstable-winit-030` for one thing: bringing the main window to the front
+# when an action from a window a tab was moved into lands there
+# (`app/torn.rs`). Slint has no word of its own for it.
+slint = { version = "1.18.1", features = ["unstable-winit-030"] }
 # Slint's own core, for one thing only: the probe turns a mouse wheel the
 # way winit hands one over (`RUSTY_PROBE_SCROLL_WHEEL`), animated, which the
 # public `PointerScrolled` is not. Pinned to the version slint pins.

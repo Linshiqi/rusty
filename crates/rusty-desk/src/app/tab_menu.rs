@@ -32,6 +32,7 @@ const ROWS: &[&str] = &[
     "tab.reveal",
     "",
     "tab.split-right",
+    "editor.detach",
 ];
 
 /// The verbs about the file on disk behind a tab, which a page and a
@@ -51,6 +52,8 @@ pub(super) fn rows_for(
     let on_disk = matches!(tab, Tab::File(path) if !rusty_edit::is_expansion(path))
         || matches!(tab, Tab::Picture(_));
     let file = matches!(tab, Tab::File(_) | Tab::Picture(_));
+    // A window of its own holds an editor, so a picture stays where it is.
+    let text = matches!(tab, Tab::File(path) if !rusty_edit::is_expansion(path));
     let kept: Vec<&'static str> = ROWS
         .iter()
         .copied()
@@ -58,6 +61,8 @@ pub(super) fn rows_for(
             "tab.close-others" => count > 1,
             "tab.close-right" => at + 1 < count,
             "tab.split-right" => file && has_right_group_to_open,
+            // Only a file of text moves into a window of its own.
+            "editor.detach" => text,
             id if ON_DISK.contains(&id) => on_disk,
             _ => true,
         })
@@ -171,6 +176,8 @@ impl App {
                     self.split_right(other, path);
                 }
             }
+            // The tab clicked, from its own group, not the one in front.
+            "editor.detach" => self.detach(Some((other, id.to_string())), None),
             _ => {}
         }
     }
@@ -262,6 +269,8 @@ mod tests {
                 "tab.copy-relative-path",
                 "",
                 "tab.reveal",
+                "",
+                "editor.detach",
             ]
         );
         let last = rows_for(&file("src/main.rs"), 2, 3, true);
@@ -291,11 +300,16 @@ mod tests {
     }
 
     /// A picture is a file on disk like any other: its path is copied,
-    /// revealed and opened beside.
+    /// revealed and opened beside. It does not move into a window of its
+    /// own, which holds an editor.
     #[test]
     fn a_picture_tab_has_the_file_rows() {
         let picture = Tab::Picture("book/src/figures/fig.png".into());
-        assert_eq!(rows_for(&picture, 1, 3, true), ROWS);
+        let rows = rows_for(&picture, 1, 3, true);
+        assert!(!rows.contains(&"editor.detach"));
+        let mut file_rows = rows_for(&Tab::File("src/lib.rs".into()), 1, 3, true);
+        file_rows.retain(|id| *id != "editor.detach");
+        assert_eq!(rows, file_rows);
     }
 
     #[test]

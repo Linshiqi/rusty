@@ -877,6 +877,8 @@ export global Shade {
     in-out property <length> scroll-y;
     in-out property <length> scroll-x;
     callback pressed(int /* row */, length /* x */, length /* y */);
+    // The view moved, or the list view moved it (`shade::within`).
+    callback scrolled();
 }
 
 export component ShadeView inherits Rectangle {
@@ -898,6 +900,9 @@ export component ShadeView inherits Rectangle {
         content-width: max(self.visible-width, Shade.content-width);
         content-y <=> Shade.scroll-y;
         content-x <=> Shade.scroll-x;
+        changed content-y => {
+            Shade.scrolled();
+        }
         for shaded[index] in Shade.rows: Rectangle {
             height: Code.row-height;
             width: max(shade-list.visible-width, Shade.content-width);

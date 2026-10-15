@@ -37,6 +37,9 @@ component TabStrip inherits Rectangle {
     callback close(string);
     // A right-click on a tab, at a point of the window.
     callback menu(string, length, length);
+    // A tab let go of, where in the window: beyond its edge is a window of
+    // its own (`src/app/torn.rs`).
+    callback dropped(string, length, length);
     height: 36px;
     background: Theme.window;
 
@@ -177,6 +180,9 @@ component TabStrip inherits Rectangle {
                             }
                             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                 root.menu(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            }
+                            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                root.dropped(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                             }
                         }
                     }
@@ -776,6 +782,9 @@ export component EditorArea inherits Rectangle {
                         menu(id, x, y) => {
                             Shell.tab-menu(id, false, x, y);
                         }
+                        dropped(id, x, y) => {
+                            Shell.tab-dropped(id, false, x, y);
+                        }
                     }
                     Rectangle {
                         code := CodeView {
@@ -879,6 +888,9 @@ export component EditorArea inherits Rectangle {
                         }
                         menu(id, x, y) => {
                             Shell.tab-menu(id, true, x, y);
+                        }
+                        dropped(id, x, y) => {
+                            Shell.tab-dropped(id, true, x, y);
                         }
                     }
                     Rectangle {

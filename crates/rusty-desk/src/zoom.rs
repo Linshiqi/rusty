@@ -17,7 +17,9 @@ use slint::{ComponentHandle, platform::WindowEvent};
 use crate::AppWindow;
 
 thread_local! {
-    /// The factor this window last asked for, and the zoom it asked it at.
+    /// The factor the main window last asked for, and the zoom it asked it
+    /// at. A window a tab was moved into keeps its own (`app/torn.rs`): it
+    /// may be on another display.
     static ASKED: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
 }
 
@@ -44,15 +46,20 @@ pub fn display_factor(current: f32, asked: Option<(f32, f32)>) -> f32 {
 /// size for the same pixels, so the layout is told it: a factor alone
 /// leaves the layout at the size it had.
 pub fn apply(window: &AppWindow, zoom: f32) {
-    let window = window.window();
+    ASKED.with(|asked| apply_to(window.window(), asked, zoom));
+}
+
+/// [`apply`] for any of the process's windows, with what it last asked for
+/// kept in `asked`.
+pub fn apply_to(window: &slint::Window, asked: &Cell<Option<(f32, f32)>>, zoom: f32) {
     let size = window.size();
     if size.width == 0 || size.height == 0 {
         return;
     }
     let current = window.scale_factor();
-    let wanted = display_factor(current, ASKED.with(Cell::get)) * zoom;
+    let wanted = display_factor(current, asked.get()) * zoom;
     if (current - wanted).abs() > 0.001 {
-        ASKED.with(|cell| cell.set(Some((wanted, zoom))));
+        asked.set(Some((wanted, zoom)));
         window.dispatch_event(WindowEvent::ScaleFactorChanged {
             scale_factor: wanted,
         });

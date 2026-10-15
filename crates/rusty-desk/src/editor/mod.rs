@@ -21,6 +21,7 @@ mod document;
 mod find;
 mod finding;
 mod history;
+mod host;
 mod hover;
 mod indent;
 mod inlays;
@@ -56,7 +57,7 @@ use rusty_edit::{
 use slint::{ComponentHandle, ModelRc};
 
 use crate::{
-    AppWindow, Code, Find, language,
+    AppWindow, Code, Find, TornWindow, language,
     lsp::{Problems, Servers},
     work,
 };
@@ -64,12 +65,65 @@ use cursors::Cursor;
 use document::Change;
 pub use document::Document;
 use history::Kind;
+use host::{Host, Strong};
 use keymap::Command;
 pub use metrics::Metrics;
 pub use rows::Gutter;
 use rows::Rows;
 
 type Shared = Rc<RefCell<Option<Rc<RefCell<Document>>>>>;
+
+/// The open documents by path, shared by every surface: one file open in
+/// two views is one document.
+type Open = Rc<RefCell<HashMap<String, Rc<RefCell<Document>>>>>;
+
+/// Every surface the process has — the main window's, and one per window a
+/// tab was moved into — so that what one view does to a document the others
+/// showing it draw too, and an answer finds the surface that asked.
+#[derive(Default)]
+struct Views {
+    next: Cell<usize>,
+    all: RefCell<Vec<(usize, Weak<Surface>)>>,
+}
+
+impl Views {
+    fn join(&self, surface: Weak<Surface>) -> usize {
+        let id = self.next.get();
+        self.next.set(id + 1);
+        let mut all = self.all.borrow_mut();
+        all.retain(|(_, view)| view.strong_count() > 0);
+        all.push((id, surface));
+        id
+    }
+
+    fn live(&self) -> Vec<Rc<Surface>> {
+        self.all
+            .borrow()
+            .iter()
+            .filter_map(|(_, view)| view.upgrade())
+            .collect()
+    }
+
+    fn find(&self, id: usize) -> Option<Rc<Surface>> {
+        self.all
+            .borrow()
+            .iter()
+            .find(|(view, _)| *view == id)
+            .and_then(|(_, view)| view.upgrade())
+    }
+}
+
+/// What every surface shares with the others.
+struct Common {
+    files: Arc<Files>,
+    open: Open,
+    metrics: Rc<RefCell<Metrics>>,
+    gutter: Rc<RefCell<Gutter>>,
+    painting: Rc<RefCell<HashSet<String>>>,
+    servers: Rc<Servers>,
+    problems: Problems,
+    views: Rc<Views>,
+}
 
 /// Who is told after an edit, with the edited document's path.
 type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
@@ -87,6 +141,9 @@ type OnLens = RefCell<Option<Box<dyn Fn(rusty_edit::Runnable, String)>>>;
 /// Who applies a fix the hover card offered: the text's version, the
 /// server's answer, and which of its actions.
 type OnFix = RefCell<Option<Box<dyn Fn(u64, rusty_lsp::CodeActions, usize)>>>;
+/// Who does an action the view asked for by its id — a Ctrl+click's
+/// definition, Vim's `:w` — for the window the view is in.
+type OnAct = RefCell<Option<Box<dyn Fn(&str)>>>;
 
 /// A press being dragged: what the press itself selected — a point, a word
 /// or a line — which every move extends from.
@@ -127,8 +184,12 @@ pub fn takes(stroke: &crate::keys::Stroke) -> bool {
 pub struct Surface {
     /// Itself, for the timers that call back into it.
     this: Weak<Surface>,
+    /// Which of the process's surfaces this is: an answer from another
+    /// thread names it, since a surface cannot travel there.
+    id: usize,
+    views: Rc<Views>,
     files: Arc<Files>,
-    open: RefCell<HashMap<String, Rc<RefCell<Document>>>>,
+    open: Open,
     current: Shared,
     metrics: Rc<RefCell<Metrics>>,
     rows: Rc<Rows>,
@@ -141,13 +202,16 @@ pub struct Surface {
     on_lens: OnLens,
     /// Told which fix the hover card's click picked.
     on_fix: OnFix,
-    window: slint::Weak<AppWindow>,
+    /// Told what action the view asked for; the app's own when nobody is.
+    on_act: OnAct,
+    window: Host,
     on_edit: OnEdit,
     on_caret: OnCaret,
     on_chord: OnChord,
     on_lines: OnLines,
-    /// Paths with a repaint on its way: one at a time each.
-    painting: RefCell<HashSet<String>>,
+    /// Paths with a repaint on its way: one at a time each, whichever
+    /// surface asked for it.
+    painting: Rc<RefCell<HashSet<String>>>,
     drag: Cell<Option<Drag>>,
     press: Cell<Option<Press>>,
     /// The last line copied with nothing selected, which pastes as a line.
@@ -189,10 +253,50 @@ impl Surface {
         servers: Rc<Servers>,
         problems: Problems,
     ) -> Rc<Surface> {
+        let strong = Strong::Main(window.clone_strong());
+        let common = Common {
+            files,
+            open: Rc::default(),
+            metrics: Rc::new(RefCell::new(Metrics::measure(&strong))),
+            gutter: Rc::default(),
+            painting: Rc::default(),
+            servers,
+            problems,
+            views: Rc::default(),
+        };
+        Surface::build(&strong, Host::Main(window.as_weak()), common)
+    }
+
+    /// A surface for a window a tab was moved into, beside this one: the
+    /// same documents, servers, painting and margin, a view of its own.
+    pub fn beside(&self, window: &TornWindow) -> Rc<Surface> {
+        let strong = Strong::Torn(window.clone_strong());
+        let common = Common {
+            files: self.files.clone(),
+            open: self.open.clone(),
+            metrics: self.metrics.clone(),
+            gutter: self.gutter.clone(),
+            painting: self.painting.clone(),
+            servers: self.servers.clone(),
+            problems: self.problems.clone(),
+            views: self.views.clone(),
+        };
+        Surface::build(&strong, Host::Torn(window.as_weak()), common)
+    }
+
+    fn build(strong: &Strong, host: Host, common: Common) -> Rc<Surface> {
+        let Common {
+            files,
+            open,
+            metrics,
+            gutter,
+            painting,
+            servers,
+            problems,
+            views,
+        } = common;
         let current: Shared = Rc::default();
-        let metrics = Rc::new(RefCell::new(Metrics::measure(window)));
         let found: Rc<RefCell<find::Marks>> = Rc::default();
-        let gutter: Rc<RefCell<Gutter>> = Rc::default();
         let resting: Rc<RefCell<resting::Resting>> = Rc::default();
         let rows = Rc::new(Rows::new(
             current.clone(),
@@ -202,7 +306,7 @@ impl Surface {
             problems.clone(),
             gutter.clone(),
         ));
-        window
+        strong
             .global::<Code>()
             .set_rows(ModelRc::from(rows.clone()));
         let shade_doc: Shared = Rc::default();
@@ -214,13 +318,18 @@ impl Surface {
             problems.clone(),
             gutter.clone(),
         ));
-        window
-            .global::<crate::Shade>()
-            .set_rows(ModelRc::from(shade_rows.clone()));
+        // The other editor group is the main window's alone.
+        if let Strong::Main(window) = strong {
+            window
+                .global::<crate::Shade>()
+                .set_rows(ModelRc::from(shade_rows.clone()));
+        }
         let surface = Rc::new_cyclic(|this| Surface {
             this: this.clone(),
+            id: views.join(this.clone()),
+            views,
             files,
-            open: RefCell::default(),
+            open,
             current,
             metrics,
             rows,
@@ -228,12 +337,13 @@ impl Surface {
             on_breakpoint: RefCell::default(),
             on_lens: RefCell::default(),
             on_fix: RefCell::default(),
-            window: window.as_weak(),
+            on_act: RefCell::default(),
+            window: host,
             on_edit: RefCell::default(),
             on_caret: RefCell::default(),
             on_chord: RefCell::default(),
             on_lines: RefCell::default(),
-            painting: RefCell::default(),
+            painting,
             drag: Cell::new(None),
             press: Cell::new(None),
             copied_line: RefCell::default(),
@@ -257,8 +367,50 @@ impl Surface {
                 rows: shade_rows,
             },
         });
-        surface.wire(window);
+        surface.wire(strong);
         surface
+    }
+
+    /// Which surface this is, for an answer to find it by.
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// The surface `id`, while it is there: one in another window's, or
+    /// this one.
+    pub fn view(&self, id: usize) -> Option<Rc<Surface>> {
+        self.views.find(id)
+    }
+
+    /// The surface `id`, or this one when that one has gone: an answer that
+    /// must land somewhere — a repaint, which frees its document for the
+    /// next — lands here.
+    fn view_or_this(&self, id: usize) -> Rc<Surface> {
+        self.view(id)
+            .or_else(|| self.this.upgrade())
+            .expect("a surface answering is alive")
+    }
+
+    /// Every other surface still open.
+    fn others(&self) -> Vec<Rc<Surface>> {
+        self.views
+            .live()
+            .into_iter()
+            .filter(|view| view.id != self.id)
+            .collect()
+    }
+
+    /// Who does what the view asks for by an action's id.
+    pub fn on_act(&self, tell: impl Fn(&str) + 'static) {
+        *self.on_act.borrow_mut() = Some(Box::new(tell));
+    }
+
+    /// An action the view asked for: its window's to do.
+    fn act(&self, id: &str) {
+        match self.on_act.borrow().as_ref() {
+            Some(tell) => tell(id),
+            None => work::app().act(id),
+        }
     }
 
     pub fn on_edit(&self, tell: impl Fn(&str) + 'static) {
@@ -278,7 +430,7 @@ impl Surface {
         verdicts: std::collections::HashMap<String, rusty_edit::testrun::Verdict>,
     ) {
         self.gutter.borrow_mut().verdicts = verdicts;
-        self.rows.reset();
+        self.gutter_changed();
     }
 
     /// Where an example's `main` may be run from: not a root that is its own
@@ -303,9 +455,12 @@ impl Surface {
         self.gutter.clone()
     }
 
-    /// The margin changed: every row on screen is drawn again.
+    /// The margin changed: every row on screen is drawn again, in every
+    /// window, since the margin is every view's.
     pub fn gutter_changed(&self) {
-        self.rows.reset();
+        for view in self.views.live() {
+            view.rows.reset();
+        }
     }
 
     pub fn on_caret(&self, tell: impl Fn() + 'static) {
@@ -422,7 +577,7 @@ impl Surface {
             self.servers.changed(&path, &doc.borrow().text);
             self.tell_edit(&path);
             self.tell_lines(&path, change);
-            self.shade_follows(doc);
+            self.follows(doc, Some(change));
         }
     }
 
@@ -480,7 +635,7 @@ impl Surface {
             let code = window.global::<Code>();
             code.set_has_document(true);
             code.set_content_width(self.widest.get() + 200.0);
-            code.set_scroll_y(scroll.0);
+            code.set_scroll_y(shade::within(scroll.0));
             code.set_scroll_x(scroll.1);
             self.show_caret();
             window.invoke_focus_code();
@@ -490,26 +645,33 @@ impl Surface {
     }
 
     /// The text drawn at `scale` of its own size — Ctrl and the wheel over
-    /// the code. The font, the one row height and the margin change
-    /// together, every character is measured again at the new size and
-    /// every row placed again, and the view keeps the line at its top.
+    /// the code, in any window that shows it. The font, the one row height
+    /// and the margin change together, every character is measured again at
+    /// the new size and every row placed again, and each view keeps the
+    /// line at its top.
+    ///
+    /// **One size for every window.** The windows a tab was moved into
+    /// measure their characters into the same table as this one and keep
+    /// one place per document, both in pixels of the size the text is
+    /// drawn at, so a window at a size of its own would be measured wrong
+    /// by every other. So the table and the places are done once, here,
+    /// and then every view is drawn again at the new size.
     pub fn set_scale(&self, scale: f32) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
-        let code = window.global::<Code>();
         let (font, row, gutter) = metrics::text_size(scale);
-        let before = code.get_row_height().max(1.0);
-        if code.get_font_size() == font && before == row && code.get_gutter() == gutter {
+        // What this window had: the size the documents' places are kept in.
+        let before = window.global::<Code>().get_row_height().max(1.0);
+        let views = self.views.live();
+        let resized: Vec<(Rc<Surface>, f32)> = views
+            .into_iter()
+            .filter_map(|view| view.fit_text(font, row, gutter).map(|old| (view, old)))
+            .collect();
+        if resized.is_empty() {
             return;
         }
-        // What is drawn over the text was placed at the old size.
-        self.hide_hover();
-        self.close_completion();
-        self.close_signature();
-        code.set_font_size(font);
-        code.set_row_height(row);
-        code.set_gutter(gutter);
+        // Measured through this window, whose text is at the new size now.
         let mut metrics = Metrics::measure(&window);
         for doc in self.open.borrow().values() {
             let d = doc.borrow();
@@ -518,17 +680,56 @@ impl Surface {
             metrics.learn(&window, &labels);
         }
         *self.metrics.borrow_mut() = metrics;
-        // Every view keeps its top line and how far across it was.
-        let across = |x: f32| x * row / before;
+        // Every document keeps its top line and how far across it was.
         for doc in self.open.borrow().values() {
             let mut d = doc.borrow_mut();
-            d.scroll = (across(d.scroll.0), across(d.scroll.1));
+            d.scroll = (d.scroll.0 * row / before, d.scroll.1 * row / before);
         }
-        code.set_scroll_y(across(code.get_scroll_y()));
+        for (view, old) in resized {
+            view.refit(old, row);
+        }
+    }
+
+    /// A new view takes the size every other view has: a window a tab was
+    /// moved into, before it shows anything. The table and the documents'
+    /// places are at that size already.
+    pub fn take_scale(&self, scale: f32) {
+        let (font, row, gutter) = metrics::text_size(scale);
+        if let Some(old) = self.fit_text(font, row, gutter) {
+            self.refit(old, row);
+        }
+    }
+
+    /// This view's text set to `font` on rows of `row` beside a margin of
+    /// `gutter`, what was drawn over the text at the old size put away; the
+    /// old row height, or nothing when the view had that size already.
+    fn fit_text(&self, font: f32, row: f32, gutter: f32) -> Option<f32> {
+        let window = self.window.upgrade()?;
+        let code = window.global::<Code>();
+        let before = code.get_row_height().max(1.0);
+        if code.get_font_size() == font && before == row && code.get_gutter() == gutter {
+            return None;
+        }
+        self.hide_hover();
+        self.close_completion();
+        self.close_signature();
+        code.set_font_size(font);
+        code.set_row_height(row);
+        code.set_gutter(gutter);
+        Some(before)
+    }
+
+    /// This view drawn again at the new size: where it was scrolled to,
+    /// kept at the same line and the same share across, the width of what
+    /// it shows, and every row.
+    fn refit(&self, before: f32, row: f32) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let across = |x: f32| x * row / before;
+        let code = window.global::<Code>();
+        code.set_scroll_y(shade::within(across(code.get_scroll_y())));
         code.set_scroll_x(across(code.get_scroll_x()));
-        let shade = window.global::<crate::Shade>();
-        shade.set_scroll_y(across(shade.get_scroll_y()));
-        shade.set_scroll_x(across(shade.get_scroll_x()));
         let widths = |doc: &Shared| {
             doc.borrow()
                 .as_ref()
@@ -538,8 +739,14 @@ impl Surface {
             self.widest.set(widest);
             code.set_content_width(widest + 200.0);
         }
-        if let Some(widest) = widths(&self.shade.doc) {
-            shade.set_content_width(widest + 200.0);
+        // The other group is the main window's alone.
+        if let Strong::Main(main) = &window {
+            let shade = main.global::<crate::Shade>();
+            shade.set_scroll_y(shade::within(across(shade.get_scroll_y())));
+            shade.set_scroll_x(across(shade.get_scroll_x()));
+            if let Some(widest) = widths(&self.shade.doc) {
+                shade.set_content_width(widest + 200.0);
+            }
         }
         self.overview.forget_stuck();
         self.rows.reset();
@@ -563,6 +770,14 @@ impl Surface {
         if self.open.borrow_mut().remove(path).is_some() {
             self.servers.closed(path);
         }
+        for other in self.others() {
+            other.let_go(path);
+        }
+        self.let_go(path);
+    }
+
+    /// `path` is no longer open: neither view of this surface shows it.
+    fn let_go(&self, path: &str) {
         let shaded = self
             .shade
             .doc
@@ -779,7 +994,7 @@ impl Surface {
 
     // ---- the view's callbacks --------------------------------------------
 
-    fn wire(self: &Rc<Self>, window: &AppWindow) {
+    fn wire(self: &Rc<Self>, window: &Strong) {
         self.wire_find(&window.global::<Find>());
         let code = window.global::<Code>();
         self.wire_hover(&code);
@@ -830,11 +1045,12 @@ impl Surface {
                 // What the editor does not take goes to the window's
                 // bindings from here, not by bubbling up: the TextInput the
                 // keys arrive in moves its own cursor on an arrow, so
-                // Alt+Left never reached Back.
+                // Alt+Left never reached Back. Its own window's: a window a
+                // tab was moved into has bindings of its own to ask.
                 _ => this
                     .window
                     .upgrade()
-                    .is_some_and(|window| window.global::<crate::Shell>().invoke_key(event)),
+                    .is_some_and(|window| window.invoke_key(event)),
             }
         });
         let this = Rc::downgrade(self);
@@ -861,8 +1077,11 @@ impl Surface {
                 this.link_left(row);
             }
         });
-        code.on_navigate(|back| {
-            crate::work::app().act(if back { "nav.back" } else { "nav.forward" });
+        let this = Rc::downgrade(self);
+        code.on_navigate(move |back| {
+            if let Some(this) = this.upgrade() {
+                this.act(if back { "nav.back" } else { "nav.forward" });
+            }
         });
         let this = Rc::downgrade(self);
         code.on_completion_pick(move |row| {
@@ -904,6 +1123,14 @@ impl Surface {
                 this.view_changed();
             }
         });
+        if let Strong::Main(main) = window {
+            let this = Rc::downgrade(self);
+            main.global::<crate::Shade>().on_scrolled(move || {
+                if let Some(this) = this.upgrade() {
+                    this.shade_scrolled();
+                }
+            });
+        }
         let this = Rc::downgrade(self);
         code.on_sticky_pick(move |index| {
             if let Some(this) = this.upgrade() {
@@ -1302,7 +1529,10 @@ impl Surface {
         if !selected {
             self.set_cursors(vec![Cursor::caret(point)]);
         }
-        crate::work::app().editor_menu(at.0, at.1);
+        // The menu is the main window's; a window of its own has none yet.
+        if self.window.is_main() {
+            crate::work::app().editor_menu(at.0, at.1);
+        }
     }
 
     /// `held` is Shift, Alt and Ctrl (or Cmd).
@@ -1325,8 +1555,8 @@ impl Surface {
             self.link_away();
             self.set_cursors(vec![Cursor::caret(at)]);
             match leads {
-                Some(location) => crate::work::app().follow_link(location),
-                None => crate::work::app().act("editor.definition"),
+                Some(location) => crate::work::app().follow_link(self.id, location),
+                None => self.act("editor.definition"),
             }
             return;
         }
@@ -1471,7 +1701,7 @@ impl Surface {
         self.cursors_moved();
         self.view_changed();
         self.analyse_soon();
-        self.shade_follows(doc);
+        self.follows(doc, Some(change));
     }
 
     /// The cursors moved (or the text under them changed): redraw the rows
@@ -1519,6 +1749,7 @@ impl Surface {
         self.find_follow_selection();
         self.show_caret();
         self.caret_rested();
+        self.cursors_follow(&doc);
     }
 
     /// Scroll so `at` is on screen.
@@ -1708,6 +1939,7 @@ impl Surface {
             return;
         }
         let files = self.files.clone();
+        let asker = self.id;
         // The grammar is read off the name; a macro's expansion is named
         // after its macro, and what rust-analyzer expands it to is Rust.
         let asked = if rusty_edit::is_expansion(&path) {
@@ -1717,7 +1949,11 @@ impl Surface {
         };
         work::spawn(
             move || files.repaint(&asked, &text, base, stale),
-            move |app, repaint| app.editor().painted(&path, version, repaint),
+            move |app, repaint| {
+                app.editor()
+                    .view_or_this(asker)
+                    .painted(&path, version, repaint)
+            },
         );
     }
 
@@ -1737,7 +1973,7 @@ impl Surface {
             self.paint(&doc);
             return;
         }
-        self.shade_follows(&doc);
+        self.follows(&doc, None);
         let showing = self.doc().is_some_and(|current| Rc::ptr_eq(&current, &doc));
         if showing {
             self.rows.changed(from, from + count);

@@ -21,7 +21,7 @@ use std::{
 };
 
 use rusty_lsp::{InlayHints, SemanticSpan};
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{Timer, TimerMode};
 
 use super::{Surface, inlays};
 use crate::Code;
@@ -81,6 +81,7 @@ impl Surface {
         let hints = self.overview.hints.get();
         let draft = self.servers.draft(&text);
         let asked = path.clone();
+        let asker = self.id;
         self.servers.ask(
             &path,
             Some(draft),
@@ -92,8 +93,9 @@ impl Surface {
                 Ok((colours, hints))
             },
             move |app, (colours, hints)| {
-                app.editor()
-                    .analysed(&asked, version, &text, colours, hints)
+                if let Some(this) = app.editor().view(asker) {
+                    this.analysed(&asked, version, &text, colours, hints);
+                }
             },
         );
     }
@@ -150,7 +152,7 @@ impl Surface {
         if again {
             self.analyse_soon();
         }
-        self.shade_follows(&doc);
+        self.follows(&doc, None);
         if self
             .doc()
             .is_some_and(|current| std::rc::Rc::ptr_eq(&current, &doc))

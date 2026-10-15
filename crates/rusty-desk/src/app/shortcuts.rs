@@ -68,6 +68,19 @@ impl App {
         shift: bool,
         meta: bool,
     ) -> bool {
+        self.key_in(None, text, (ctrl, alt, shift, meta))
+    }
+
+    /// The same, pressed in `torn` — a window a tab was moved into — or
+    /// the main window when it is `None`: the one keymap, an action's run
+    /// as one asked for there (`torn_act`), and what a chord waits for said
+    /// in that window's own status line.
+    pub(super) fn key_in(
+        self: &Rc<Self>,
+        torn: Option<usize>,
+        text: &str,
+        (ctrl, alt, shift, meta): (bool, bool, bool, bool),
+    ) -> bool {
         let Some(stroke) = keys::chord(text, ctrl, alt, shift, meta) else {
             return false;
         };
@@ -77,11 +90,16 @@ impl App {
             let chord = format!("{first} {stroke}");
             let action = self.state.borrow().keys.map.bound_to(&chord);
             match action {
-                Some(action) => self.act(action.id),
-                None => self.note_transient(
-                    0,
-                    t!("shortcuts.not-a-command", keys = chord.replace(' ', ", ")),
-                ),
+                Some(action) => {
+                    if let Some(id) = torn {
+                        self.torn_say(id, String::new());
+                    }
+                    self.act_in(torn, action.id);
+                }
+                None => {
+                    let said = t!("shortcuts.not-a-command", keys = chord.replace(' ', ", "));
+                    self.say_keys(torn, said);
+                }
             }
             // Taken either way, as VS Code takes it: the second stroke was
             // pressed as part of a chord, not as a key of its own.
@@ -95,17 +113,41 @@ impl App {
             )
         };
         if starts {
-            self.note_transient(0, t!("shortcuts.waiting", keys = stroke.clone()));
-            let note = self.state.borrow().next_note;
+            let note = self.say_keys(torn, t!("shortcuts.waiting", keys = stroke.clone()));
             self.state.borrow_mut().keys.pending = Some((stroke, note));
             return true;
         }
         match action {
             Some(action) => {
-                self.act(action.id);
+                self.act_in(torn, action.id);
                 true
             }
             None => false,
+        }
+    }
+
+    /// An action a key ran, in the window it was pressed in.
+    fn act_in(self: &Rc<Self>, torn: Option<usize>, id: &str) {
+        match torn {
+            Some(torn) => self.torn_act(torn, id),
+            None => self.act(id),
+        }
+    }
+
+    /// What a key says — a chord waiting, one that is no command — where it
+    /// was pressed: a note in the main window, whose number is returned to
+    /// take it away again, or the status line of a window of its own (0,
+    /// which no note has).
+    fn say_keys(self: &Rc<Self>, torn: Option<usize>, text: String) -> i32 {
+        match torn {
+            Some(id) => {
+                self.torn_say(id, text);
+                0
+            }
+            None => {
+                self.note_transient(0, text);
+                self.state.borrow().next_note
+            }
         }
     }
 
@@ -119,8 +161,18 @@ impl App {
         shift: bool,
         meta: bool,
     ) -> bool {
+        self.chord_key_in(None, text, (ctrl, alt, shift, meta))
+    }
+
+    /// The same, for the code of `torn`, a window a tab was moved into.
+    pub(super) fn chord_key_in(
+        self: &Rc<Self>,
+        torn: Option<usize>,
+        text: &str,
+        held: (bool, bool, bool, bool),
+    ) -> bool {
         let pending = self.state.borrow().keys.pending.is_some();
-        pending && self.window_key(text, ctrl, alt, shift, meta)
+        pending && self.key_in(torn, text, held)
     }
 
     /// The key an action has now, as a tooltip ends: ` (F10)`, or nothing.

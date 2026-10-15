@@ -164,8 +164,10 @@ impl App {
             // The server's analysis changed: its colours and hints are
             // asked for again, and the caret's occurrences if it had none.
             LspEvent::Ready {} | LspEvent::Refresh {} => {
-                self.editor.analyse_soon();
-                self.editor.occurrences_again();
+                for surface in self.surfaces() {
+                    surface.analyse_soon();
+                    surface.occurrences_again();
+                }
             }
             LspEvent::Companion { .. } => {}
         }
@@ -190,7 +192,7 @@ impl App {
 
     /// F8 and Shift+F8: the next problem in the file, and what it says.
     pub(super) fn next_problem(self: &Rc<Self>, forward: bool) {
-        if let Some(problem) = self.editor.next_problem(forward) {
+        if let Some(problem) = self.keyed().next_problem(forward) {
             let level = match problem.severity {
                 DiagSeverity::Error => 2,
                 DiagSeverity::Warning => 1,

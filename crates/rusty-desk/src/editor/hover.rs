@@ -26,7 +26,7 @@ use std::{
 
 use rusty_i18n::t;
 use rusty_lsp::{CodeActionFix, CodeActions, FileDiagnostic, HoverInfo};
-use slint::{ComponentHandle, Model, ModelRc, StyledText, Timer, TimerMode, VecModel};
+use slint::{Model, ModelRc, StyledText, Timer, TimerMode, VecModel};
 
 use super::{Surface, asks::Asks, is_problem, rows};
 use crate::{Code, HoverFix, HoverProblem, Row, language};
@@ -277,20 +277,30 @@ impl Surface {
             self.show_card(line, from, &problems, None);
             let draft = self.servers.draft(&draft_text);
             let about = path.clone();
+            let asker = self.id;
             self.servers.ask(
                 &path,
                 Some(draft),
                 move |client, path| client.code_actions(path, line as u32, col as u32),
-                move |app, actions| app.editor().hover_fixes(asked, &about, version, actions),
+                move |app, actions| {
+                    if let Some(this) = app.editor().view(asker) {
+                        this.hover_fixes(asked, &about, version, actions);
+                    }
+                },
             );
         }
         if word.is_some() {
             let draft = self.servers.draft(&draft_text);
+            let asker = self.id;
             self.servers.ask(
                 &path,
                 Some(draft),
                 move |client, path| client.hover(path, line as u32, col as u32),
-                move |app, info| app.editor().hover_answer(asked, version, line, info),
+                move |app, info| {
+                    if let Some(this) = app.editor().view(asker) {
+                        this.hover_answer(asked, version, line, info);
+                    }
+                },
             );
         } else if problems.is_empty() {
             self.hide_hover();
