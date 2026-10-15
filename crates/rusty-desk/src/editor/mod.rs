@@ -489,6 +489,48 @@ impl Surface {
         }
     }
 
+    /// `from` — a file, or a folder and everything open below it — is now
+    /// `to` on disk: every document it held goes with it, its text, cursors,
+    /// folds and history and all, renamed in place. The servers hear the old
+    /// name closed and the new one opened; a document whose extension
+    /// changed is painted again, since the grammar is read off the name.
+    /// Answers with each document's old path and new.
+    pub fn moved(&self, from: &str, to: &str) -> Vec<(String, String)> {
+        let moving: Vec<(String, String)> = self
+            .open
+            .borrow()
+            .keys()
+            .filter_map(|path| Some((path.clone(), rusty_edit::moved_path(path, from, to)?)))
+            .collect();
+        for (old, new) in &moving {
+            let Some(doc) = self.open.borrow_mut().remove(old) else {
+                continue;
+            };
+            let text = {
+                let mut d = doc.borrow_mut();
+                d.path = new.clone();
+                d.text.clone()
+            };
+            self.open.borrow_mut().insert(new.clone(), doc.clone());
+            self.servers.closed(old);
+            self.servers.opened(new, &text);
+            let extension = |path: &str| {
+                std::path::Path::new(path)
+                    .extension()
+                    .map(|e| e.to_ascii_lowercase())
+            };
+            if extension(old) != extension(new) {
+                {
+                    let mut d = doc.borrow_mut();
+                    d.paint = None;
+                    d.unpainted = None;
+                }
+                self.paint(&doc);
+            }
+        }
+        moving
+    }
+
     /// Ctrl+G's line and column, counted from one: the caret there, and the
     /// line in the middle of the view when it was not on screen.
     pub fn go_to(&self, line: usize, col: Option<usize>) {
