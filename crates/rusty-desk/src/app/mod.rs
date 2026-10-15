@@ -626,6 +626,12 @@ impl App {
             }
         });
         let weak = Rc::downgrade(self);
+        self.editor.on_fix(move |version, actions, index| {
+            if let Some(app) = weak.upgrade() {
+                app.apply_fix_from(version, actions, index);
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.editor.on_edit(move |path| {
             if let Some(app) = weak.upgrade() {
                 app.sync_tabs();

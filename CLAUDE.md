@@ -927,13 +927,30 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   triggers are judged, so a `(` that opened a pair still asks for the
   signature. A rule that took a key away from that path would take a feature
   away by adding one.
-- **Not in this window yet: the bracket beside the caret and its pair
-  outlined, and the name under the caret washed where else it occurs.** When
-  they come, the pair is found on the *painted* lines, whose tokens already
-  say what a string and a comment are, so a `{` in `"{}"` pairs with
-  nothing; and the occurrences are asked of the server once the caret has
-  stopped, after the change it rests in has been sent, and cleared by the
-  next edit, since they are about the text before it.
+- **Where the caret rests is marked, twice** (`editor/resting.rs`), VS
+  Code's `matchBrackets` and `occurrencesHighlight`. The bracket beside it
+  and its partner are boxed, found on the *painted* lines
+  (`editor/brackets.rs`, pure and tested against the painter itself), whose
+  tokens already say what a string and a comment are, so a `{` in `"{}"`
+  or `'{'` pairs with nothing — a format string's placeholder is painted as
+  a constant, and counts as neither — and a block comment's brackets are
+  passed over however many lines it runs; a line typed on since its
+  painting is read by the pair rules' own lexer (`pairs::code_brackets`)
+  until its repaint lands, and the repaint matches again. The bracket after
+  the caret first, then the one before, as VS Code takes them; a partner is
+  found by nesting over every kind, so `{ ( }` boxes its braces and leaves
+  the parenthesis with nothing rather than sending it to some later `)`;
+  and it is looked for no further than 3,000 lines either way. The other
+  places the name under the caret occurs are washed, asked of the server
+  (`documentHighlight`) 400 ms after the caret stops — after the change it
+  rests in was sent, and after the 300 ms the colours wait. An edit takes
+  the washes away at once, from every row still showing one where its line
+  now is (`Resting::take_after`); a move off them takes them away and a
+  move within them keeps them; every ask is numbered (`editor/asks.rs`) and
+  an answer is drawn only while it is the last and the text is the version
+  it was asked about. Both are grey from the theme, so neither reads as a
+  selection or a find, and both cover the characters' own extent
+  (`inlays::ink`), never a hint at their edge.
 - **The popup owns its keys only while it shows rows** (`popup_visible`,
   `editor/completion.rs`). A popup narrowed to nothing that still ate Enter
   and Tab was an invisible popup through which a line ending in `v.xyz` could
@@ -1076,15 +1093,23 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   rename does (`app/navigate.rs`). A target file with an unsaved draft
   refuses the whole fix by name — those edits land on disk, and the next
   Ctrl+S there would put the draft's stale bytes back over them.
-- **The hover card shows the problems under the pointer; their fixes are
-  Ctrl+. in the picker** (`Mode::Fixes`). That needs somebody to know a fix
-  exists before going looking for it, and the card is where the pointer
-  already is, so the fixes belong on it: asked for **only when the card shows
-  a problem**, arriving after the card rather than with it — a `codeAction`
-  resolves every offer it did not come with, and a tooltip that waits for
-  that is a tooltip that does not appear — and dropped unless the card they
-  were asked for is still up. `impl core::ops::Mul for Quaternion {}`
-  offering *Implement missing members* is the case it is for.
+- **A problem's fixes are on the hover card, under it** (`editor/hover.rs`),
+  as well as Ctrl+. in the picker (`Mode::Fixes`), which needs somebody to
+  know a fix exists before going looking for it — the card is where the
+  pointer already is. Asked for **only when the card shows a problem**, and
+  after the card rather than with it — a `codeAction` resolves every offer
+  it did not come with, and a tooltip that waits for that is a tooltip that
+  does not appear — and dropped unless the card it was asked for is still
+  up over the same text (the card's numbered asks, and the version). Only
+  the quick fixes are listed (`fixes_for_card`: kind `quickfix`, or none); a
+  refactoring stays Ctrl+.'s. A click applies one by the server's own index
+  into its numbered answer, through the picker's path
+  (`App::apply_fix_from`), another file's edits included. **The rows are
+  inside the card's touch area**: a touch area beside them loses the hover
+  to theirs, which put the card away under the click. `impl core::ops::Mul
+  for Quaternion {}` offering *Implement missing members* is the case it is
+  for; the probe's (`RUSTY_PROBE_MARKS`) is a struct literal missing two
+  fields and *Fill struct fields*.
 - **A key puts the card away, and what the check found follows the
   edits.** The card is about the text as it was when it was asked for, and
   nothing closed it but the pointer: a `;` typed for a `,` and mended under
@@ -3605,6 +3630,18 @@ is no browser storage, and what the window remembers between runs is
   the build stops at `Cannot override property 'row'`, which reads like a
   name declared twice. It happened twice in one day (the Environment page's
   tool row, the wizard's choice); name the property after what it holds.
+- **A Slint `TouchArea`'s `moved` is called only while a button is held**
+  (`grabbed`, in `i-slint-core`'s `input_items.rs`), so a hover cannot be
+  read there. The code view's hover card was wired to `moved`'s not-pressed
+  branch, which never ran: the card came only from the keyboard, and every
+  probe had opened it with *Show hover*. A pointer resting is a
+  `pointer-event` of kind `move`. Found by dispatching real pointer moves at
+  the window, which is also how the next rule was proven: **a touch area
+  that must stay hovered while the pointer is on something clickable in it
+  has to be that thing's ancestor** — `has-hover` is set on the way down
+  (`input_event_filter_before_children`), which a sibling never sees, so the
+  card's own touch area beside its fix rows lost the hover to them and put
+  the card away under the click.
 
 ## The sheet
 
