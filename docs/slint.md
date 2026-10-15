@@ -580,9 +580,19 @@ tests green, and CLAUDE.md saying how it works.
    which group, is `workbench.toml`'s `open_tabs` as the Tauri window wrote
    it, put back when the project opens — and the window, started with no
    project, opens the last one (`strip.rs`). What the Tauri window had and
-   this one does not yet, as v0.7.0's notes say: the call hierarchy, macro
+   this one did not, as v0.7.0's notes say: the call hierarchy, macro
    expansion, the finder's `@` and `#`, New window, a file or a commit in a
    window of its own, and a choice of the terminal's shell.
+
+   Since then, navigation by what the code means: Go to type definition
+   beside references and implementations in the picker; Expand macro
+   recursively, rust-analyzer's expansion as a read-only document with no
+   file, beside the code (`app/expansion.rs`); the call hierarchy as a
+   Calls panel in the bottom dock, asked a level at a time and turned in or
+   out by a pair of icons (`crate::calls`, the old window's tree and its
+   tests, and `app/calls.rs`); and the editor's right-click menu that
+   offers them. The probe's `RUSTY_PROBE_NAV` drives all three on
+   `draw-vectors`' example.
 
 ## Decided
 

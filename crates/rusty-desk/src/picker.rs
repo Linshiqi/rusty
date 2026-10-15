@@ -10,7 +10,8 @@ pub enum Mode {
     Files,
     /// The project chooser: the recent ones, then the ways to have another.
     Projects,
-    /// Places a server named — references, implementations.
+    /// Places a server named — references, implementations, type
+    /// definitions, the calls a function makes from one place.
     Places,
     /// What the server offers to do at the caret.
     Fixes,
