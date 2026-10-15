@@ -31,6 +31,8 @@ pub struct Rows {
     /// The lenses of the document and version they are of: the line each is
     /// drawn on, and what it runs.
     lenses: ByVersion<Lenses>,
+    /// What can fold, by header, for the document and version they are of.
+    regions: ByVersion<Vec<rusty_edit::Region>>,
 }
 
 /// Something worked out from one version of one document, kept until the
@@ -55,6 +57,8 @@ pub struct Gutter {
     /// The last run's verdicts, by the harness's name for each test; a
     /// lens finds its own by its file's module path.
     pub verdicts: std::collections::HashMap<String, rusty_edit::testrun::Verdict>,
+    /// Indent guides turned off in Settings.
+    pub no_guides: bool,
 }
 
 impl Gutter {
@@ -84,7 +88,22 @@ impl Rows {
             notify: ModelNotify::default(),
             levels: RefCell::default(),
             lenses: RefCell::default(),
+            regions: RefCell::default(),
         }
+    }
+
+    /// What can fold in `doc`, found once per version, in header order.
+    pub fn regions(&self, doc: &Document) -> Rc<Vec<rusty_edit::Region>> {
+        let mut cached = self.regions.borrow_mut();
+        if let Some((path, version, regions)) = cached.as_ref()
+            && *path == doc.path
+            && *version == doc.version
+        {
+            return regions.clone();
+        }
+        let regions = Rc::new(rusty_edit::fold::regions(&doc.text));
+        *cached = Some((doc.path.clone(), doc.version, regions.clone()));
+        regions
     }
 
     /// The lenses of `doc`, found once per version: a test, a module of
@@ -126,7 +145,8 @@ impl Rows {
     pub fn runnable_at(&self, row: usize) -> Option<rusty_edit::Runnable> {
         let doc = self.doc.borrow().clone()?;
         let doc = doc.borrow();
-        self.lenses(&doc).get(&(row as u32)).cloned()
+        let line = doc.line_at_row(row);
+        self.lenses(&doc).get(&(line as u32)).cloned()
     }
 
     /// The indent guides of `doc`, counted once per version.
@@ -149,13 +169,27 @@ impl Rows {
         self.notify.reset();
     }
 
+    /// Lines `from..to` changed: the rows they are drawn on are asked for
+    /// again.
     pub fn changed(&self, from: usize, to: usize) {
+        if to <= from {
+            return;
+        }
+        let rows = match self.doc.borrow().as_ref() {
+            Some(doc) => {
+                let d = doc.borrow();
+                d.row_of(from)..d.row_of(to - 1) + 1
+            }
+            None => return,
+        };
         let count = self.row_count();
-        for row in from..to.min(count) {
+        for row in rows.start..rows.end.min(count) {
             self.notify.row_changed(row);
         }
     }
 
+    /// Lines added and removed: rows only while nothing is folded, which is
+    /// when the two are the same numbers.
     pub fn added(&self, at: usize, count: usize) {
         self.notify.row_added(at, count);
     }
@@ -172,15 +206,16 @@ impl Model for Rows {
         self.doc
             .borrow()
             .as_ref()
-            .map_or(0, |doc| doc.borrow().lines.count())
+            .map_or(0, |doc| doc.borrow().rows())
     }
 
-    fn row_data(&self, row: usize) -> Option<Row> {
+    fn row_data(&self, at: usize) -> Option<Row> {
         let doc = self.doc.borrow().clone()?;
         let doc = doc.borrow();
-        if row >= doc.lines.count() {
+        if at >= doc.rows() {
             return None;
         }
+        let row = doc.line_at_row(at);
         let text = doc.lines.text(&doc.text, row);
         let metrics = self.metrics.borrow();
         let painted = doc.painted.get(row).filter(|line| painted_is(line, text));
@@ -230,8 +265,24 @@ impl Model for Rows {
             }
             None => (0, 0.0, 0),
         };
+        // Whether a block opens here, and whether it is collapsed: the
+        // chevron beside the number, and the ellipsis after the line.
+        let fold = if doc.folds.is_folded(line) {
+            2
+        } else if self
+            .regions(&doc)
+            .binary_search_by_key(&line, |r| r.header)
+            .is_ok()
+        {
+            1
+        } else {
+            0
+        };
+        let fold_x = metrics.x_of(text, text.chars().count()) + metrics.ascii();
         Some(Row {
             number: row as i32 + 1,
+            fold,
+            fold_x,
             breakpoint,
             stopped,
             lens,
@@ -240,7 +291,11 @@ impl Model for Rows {
             pieces: ModelRc::new(VecModel::from(pieces)),
             marks: ModelRc::new(VecModel::from({
                 // The guides first: everything else is drawn over them.
-                let level = self.levels(&doc).get(row).copied().unwrap_or(0);
+                let level = if gutter.no_guides {
+                    0
+                } else {
+                    self.levels(&doc).get(row).copied().unwrap_or(0)
+                };
                 let tab = rusty_edit::guides::TAB_SIZE as f32 * metrics.ascii();
                 let mut all: Vec<Mark> = (0..level)
                     .map(|k| mark(f32::from(k) * tab, 1.0, 8))
@@ -372,6 +427,8 @@ pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
     );
     Row {
         number: 0,
+        fold: 0,
+        fold_x: 0.0,
         breakpoint: 0,
         stopped: false,
         lens: 0,
@@ -382,9 +439,27 @@ pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
     }
 }
 
+/// A line of the document drawn on its own — a stuck line — with its
+/// number and its colours, and nothing behind them.
+pub fn line_row(metrics: &Metrics, doc: &Document, line: usize) -> Row {
+    let text = doc.lines.text(&doc.text, line);
+    let pieces = match doc.painted.get(line).filter(|l| painted_is(l, text)) {
+        Some(painted) => place(
+            metrics,
+            painted.spans.iter().map(|s| (s.text.as_str(), s.token)),
+        ),
+        None => place(metrics, std::iter::once((text, Token::Plain))),
+    };
+    Row {
+        number: line as i32 + 1,
+        pieces: ModelRc::new(VecModel::from(pieces)),
+        ..painted_row(metrics, &Line::default())
+    }
+}
+
 /// Whether a painted line is the text on screen — a line typed on since its
 /// painting is drawn plain until the repaint catches up.
-fn painted_is(line: &Line, text: &str) -> bool {
+pub fn painted_is(line: &Line, text: &str) -> bool {
     let mut rest = text;
     for span in &line.spans {
         match rest.strip_prefix(span.text.as_str()) {

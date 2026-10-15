@@ -160,11 +160,11 @@ impl Surface {
         let window = self.window.upgrade()?;
         let row_height = window.global::<Code>().get_row_height();
         let d = doc.borrow();
-        let line = row as isize + (y / row_height).floor() as isize;
-        if line < 0 || line as usize >= d.lines.count() || x < 0.0 {
+        let screen = row as isize + (y / row_height).floor() as isize;
+        if screen < 0 || screen as usize >= d.rows() || x < 0.0 {
             return None;
         }
-        let line = line as usize;
+        let line = d.line_at_row(screen as usize);
         let text = d.lines.text(&d.text, line);
         let metrics = self.metrics.borrow();
         // The character under the pointer, not the boundary nearest it.
@@ -326,20 +326,21 @@ impl Surface {
             StyledText::from_markdown(&prose)
                 .unwrap_or_else(|_| StyledText::from_plain_text(&prose))
         };
-        let (line_text_x, has_any) = {
+        let (line_text_x, has_any, row) = {
             let d = doc.borrow();
             let text = d.lines.text(&d.text, line);
             let col = d.lines.position(&d.text, from).1;
             (
                 metrics.x_of(text, col),
                 !rows_of_problems.is_empty() || !code_rows.is_empty() || !prose.is_empty(),
+                d.row_of(line),
             )
         };
         if !has_any {
             self.close_card();
             return;
         }
-        code.set_hover_line(line as i32);
+        code.set_hover_line(row as i32);
         code.set_hover_x(line_text_x);
         code.set_hover_width((widest + 24.0).clamp(320.0, 620.0));
         code.set_hover_problems(ModelRc::new(VecModel::from(rows_of_problems)));

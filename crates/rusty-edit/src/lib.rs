@@ -21,6 +21,10 @@ pub mod tests_in;
 pub use fold::{Folded, Region};
 pub mod guides;
 pub mod lens;
+/// The minimap's arithmetic: runs of ink, and where it stands.
+pub mod minimap;
+/// Sticky scroll: which lines stay at the top.
+pub mod sticky;
 /// What a test harness said: each test's verdict, each failure's place.
 pub mod testrun;
 pub use model::*;

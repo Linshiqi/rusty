@@ -51,6 +51,8 @@ pub enum Command {
     ToggleComment,
     /// Ctrl+Space: what the server offers at the caret.
     Suggest,
+    /// Ctrl+Shift+[ and ]: the block the caret is in collapsed, or opened.
+    Fold(bool),
 }
 
 /// The command a key names, or `None` for the window's bindings to have it.
@@ -104,6 +106,8 @@ pub fn command(text: &str, ctrl: bool, alt: bool, shift: bool, page: isize) -> O
                 'l' => SelectLine,
                 'k' if shift => DeleteLines,
                 '/' => ToggleComment,
+                '[' | '{' if shift => Fold(true),
+                ']' | '}' if shift => Fold(false),
                 ']' => Indent,
                 '[' => Outdent,
                 ' ' => Suggest,
@@ -177,6 +181,16 @@ mod tests {
             command(&key(Key::PageDown), false, false, true, 30),
             Some(Command::Vertical(30, true))
         );
+        // Shift turns a bracket into a brace on most layouts.
+        assert_eq!(
+            command("{", true, false, true, 30),
+            Some(Command::Fold(true))
+        );
+        assert_eq!(
+            command("]", true, false, true, 30),
+            Some(Command::Fold(false))
+        );
+        assert_eq!(command("[", true, false, false, 30), Some(Command::Outdent));
     }
 
     /// What the editor does not take reaches the window: Ctrl+S saves,

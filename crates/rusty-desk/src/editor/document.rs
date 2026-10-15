@@ -14,7 +14,7 @@ use std::{
 };
 
 use rusty_edit::{
-    Line,
+    Folded, Line, Region,
     text_file::{Charset, LineEnding},
 };
 
@@ -59,6 +59,13 @@ pub struct Document {
     /// and opened to be read: every edit is refused here, the one place
     /// every edit passes through.
     pub read_only: bool,
+    /// The regions collapsed on screen. Session state, like the cursors:
+    /// yesterday's folds put back over a file somebody has since edited
+    /// would hide the wrong lines.
+    pub folds: Folded,
+    /// The last edit moved or opened folds, so the rows on screen are not
+    /// the lines it named and are all drawn again.
+    pub folds_moved: bool,
     saved: u64,
 }
 
@@ -86,7 +93,42 @@ impl Document {
             paint: None,
             unpainted: None,
             read_only: false,
+            folds: Folded::default(),
+            folds_moved: false,
         }
+    }
+
+    /// How many rows the document takes on screen.
+    pub fn rows(&self) -> usize {
+        self.folds.rows(self.lines.count() as u32) as usize
+    }
+
+    /// The row a line is drawn on — its fold's header's, when it is hidden.
+    pub fn row_of(&self, line: usize) -> usize {
+        self.folds.row_for(line as u32) as usize
+    }
+
+    /// The line drawn on a row.
+    pub fn line_at_row(&self, row: usize) -> usize {
+        (self.folds.doc_of_view(row as u32) as usize).min(self.lines.count() - 1)
+    }
+
+    /// Open every fold that hides one of `lines`; whether any did.
+    pub fn unfold_over(&mut self, lines: impl IntoIterator<Item = usize>) -> bool {
+        let mut opened = false;
+        for line in lines {
+            while let Some(header) = self
+                .folds
+                .regions()
+                .iter()
+                .find(|r| line as u32 > r.header && line as u32 <= r.last)
+                .map(|r| r.header)
+            {
+                self.folds.unfold(header);
+                opened = true;
+            }
+        }
+        opened
     }
 
     pub fn dirty(&self) -> bool {
@@ -154,6 +196,10 @@ impl Document {
         );
         self.painted.resize(self.lines.count(), Line::default());
         self.unpainted = Some(follow(self.unpainted.clone(), change));
+        if !self.folds.is_empty() {
+            carry(&mut self.folds, change, &self.text);
+            self.folds_moved = true;
+        }
         let clamp = |at: usize| boundary(&self.text, at.min(self.text.len()));
         self.cursors = cursors
             .into_iter()
@@ -215,6 +261,37 @@ fn changed_lines(old: &str, old_lines: &Lines, new: &str) -> Change {
         first,
         removed: old_last - first + 1,
         added: new_last - first + 1,
+    }
+}
+
+/// The folds after `change`: one whose hidden lines it reached opens, since
+/// what it hid is not what it hides now; one below moves with its lines;
+/// typing on a folded header keeps it, as VS Code does. What is left takes
+/// the end the new text gives it, and goes where its line no longer opens a
+/// block.
+fn carry(folds: &mut Folded, change: Change, text: &str) {
+    let on_header =
+        change.removed == 1 && change.added == 1 && folds.is_folded(change.first as u32);
+    if !on_header {
+        let delta = change.added as i64 - change.removed as i64;
+        folds.follow(
+            change.first as u32,
+            (change.first + change.removed) as u32,
+            delta,
+        );
+    }
+    if folds.is_empty() {
+        return;
+    }
+    let now = rusty_edit::fold::regions(text);
+    let kept: Vec<Region> = folds
+        .regions()
+        .iter()
+        .filter_map(|r| now.iter().find(|n| n.header == r.header).copied())
+        .collect();
+    folds.clear();
+    for region in kept {
+        folds.fold(region);
     }
 }
 
@@ -304,6 +381,78 @@ mod tests {
         assert!(d.unpainted.is_some(), "still to paint");
         assert!(d.painted_from(d.version, 2, 0, vec![Line::default(); 3]));
         assert!(d.unpainted.is_none());
+    }
+
+    fn folded(text: &str, headers: &[u32]) -> Document {
+        let mut d = doc(text);
+        for region in rusty_edit::fold::regions(text) {
+            if headers.contains(&region.header) {
+                d.folds.fold(region);
+            }
+        }
+        d
+    }
+
+    const TWO: &str = "fn a() {
+    1
+}
+fn b() {
+    2
+}
+";
+
+    /// A fold below an edit moves with its lines; typing on its header
+    /// keeps it; an edit that reaches its hidden lines opens it.
+    #[test]
+    fn folds_follow_the_edits_around_them() {
+        let mut d = folded(TWO, &[3]);
+        assert_eq!(d.rows(), 6);
+        d.edit(
+            format!(
+                "// top
+{TWO}"
+            ),
+            vec![Cursor::caret(0)],
+            Kind::Other,
+        );
+        assert!(d.folds.is_folded(4), "moved down a line");
+        assert_eq!(d.line_at_row(5), 6, "line 5 hidden under it");
+        let header = d.lines.start(4) + 3;
+        let text = format!("{}x{}", &d.text[..header], &d.text[header..]);
+        d.edit(text, vec![Cursor::caret(header + 1)], Kind::Typing);
+        assert!(d.folds.is_folded(4), "typed on its header");
+        let inside = d.lines.start(5) + 4;
+        let text = format!("{}3{}", &d.text[..inside], &d.text[inside..]);
+        d.edit(text, vec![Cursor::caret(inside)], Kind::Other);
+        assert!(d.folds.is_empty(), "an edit inside opens it");
+    }
+
+    /// A fold whose line no longer opens a block goes.
+    #[test]
+    fn a_fold_whose_block_is_gone_goes() {
+        let mut d = folded(TWO, &[0]);
+        let text = TWO.replace(
+            "fn a() {
+    1
+}
+",
+            "fn a() {}
+",
+        );
+        d.edit(text, vec![Cursor::caret(0)], Kind::Other);
+        assert!(d.folds.is_empty());
+    }
+
+    #[test]
+    fn a_hidden_line_is_drawn_on_its_header_s_row() {
+        // The body is hidden; the closing brace stays, as indentation
+        // folding leaves it.
+        let mut d = folded(TWO, &[0]);
+        assert_eq!(d.row_of(1), 0);
+        assert_eq!(d.row_of(3), 2);
+        assert_eq!(d.line_at_row(1), 2);
+        assert!(d.unfold_over([1]));
+        assert_eq!(d.row_of(3), 3);
     }
 
     #[test]

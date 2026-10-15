@@ -1329,4 +1329,11 @@ export global Shell {
     callback set-theme(string);
     callback set-language(string);
     callback set-zoom(float);
+    // Settings ▸ Editor: what is drawn around the code, by name — `hints`,
+    // `minimap`, `sticky`, `guides`.
+    in property <bool> view-hints: true;
+    in property <bool> view-minimap: true;
+    in property <bool> view-sticky: true;
+    in property <bool> view-guides: true;
+    callback set-view(string, bool);
 }

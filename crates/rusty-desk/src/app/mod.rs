@@ -133,6 +133,8 @@ pub enum NoteAction {
 #[derive(Default)]
 struct State {
     layout: WindowLayout,
+    /// What the editor draws around the code (Settings ▸ Editor).
+    view: rusty_embed::EditorView,
     project: Option<Project>,
     recents: Vec<String>,
     tabs: Vec<Tab>,
@@ -246,6 +248,7 @@ impl App {
             clock: slint::Timer::default(),
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
+                view: saved.editor,
                 recents: saved.recent_projects.clone(),
                 tabs: vec![Tab::Page("welcome")],
                 active: Some(0),
@@ -253,6 +256,7 @@ impl App {
             }),
         });
         app.wire(window);
+        app.editor.set_view(saved.editor);
         app.sync_all();
         app
     }
@@ -519,6 +523,7 @@ impl App {
         on!(on_set_theme, |app, theme| app.set_theme(&theme));
         on!(on_set_language, |app, tag| app.set_language(&tag));
         on!(on_set_zoom, |app, zoom| app.set_zoom(zoom));
+        on!(on_set_view, |app, which, on| app.set_view(&which, on));
         let weak = Rc::downgrade(self);
         shell.on_board_key(move |event| {
             weak.upgrade().is_some_and(|app| {
@@ -625,6 +630,10 @@ impl App {
             "editor.implementations" => self.find_places(true),
             "editor.quick-fix" => self.quick_fix(),
             "editor.rename" => self.rename_prompt(),
+            "editor.fold" => self.editor.fold_at_caret(true),
+            "editor.unfold" => self.editor.fold_at_caret(false),
+            "editor.fold-all" => self.editor.fold_all(true),
+            "editor.unfold-all" => self.editor.fold_all(false),
             "nav.back" => self.walk(true),
             "nav.forward" => self.walk(false),
             "problem.next" => self.next_problem(true),
@@ -1031,6 +1040,26 @@ impl App {
         self.state.borrow_mut().layout.theme = theme.to_string();
         self.sync_settings();
         self.save_layout();
+    }
+
+    /// One of Settings ▸ Editor's switches: drawn at once, and kept in
+    /// `workbench.toml` so a second window draws the editor the same way.
+    fn set_view(self: &Rc<Self>, which: &str, on: bool) {
+        let view = {
+            let mut state = self.state.borrow_mut();
+            let view = &mut state.view;
+            match which {
+                "hints" => view.inlay_hints = on,
+                "minimap" => view.minimap = on,
+                "sticky" => view.sticky_scroll = on,
+                "guides" => view.indent_guides = on,
+                _ => return,
+            }
+            *view
+        };
+        self.editor.set_view(view);
+        self.sync_settings();
+        let _ = rusty_embed::config::update(move |saved| saved.editor = view);
     }
 
     fn zoom(&self) -> f32 {
@@ -1573,6 +1602,10 @@ impl App {
         shell.set_language_choice(rusty_i18n::locale().tag().into());
         shell.set_zoom(state.layout.zoom);
         crate::zoom::apply(&window, state.layout.zoom);
+        shell.set_view_hints(state.view.inlay_hints);
+        shell.set_view_minimap(state.view.minimap);
+        shell.set_view_sticky(state.view.sticky_scroll);
+        shell.set_view_guides(state.view.indent_guides);
     }
 }
 

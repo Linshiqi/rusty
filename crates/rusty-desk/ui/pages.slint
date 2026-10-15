@@ -9,7 +9,7 @@ import { AssistantSettings } from "assistant.slint";
 import { MarkdownView } from "markdown.slint";
 import { MathPage } from "math.slint";
 import { Transport } from "debug.slint";
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, Switch } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
 import { Button, IconButton, RowButton, Caption, Segments } from "widgets.slint";
@@ -353,6 +353,44 @@ component SettingsPage inherits Rectangle {
                         value: Shell.zoom == 0.9 ? "0.9" : Shell.zoom == 1.1 ? "1.1" : Shell.zoom == 1.25 ? "1.25" : "1";
                         picked(value) => {
                             Shell.set-zoom(value.to-float());
+                        }
+                    }
+                }
+            }
+            Group {
+                title: @tr("settings.editor.view");
+                Setting {
+                    label: @tr("settings.editor.minimap");
+                    Switch {
+                        checked: Shell.view-minimap;
+                        toggled => {
+                            Shell.set-view("minimap", self.checked);
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                Setting {
+                    label: @tr("settings.editor.sticky-scroll");
+                    Switch {
+                        checked: Shell.view-sticky;
+                        toggled => {
+                            Shell.set-view("sticky", self.checked);
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                Setting {
+                    label: @tr("settings.editor.indent-guides");
+                    Switch {
+                        checked: Shell.view-guides;
+                        toggled => {
+                            Shell.set-view("guides", self.checked);
                         }
                     }
                 }
