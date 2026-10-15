@@ -480,6 +480,21 @@ tests green, and CLAUDE.md saying how it works.
    binaries which holds the test, and runs that one under gdb or LLDB's
    adapter. Proven by the probe on `examples/draw-vectors`: two lenses
    found, one of them run, and both carry the run's tick.
+
+   Folding, sticky scroll and the minimap next. The folds live in the
+   document, carried across every edit (`document::carry`: one below an
+   edit moves, one whose hidden lines it reached opens, one being typed on
+   stays), and the rows are the screen's: `row_of` and `line_at_row` are
+   the one crossing, for a click, the caret, Up and Down, the hover card,
+   the popups and the margin. A cursor put on a hidden line opens what
+   hides it. Sticky lines and the minimap are `rusty_edit::sticky` and
+   `rusty_edit::minimap`, moved out of the old window; the minimap is an
+   image painted in Rust for the rows it shows, again only when they or
+   their painting change. Each is a switch in Settings ▸ Editor, kept in
+   `workbench.toml` with the indent guides'. The probe folds all of
+   `draw-vectors` (64 rows to 18), steps Down over a block (9 to 13),
+   jumps into one (it alone opens), and scrolls into `impl Vector` to see
+   its line stick.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 

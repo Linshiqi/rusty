@@ -31,6 +31,10 @@ export struct Mark {
 
 export struct Row {
     number: int,
+    // A block opens on the line (1), collapsed (2); and where the line's
+    // text ends, for the ellipsis a collapsed one carries.
+    fold: int,
+    fold-x: length,
     pieces: [Piece],
     marks: [Mark],
     // A breakpoint on the line: 0 none, 1 placed, 2 asked for and not
@@ -103,6 +107,30 @@ export global Code {
     callback toggle-breakpoint(int /* row */);
     // A lens's verb on a row: "run" or "debug".
     callback lens(int /* row */, string /* verb */);
+    // The chevron beside a row's number: its block collapsed or opened.
+    callback fold(int /* row */);
+    // The pointer is over the margin, which shows every chevron rather
+    // than only the collapsed ones — VS Code's default.
+    in-out property <bool> gutter-hover;
+    // The view scrolled, was resized or changed theme: what is drawn over
+    // the text follows.
+    callback view-changed();
+
+    // The lines that open the blocks the top of the view is in, kept at
+    // the top; a click moves the view to one.
+    in property <[Row]> sticky-rows;
+    callback sticky-pick(int);
+
+    // The minimap: its rows painted from `minimap-offset` down, how many,
+    // and the slider marking the view; a press or a drag on it centres
+    // that part of the file.
+    in property <bool> minimap-on;
+    in property <image> minimap;
+    in property <int> minimap-rows;
+    in property <length> minimap-offset;
+    in property <length> minimap-slider-top;
+    in property <length> minimap-slider-height;
+    callback minimap-to(length);
 
     // The completion popup: under which line, from where along it, the
     // rows drawn and which the keys are on, and how many there are in all.
@@ -662,8 +690,12 @@ export component CodeView inherits Rectangle {
         content-width: max(self.visible-width, Code.content-width);
         content-y <=> Code.scroll-y;
         content-x <=> Code.scroll-x;
+        changed content-y => {
+            Code.view-changed();
+        }
         changed visible-height => {
             Code.view-height = self.visible-height;
+            Code.view-changed();
         }
         changed visible-width => {
             Code.view-width = self.visible-width;
@@ -746,6 +778,9 @@ export component CodeView inherits Rectangle {
                 clicked => {
                     Code.toggle-breakpoint(index);
                 }
+                changed has-hover => {
+                    Code.gutter-hover = self.has-hover;
+                }
             }
             touch := TouchArea {
                 x: root.gutter - 20px;
@@ -774,10 +809,61 @@ export component CodeView inherits Rectangle {
                     }
                 }
             }
+            // The chevron right of the number, hard against the code, as
+            // VS Code puts it: shown while the pointer is in the margin, and
+            // always where a block is collapsed.
+            if row.fold > 0: Rectangle {
+                x: root.gutter - 19px;
+                width: 16px;
+                Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    path: row.fold == 2 ? Icons.chevron-right : Icons.chevron;
+                    size: min(12px, Code.row-height - 6px);
+                    color: fold-touch.has-hover ? Theme.label : Theme.label-3;
+                    visible: row.fold == 2 || Code.gutter-hover || fold-touch.has-hover;
+                }
+                fold-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        Code.fold(index);
+                    }
+                    changed has-hover => {
+                        Code.gutter-hover = self.has-hover;
+                    }
+                }
+            }
+            // What a collapsed block hides, as one mark after its header; a
+            // click opens it.
+            if row.fold == 2: Rectangle {
+                x: root.gutter + row.fold-x;
+                y: 3px;
+                width: dots.preferred-width + 10px;
+                height: parent.height - 6px;
+                border-radius: 3px;
+                background: ellipsis-touch.has-hover ? Theme.hover : Theme.sunken;
+                dots := Text {
+                    x: 5px;
+                    text: "…";
+                    color: Theme.label-3;
+                    font-family: Theme.mono;
+                    font-size: Code.font-size;
+                    vertical-alignment: center;
+                }
+                ellipsis-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        Code.fold(index);
+                    }
+                }
+            }
             // ▶ Run Test | Debug beside a test, where VS Code puts it; the
             // last run's verdict before it.
             if row.lens > 0: HorizontalLayout {
                 x: root.gutter + row.lens-x;
+                // Its own width: given the row's, the layout spread the
+                // verbs across the whole line.
+                width: self.preferred-width;
                 height: parent.height;
                 spacing: 4px;
                 if row.verdict > 0: Text {
@@ -858,6 +944,105 @@ export component CodeView inherits Rectangle {
             if (self.preedit-text == "" && self.text != "") {
                 Code.typed(self.text);
                 self.text = "";
+            }
+        }
+    }
+
+    // A theme change recolours the minimap, which is painted in Rust.
+    property <bool> dark: Theme.dark;
+    changed dark => {
+        Code.view-changed();
+    }
+
+    // The stuck lines, over the rows they cover, in the margin's own style;
+    // sideways with the text.
+    if Code.sticky-rows.length > 0: Rectangle {
+        x: 0;
+        y: 0;
+        width: list.visible-width;
+        height: Code.sticky-rows.length * Code.row-height + 1px;
+        background: Theme.content;
+        clip: true;
+        for row[i] in Code.sticky-rows: Rectangle {
+            y: i * Code.row-height;
+            height: Code.row-height;
+            background: sticky-touch.has-hover ? Theme.hover : transparent;
+            Text {
+                x: list.content-x;
+                width: root.gutter - 20px;
+                height: parent.height;
+                text: row.number;
+                color: Theme.label-4;
+                font-family: Theme.mono;
+                font-size: Code.font-size;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            for piece in row.pieces: Text {
+                x: root.gutter + piece.x + list.content-x;
+                height: parent.height;
+                text: piece.text;
+                color: Theme.token(piece.kind);
+                font-italic: piece.kind == 4;
+                font-family: Theme.mono;
+                font-size: Code.font-size;
+                vertical-alignment: center;
+            }
+            sticky-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    Code.sticky-pick(i);
+                }
+                scroll-event(event) => {
+                    Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - list.content-height));
+                    accept
+                }
+            }
+        }
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: Theme.line;
+        }
+    }
+
+    // The minimap, left of the scrollbar: the rows it shows, painted, and
+    // the slider over the rows the view shows.
+    if Code.minimap-on && Code.has-document: Rectangle {
+        x: parent.width - self.width - 14px;
+        width: 96px;
+        height: parent.height;
+        background: Theme.content;
+        clip: true;
+        Image {
+            x: 0;
+            y: Code.minimap-offset;
+            width: 96px;
+            height: Code.minimap-rows * 2px;
+            source: Code.minimap;
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+        Rectangle {
+            y: Code.minimap-slider-top;
+            height: Code.minimap-slider-height;
+            background: map-touch.pressed ? Theme.line-strong : map-touch.has-hover ? Theme.line : Theme.hover;
+        }
+        map-touch := TouchArea {
+            mouse-cursor: default;
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    Code.minimap-to(self.mouse-y);
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    Code.minimap-to(self.mouse-y);
+                }
+            }
+            scroll-event(event) => {
+                Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - list.content-height));
+                accept
             }
         }
     }

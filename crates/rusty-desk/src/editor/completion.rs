@@ -467,12 +467,15 @@ impl Surface {
                 }
             })
             .collect();
-        let x = self.doc().map_or(0.0, |doc| {
+        let (x, row) = self.doc().map_or((0.0, popup.line as usize), |doc| {
             let d = doc.borrow();
             let text = d.lines.text(&d.text, popup.line as usize);
-            self.metrics.borrow().x_of(text, popup.word_start as usize)
+            (
+                self.metrics.borrow().x_of(text, popup.word_start as usize),
+                d.row_of(popup.line as usize),
+            )
         });
-        code.set_completion_line(popup.line as i32);
+        code.set_completion_line(row as i32);
         code.set_completion_x(x);
         code.set_completion_rows(ModelRc::new(VecModel::from(rows)));
         code.set_completion_selected((popup.selected - top) as i32);
@@ -523,13 +526,16 @@ impl Surface {
             }
             _ => (label.len(), label.len()),
         };
-        let caret_x = self.doc().map_or(0.0, |doc| {
+        let (caret_x, row) = self.doc().map_or((0.0, line as usize), |doc| {
             let d = doc.borrow();
             let head = d.primary().head;
             let (l, col) = d.lines.position(&d.text, head);
-            self.metrics.borrow().x_of(d.lines.text(&d.text, l), col)
+            (
+                self.metrics.borrow().x_of(d.lines.text(&d.text, l), col),
+                d.row_of(line as usize),
+            )
         });
-        code.set_signature_line(line as i32);
+        code.set_signature_line(row as i32);
         code.set_signature_x(caret_x);
         code.set_signature_before(label[..from].into());
         code.set_signature_param(label[from..to].into());

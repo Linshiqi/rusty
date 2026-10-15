@@ -24,6 +24,7 @@ mod keymap;
 mod lineops;
 mod lines;
 mod metrics;
+mod overview;
 mod pairs;
 mod problems;
 
@@ -137,6 +138,8 @@ pub struct Surface {
     squiggled: RefCell<Vec<usize>>,
     hovering: hover::Hovering,
     completing: completion::Completing,
+    /// Sticky scroll and the minimap.
+    overview: overview::Overview,
 }
 
 impl Surface {
@@ -186,6 +189,7 @@ impl Surface {
             squiggled: RefCell::default(),
             hovering: hover::Hovering::default(),
             completing: completion::Completing::default(),
+            overview: overview::Overview::default(),
         });
         surface.wire(window);
         surface
@@ -388,6 +392,7 @@ impl Surface {
             self.show_caret();
             window.invoke_focus_code();
         }
+        self.view_changed();
     }
 
     pub fn show_nothing(&self) {
@@ -422,10 +427,13 @@ impl Surface {
             let col = col.map_or(0, |col| col.saturating_sub(1));
             (d.lines.byte(&d.text, line, col), line)
         };
+        if doc.borrow_mut().unfold_over([line]) {
+            self.rows.reset();
+        }
         if let Some(window) = self.window.upgrade() {
             let code = window.global::<Code>();
             let (row, view) = (code.get_row_height(), code.get_view_height());
-            let top = line as f32 * row;
+            let top = doc.borrow().row_of(line) as f32 * row;
             let scrolled = -code.get_scroll_y();
             if top < scrolled || top + row > scrolled + view {
                 code.set_scroll_y(-(top - (view - row) / 2.0).max(0.0));
@@ -607,11 +615,37 @@ impl Surface {
         let this = Rc::downgrade(self);
         code.on_toggle_breakpoint(move |row| {
             let Some(this) = this.upgrade() else { return };
-            let Some(path) = this.current_path() else {
-                return;
+            let Some(doc) = this.doc() else { return };
+            let (path, line) = {
+                let d = doc.borrow();
+                (d.path.clone(), d.line_at_row(row.max(0) as usize))
             };
             if let Some(tell) = this.on_breakpoint.borrow().as_ref() {
-                tell(path, row.max(0) as u32);
+                tell(path, line as u32);
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_fold(move |row| {
+            if let Some(this) = this.upgrade() {
+                this.fold_row(row.max(0) as usize);
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_view_changed(move || {
+            if let Some(this) = this.upgrade() {
+                this.view_changed();
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_sticky_pick(move |index| {
+            if let Some(this) = this.upgrade() {
+                this.sticky_pick(index.max(0) as usize);
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_minimap_to(move |y| {
+            if let Some(this) = this.upgrade() {
+                this.minimap_to(y);
             }
         });
         let this = Rc::downgrade(self);
@@ -825,6 +859,10 @@ impl Surface {
                 self.suggest();
                 None
             }
+            Command::Fold(fold) => {
+                self.fold_at_caret(fold);
+                None
+            }
             Command::ToggleComment => {
                 let path = doc.borrow().path.clone();
                 language::of(&path)
@@ -910,7 +948,7 @@ impl Surface {
         {
             let metrics = self.metrics.borrow();
             let mut d = doc.borrow_mut();
-            let last = d.lines.count() as isize - 1;
+            let last = d.rows() as isize - 1;
             let x_of = |d: &Document, at: usize| {
                 let (line, col) = d.lines.position(&d.text, at);
                 metrics.x_of(d.lines.text(&d.text, line), col)
@@ -926,13 +964,13 @@ impl Surface {
                     } else {
                         x_of(&d, cursor.head)
                     };
-                    let target = d.lines.line_of(cursor.head) as isize + lines;
+                    let target = d.row_of(d.lines.line_of(cursor.head)) as isize + lines;
                     let head = if target < 0 {
                         0
                     } else if target > last {
                         d.text.len()
                     } else {
-                        let target = target as usize;
+                        let target = d.line_at_row(target as usize);
                         let there = d.lines.text(&d.text, target);
                         d.lines.byte(&d.text, target, metrics.column_at(there, x))
                     };
@@ -964,8 +1002,9 @@ impl Surface {
             .map_or(19.0, |w| w.global::<Code>().get_row_height());
         let (line, at) = {
             let d = doc.borrow();
-            let last = d.lines.count() as isize - 1;
-            let line = (row as isize + (y / row_height).floor() as isize).clamp(0, last) as usize;
+            let last = d.rows() as isize - 1;
+            let screen = (row as isize + (y / row_height).floor() as isize).clamp(0, last);
+            let line = d.line_at_row(screen as usize);
             let text = d.lines.text(&d.text, line);
             let col = self.metrics.borrow().column_at(text, x.max(0.0));
             (line, d.lines.byte(&d.text, line, col))
@@ -1086,7 +1125,10 @@ impl Surface {
     // ---- after a change --------------------------------------------------
 
     fn after_edit(&self, doc: &Rc<RefCell<Document>>, change: Change) {
-        if change.added > change.removed {
+        let refolded = std::mem::take(&mut doc.borrow_mut().folds_moved);
+        if refolded {
+            self.rows.reset();
+        } else if change.added > change.removed {
             self.rows
                 .added(change.first + change.removed, change.added - change.removed);
         } else if change.removed > change.added {
@@ -1113,12 +1155,27 @@ impl Surface {
         self.tell_edit(&path);
         self.research(Some(change));
         self.cursors_moved();
+        self.view_changed();
     }
 
     /// The cursors moved (or the text under them changed): redraw the rows
     /// their marks were and are on, and put the caret on screen.
     fn cursors_moved(&self) {
         let Some(doc) = self.doc() else { return };
+        // A cursor put on a hidden line — a find, a jump, an undo — opens
+        // what hides it rather than stand where nobody can see.
+        let opened = {
+            let mut d = doc.borrow_mut();
+            let lines: Vec<usize> = d
+                .cursors
+                .iter()
+                .flat_map(|c| [d.lines.line_of(c.anchor), d.lines.line_of(c.head)])
+                .collect();
+            d.unfold_over(lines)
+        };
+        if opened {
+            self.rows.reset();
+        }
         let now = {
             let d = doc.borrow();
             let first = d
@@ -1175,7 +1232,7 @@ impl Surface {
             )
         };
         let code = window.global::<Code>();
-        code.set_caret_line(line as i32);
+        code.set_caret_line(doc.borrow().row_of(line) as i32);
         code.set_caret_x(x);
         self.scroll_to(line, x);
         self.tell_caret();
@@ -1187,7 +1244,8 @@ impl Surface {
         };
         let code = window.global::<Code>();
         let row = code.get_row_height();
-        let top = line as f32 * row;
+        let screen = self.doc().map_or(line, |doc| doc.borrow().row_of(line));
+        let top = screen as f32 * row;
         let (view, scrolled) = (code.get_view_height(), -code.get_scroll_y());
         if top < scrolled {
             code.set_scroll_y(-top);
@@ -1206,6 +1264,100 @@ impl Surface {
                 code.set_scroll_x(-(x + gutter + margin - width));
             }
         }
+    }
+
+    // ---- folding ---------------------------------------------------------
+
+    /// The chevron on `row`: its block collapsed, or opened.
+    fn fold_row(&self, row: usize) {
+        let Some(doc) = self.doc() else { return };
+        let line = doc.borrow().line_at_row(row);
+        let region = {
+            let d = doc.borrow();
+            self.rows
+                .regions(&d)
+                .iter()
+                .find(|r| r.header == line as u32)
+                .copied()
+        };
+        if let Some(region) = region {
+            doc.borrow_mut().folds.toggle(region);
+            self.refolded(&doc);
+        }
+    }
+
+    /// Ctrl+Shift+[ and ]: the innermost block the caret is in collapsed, or
+    /// the one collapsed on its line opened.
+    pub fn fold_at_caret(&self, fold: bool) {
+        let Some(doc) = self.doc() else { return };
+        let changed = {
+            let regions = self.rows.regions(&doc.borrow());
+            let mut d = doc.borrow_mut();
+            let line = d.lines.line_of(d.primary().head) as u32;
+            if fold {
+                let inner = regions
+                    .iter()
+                    .rev()
+                    .find(|r| r.header <= line && line <= r.last && !d.folds.is_folded(r.header))
+                    .copied();
+                inner.is_some_and(|region| {
+                    d.folds.fold(region);
+                    d.folds.is_folded(region.header)
+                })
+            } else if d.folds.is_folded(line) {
+                d.folds.unfold(line);
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.refolded(&doc);
+        }
+    }
+
+    /// Every block collapsed — the outermost, since a fold inside a fold
+    /// hides nothing more — or every block opened.
+    pub fn fold_all(&self, fold: bool) {
+        let Some(doc) = self.doc() else { return };
+        {
+            let regions = self.rows.regions(&doc.borrow());
+            let mut d = doc.borrow_mut();
+            d.folds.clear();
+            if fold {
+                for region in regions.iter() {
+                    d.folds.fold(*region);
+                }
+            }
+        }
+        self.refolded(&doc);
+    }
+
+    /// The folds changed: a cursor they now hide goes to the end of its
+    /// fold's header, as VS Code moves it, and every row is drawn again.
+    fn refolded(&self, doc: &Rc<RefCell<Document>>) {
+        {
+            let mut d = doc.borrow_mut();
+            let moved: Vec<Cursor> = d
+                .cursors
+                .iter()
+                .map(|c| {
+                    let line = d.lines.line_of(c.head);
+                    if d.folds.hides(line as u32) {
+                        let header = d.line_at_row(d.row_of(line));
+                        Cursor::caret(d.lines.end(header))
+                    } else {
+                        *c
+                    }
+                })
+                .collect();
+            if moved != d.cursors {
+                d.set_cursors(cursors::merged(&moved));
+            }
+        }
+        self.rows.reset();
+        self.cursors_moved();
+        self.view_changed();
     }
 
     // ---- painting --------------------------------------------------------
@@ -1251,6 +1403,10 @@ impl Surface {
         let showing = self.doc().is_some_and(|current| Rc::ptr_eq(&current, &doc));
         if showing {
             self.rows.changed(from, from + count);
+            self.overview
+                .paintings
+                .set(self.overview.paintings.get() + 1);
+            self.view_changed();
         }
     }
 }

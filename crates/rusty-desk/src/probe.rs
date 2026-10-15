@@ -93,6 +93,7 @@ pub fn start(window: &AppWindow) {
     let cloning = std::env::var_os("RUSTY_PROBE_CLONE").map(PathBuf::from);
     let following = std::env::var_os("RUSTY_PROBE_WATCH").is_some();
     let lenses = std::env::var_os("RUSTY_PROBE_LENS").is_some();
+    let folding = std::env::var_os("RUSTY_PROBE_FOLD").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -229,6 +230,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if lenses {
                     step.set(2300);
+                }
+                if folding {
+                    step.set(2400);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -799,6 +803,66 @@ pub fn start(window: &AppWindow) {
                     .collect();
                 eprintln!("lens: after the run of row {row}, verdicts {verdicts:?}");
                 snapshot(&window, &dir.join("lens.png"));
+                app.act("app.exit");
+            }
+            // Every block folded, Down over one, a jump into one, and every
+            // block opened again: the rows on screen counted at each step.
+            2400 if folding => {
+                let rows = code.get_rows();
+                let headers = rows.iter().filter(|r| r.fold == 1).count();
+                eprintln!("fold: {} rows, {headers} blocks", rows.row_count());
+                app.act("editor.fold-all");
+            }
+            2401 if folding => {
+                let rows = code.get_rows();
+                let folded: Vec<i32> = rows.iter().filter(|r| r.fold == 2).map(|r| r.number).collect();
+                eprintln!("fold: folded all, {} rows, collapsed at {folded:?}", rows.row_count());
+                snapshot(&window, &dir.join("folded.png"));
+                if let Some(first) = folded.first() {
+                    waited.set(*first as u32);
+                    app.editor().go_to(*first as usize, None);
+                }
+            }
+            2402 if folding => {
+                key(Key::DownArrow.into());
+            }
+            2403 if folding => {
+                let at = app.editor().status().map(|s| s.0);
+                eprintln!("fold: Down from line {} lands on line {at:?}", waited.get());
+                // Into the first block's body: it opens.
+                app.editor().go_to(waited.get() as usize + 1, None);
+            }
+            2404 if folding => {
+                let rows = code.get_rows();
+                let still = rows.iter().filter(|r| r.fold == 2).count();
+                eprintln!(
+                    "fold: a jump into line {} leaves {} rows, {still} collapsed, caret on {:?}",
+                    waited.get() + 1,
+                    rows.row_count(),
+                    app.editor().status().map(|s| s.0)
+                );
+                app.act("editor.unfold-all");
+            }
+            2405 if folding => {
+                let rows = code.get_rows();
+                eprintln!(
+                    "fold: unfolded all, {} rows, {} collapsed",
+                    rows.row_count(),
+                    rows.iter().filter(|r| r.fold == 2).count()
+                );
+                // Into the middle of a block: its header sticks.
+                code.set_scroll_y(-30.0 * code.get_row_height());
+            }
+            2407 if folding => {
+                let stuck: Vec<i32> = code.get_sticky_rows().iter().map(|r| r.number).collect();
+                eprintln!(
+                    "sticky: scrolled to row 30, stuck {stuck:?}; minimap {} with {} rows, slider at {} tall {}",
+                    code.get_minimap_on(),
+                    code.get_minimap_rows(),
+                    code.get_minimap_slider_top(),
+                    code.get_minimap_slider_height()
+                );
+                snapshot(&window, &dir.join("sticky.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1389,7 +1453,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
