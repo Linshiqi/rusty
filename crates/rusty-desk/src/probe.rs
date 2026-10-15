@@ -45,6 +45,9 @@
 //! literal missing two fields, opens the hover card on it, photographs the
 //! fixes the card lists, applies one by its click and prints the lines it
 //! wrote — on a copy, since it ends by keeping the draft.
+//! With `RUSTY_PROBE_ZOOM` and `RUSTY_PROBE_MENUS` it runs the two in
+//! `probe_surfaces.rs`: Ctrl and the wheel over each text, and the
+//! surfaces' right-click menus.
 //! With `RUSTY_PROBE_TREE`, on a copy of a project with a `src/`, it works
 //! the file tree by its pointer and its keys: a file made in `src` from the
 //! folder's menu (a taken name refused under the box first), a folder made
@@ -155,6 +158,8 @@ pub fn start(window: &AppWindow) {
     let navigating = std::env::var_os("RUSTY_PROBE_NAV").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
+    let zooming = std::env::var_os("RUSTY_PROBE_ZOOM").is_some();
+    let menus = std::env::var_os("RUSTY_PROBE_MENUS").is_some();
     let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
@@ -304,6 +309,12 @@ pub fn start(window: &AppWindow) {
                 Some((index + 1, line[..at].chars().count() + offset + 1))
             })
         };
+        let surfaces = crate::probe_surfaces::Run {
+            window: &window,
+            dir: &dir,
+            step: &step,
+            waited: &waited,
+        };
         match n {
             25 => {
                 snapshot(&window, &dir.join("open.png"));
@@ -383,6 +394,12 @@ pub fn start(window: &AppWindow) {
                 if marking {
                     step.set(3000);
                 }
+                if zooming {
+                    step.set(6100);
+                }
+                if menus {
+                    step.set(6200);
+                }
                 if keyboard {
                     step.set(5100);
                 }
@@ -399,6 +416,10 @@ pub fn start(window: &AppWindow) {
                     step.set(3200);
                 }
             }
+            // Ctrl and the wheel over the code, a page and the terminal; and
+            // the surfaces' right-click menus (`probe_surfaces.rs`).
+            6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),
+            6200..=6399 if menus => crate::probe_surfaces::menus(n, &surfaces),
             // Keyboard Shortcuts: opened by its chord from the code, searched,
             // a refused key and a colliding one recorded, Save moved to
             // Ctrl+F7 and used there — the old key no longer saving — the
@@ -3896,7 +3917,7 @@ fn key_row(shell: &Shell, id: &str) -> String {
         .unwrap_or_else(|| format!("no row for {id}"))
 }
 
-fn screen_text(shell: &Shell) -> String {
+pub(crate) fn screen_text(shell: &Shell) -> String {
     shell
         .get_term_rows()
         .iter()
@@ -4111,7 +4132,7 @@ fn held_still(what: &str, photos: &[image::RgbaImage], dir: &Path) {
     }
 }
 
-fn snapshot(window: &AppWindow, path: &Path) {
+pub(crate) fn snapshot(window: &AppWindow, path: &Path) {
     match window.window().take_snapshot() {
         Ok(buffer) => {
             let (width, height) = (buffer.width(), buffer.height());
