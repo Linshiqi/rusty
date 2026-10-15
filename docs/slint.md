@@ -456,7 +456,19 @@ tests green, and CLAUDE.md saying how it works.
    model in the OpenAI dialect: `list_files` called, the answer's heading,
    nested list, Rust block and table drawn, 4.2k in with 1.7k cached.
    A Markdown file opens as its page — the toggle over it shows the source
-   — with the pictures in the project drawn and one elsewhere named.
+   — with the pictures in the project drawn and one elsewhere named. Its
+   formulas are RaTeX's (*Formulas*, under Decided): a paragraph holding
+   one is broken into lines by rusty (`markdown/flow.rs`), measured by the
+   window's own `StyledText` and set as a non-wrapping text per run and a
+   picture per formula on one baseline, for the width the paragraph reports
+   back; a formula set apart is centred; one RaTeX refuses is its source
+   with the reason on the pointer. The book's raw HTML is read — a
+   `<figure>`'s picture centred with its caption under it, a `<span>` its
+   text, a `<script>` named and not run. An image file opened from the tree
+   is a picture page (`Tab::Picture`), fitted, zoomed by the wheel, on a
+   checkerboard; an SVG is its source with its picture over it, drawn from
+   the draft. Proven with `RUSTY_PROBE_BOOK` on a copy of the book's
+   chapter 4 and its symbol table, in both themes.
    The math toolbox, a page: the rows typed and worked out as they are
    typed (Enter makes the next, Backspace in an empty one takes it away), a
    slider for a row that is one number, the selected row's working with
@@ -616,14 +628,44 @@ tests green, and CLAUDE.md saying how it works.
   WTFPL, is compatible). The "Made with Slint" badge is on the README and
   on every release page, though GPLv3 does not ask for it.
 
+- **Formulas are RaTeX's**, measured, not assumed. The old window drew
+  MathML from `pulldown-latex` and Slint has no MathML, so four engines
+  were run over every formula of the book the page is used for
+  (`cf-drone-rs/book/src`, 4,283 inline and 221 display, collected with
+  the page's own pulldown-cmark options), each in a binary of its own
+  beside a baseline that does no rendering. Correctness is counted two
+  ways: whether each formula renders at all, and whether the characters it
+  draws — letters, digits, operators, CJK, delimiters left out because
+  each engine builds a stretched one from different pieces — are the ones
+  MathJax draws for the same source; the disagreements were then looked
+  at, as were 26 hard formulas side by side.
+
+  | Engine | Renders | Wrong or refused, looked at | Per formula | Binary | Clean release build | Licence |
+  |---|---|---|---|---|---|---|
+  | RaTeX 0.1.14 (KaTeX's layout in Rust) | 4,504 | none: 19 character disagreements, all glyph choice (`⊥` for `⟂`, a macron for a combining bar, `\vec`'s arrow drawn as a path) | 2.7 ms | 5.1 MB | 2 min 24 s | MIT, KaTeX fonts OFL |
+  | latex-rust 2.1.1 | 4,413 | 90 refused (CJK in `\text`), `\operatorname{Re}` drawn as `ℜ`, text-style fractions at full size, `array` rows misplaced | 1.3 ms | 2.2 MB | 33 s | MIT/Apache, STIX OFL |
+  | typst 0.15.1 + mitex 0.2.4 | 4,504 compile | `\\[2pt]` printed as `[2pt]` in `cases`; ink cut at the line box unless padded; mitex's own package files to vendor | 3.5 ms | 46.0 MB | 12 min 29 s | Apache-2.0, fonts OFL |
+  | MathJax 3 on boa (mathjax-svg-rs 0.4) | 4,494 | 10 refused (`\ell` and friends need a font loaded later), 32 `\boldsymbol` drawn as red source | 72 ms, 1.7 s to start | 13.2 MB | 7 min 55 s | MIT, MathJax Apache-2.0 |
+
+  The times are for all 4,504 on one thread, the builds were measured on a
+  machine busy with other builds, and the binaries carry `serde_json` (a
+  binary that renders nothing is 0.15 MB). Added to rusty itself the
+  release `rusty.exe` went from 62.46 MB to 67.01 MB (+4.5 MB) for all of
+  it — RaTeX and KaTeX's fonts, GIF, WebP and ICO decoding for the picture
+  page, and the code. What decided it: the only engine with nothing wrong on
+  the book, a ninth of typst's size, and quick enough to draw a chapter of
+  three hundred formulas in a tenth of a second on eight cores. ReX was
+  not measured: it is not on crates.io (`rex` there is another project),
+  and four that are were measured instead.
+
 ## Decisions still open
 
-- **HTML.** What rusty renders as HTML today is Markdown: book chapters,
-  the assistant's answers, hover documentation, release notes. The plan is
-  a Markdown renderer of its own in Slint — headings, paragraphs as
-  `StyledText` (emphasis, code, links, colour), code blocks through the
-  editor's own painting, lists, tables, images — which is fast and themed
-  like everything else. Blitz (HTML and CSS, painted on the CPU into an
-  image) is the fallback if raw HTML in documents turns out to matter more
-  than that. Neither draws MathML; formulas show as their source until a
-  math renderer is chosen, as a formula the parser refuses does today.
+- **HTML.** What rusty renders as HTML is Markdown: book chapters, the
+  assistant's answers, hover documentation, release notes. The page is a
+  renderer of its own in Slint — headings, paragraphs as `StyledText`,
+  code through the editor's painting, lists, tables, pictures, formulas,
+  and the raw HTML books use (figures, spans, links) read by a small tag
+  reader. Blitz (HTML and CSS, painted on the CPU into an image) remains
+  the fallback if raw HTML in documents turns out to matter more than that.
+  The assistant's answers and the release notes still show a formula as
+  its source: only the file page lays paragraphs out with formulas in them.

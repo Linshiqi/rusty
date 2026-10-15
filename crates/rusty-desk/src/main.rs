@@ -16,6 +16,7 @@ mod language;
 mod lsp;
 mod markdown;
 mod picker;
+mod picture;
 mod probe;
 mod project;
 mod run;

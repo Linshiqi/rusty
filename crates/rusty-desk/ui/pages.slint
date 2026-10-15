@@ -7,6 +7,7 @@ import { MemoryPage } from "memory.slint";
 import { CratesPage } from "crates.slint";
 import { AssistantSettings } from "assistant.slint";
 import { MarkdownView } from "markdown.slint";
+import { PictureView } from "picture.slint";
 import { MathPage } from "math.slint";
 import { Transport } from "debug.slint";
 import { ScrollView, Switch } from "std-widgets.slint";
@@ -590,7 +591,10 @@ component PageBody inherits Rectangle {
     if root.kind == "memory": MemoryPage { }
     if root.kind == "crates": CratesPage { }
     if root.kind == "math": MathPage { }
-    if root.kind != "file" && root.kind != "welcome" && root.kind != "settings" && root.kind != "environment" && root.kind != "wizard" && root.kind != "git" && root.kind != "gitdiff" && root.kind != "memory" && root.kind != "crates" && root.kind != "math" && root.kind != "": NotYet {
+    if root.kind == "picture": PictureView {
+        checker: Theme.dark ? Shell.picture-checker-dark : Shell.picture-checker;
+    }
+    if root.kind != "file" && root.kind != "welcome" && root.kind != "settings" && root.kind != "environment" && root.kind != "wizard" && root.kind != "git" && root.kind != "gitdiff" && root.kind != "memory" && root.kind != "crates" && root.kind != "math" && root.kind != "picture" && root.kind != "": NotYet {
         name: root.title;
     }
     if root.kind == "": Welcome { }
@@ -637,7 +641,11 @@ export component EditorArea inherits Rectangle {
                             visible: Shell.active-kind == "file";
                         }
                         // A Markdown file read as a page, over its source.
-                        if Shell.active-kind == "file" && Shell.md-page: md-area := Rectangle {
+                        // An SVG's picture, over its source.
+                        if Shell.active-kind == "file" && Shell.md-page && Shell.picture-page: PictureView {
+                            checker: Theme.dark ? Shell.picture-checker-dark : Shell.picture-checker;
+                        }
+                        if Shell.active-kind == "file" && Shell.md-page && !Shell.picture-page: md-area := Rectangle {
                             background: Theme.content;
                             ScrollView {
                                 // A reading column, centred: margins from the page's own

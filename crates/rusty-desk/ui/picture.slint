@@ -1,0 +1,124 @@
+// A picture, as a page: a picture file opened from the tree, or an SVG's
+// picture over its source. Centred and fitted to the pane when it is larger
+// — never enlarged past its own size until asked — on a checkerboard, so
+// what is transparent reads as transparent. The wheel zooms about the
+// pointer, a drag moves it, a double-click fits it again. What it is and how
+// large stands under it; a picture that would not decode says why instead.
+
+import { Theme } from "theme.slint";
+import { Shell } from "shell.slint";
+
+export component PictureView inherits Rectangle {
+    // The checkerboard's two squares, light or dark with the theme.
+    in property <image> checker;
+    background: Theme.content;
+    clip: true;
+
+    property <length> natural-w: Shell.picture.width * 1px;
+    property <length> natural-h: Shell.picture.height * 1px;
+    property <length> room-w: max(1px, root.width - 48px);
+    property <length> room-h: max(1px, root.height - 72px);
+    property <float> fitted: min(1, min(root.room-w / max(1px, root.natural-w), root.room-h / max(1px, root.natural-h)));
+    // Zero is fitted; anything else is the scale asked for, and where the
+    // picture's top left then is.
+    property <float> zoom: 0;
+    property <length> left;
+    property <length> top;
+    property <float> scale: root.zoom > 0 ? root.zoom : root.fitted;
+    property <length> shown-w: root.natural-w * root.scale;
+    property <length> shown-h: root.natural-h * root.scale;
+    property <length> at-x: root.zoom > 0 ? root.left : (root.width - root.shown-w) / 2;
+    property <length> at-y: root.zoom > 0 ? root.top : (root.height - 24px - root.shown-h) / 2;
+
+    // A new picture is fitted afresh.
+    changed natural-w => {
+        root.zoom = 0;
+    }
+    changed natural-h => {
+        root.zoom = 0;
+    }
+
+    if Shell.picture-shown: Rectangle {
+        x: root.at-x;
+        y: root.at-y;
+        width: root.shown-w;
+        height: root.shown-h;
+        border-width: 1px;
+        border-color: Theme.line;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.checker;
+            horizontal-tiling: repeat;
+            vertical-tiling: repeat;
+        }
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: Shell.picture;
+            image-fit: fill;
+        }
+    }
+
+    if !Shell.picture-shown: Text {
+        x: 32px;
+        width: root.width - 64px;
+        y: (root.height - self.height) / 2;
+        text: Shell.picture-note;
+        color: Theme.label-2;
+        font-size: Theme.body;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+
+    // What it is: its size in pixels, on disk, and the scale it is shown at,
+    // on a strip of its own so a zoomed picture does not run under it.
+    if Shell.picture-shown: Rectangle {
+        y: root.height - self.height;
+        height: 24px;
+        background: Theme.content;
+        Text {
+            x: 16px;
+            width: parent.width - 32px;
+            text: Shell.picture-info + (root.scale == 1 ? "" : "  ·  " + round(root.scale * 100) + "%");
+            color: Theme.label-3;
+            font-size: Theme.small;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    TouchArea {
+        property <length> grab-x;
+        property <length> grab-y;
+        mouse-cursor: root.zoom > 0 ? MouseCursor.grab : MouseCursor.default;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                self.grab-x = self.mouse-x - root.at-x;
+                self.grab-y = self.mouse-y - root.at-y;
+            }
+        }
+        moved => {
+            if (self.pressed && root.zoom > 0) {
+                root.left = self.mouse-x - self.grab-x;
+                root.top = self.mouse-y - self.grab-y;
+            }
+        }
+        double-clicked => {
+            root.zoom = 0;
+        }
+        scroll-event(event) => {
+            if (event.delta-y == 0 || !Shell.picture-shown) {
+                return reject;
+            }
+            let from = root.scale;
+            let next = max(0.02, min(32, from * (event.delta-y > 0 ? 1.2 : 1 / 1.2)));
+            let applied = next / from;
+            root.left = self.mouse-x - (self.mouse-x - root.at-x) * applied;
+            root.top = self.mouse-y - (self.mouse-y - root.at-y) * applied;
+            root.zoom = next;
+            accept
+        }
+    }
+}

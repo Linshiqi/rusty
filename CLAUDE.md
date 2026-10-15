@@ -190,6 +190,11 @@ python crates/rusty-mcu/scripts/x035_pins.py \
 # point it at a copy.
 cargo run -p rusty-desk --release -- <project> <file-in-it>
 RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data cargo run -p rusty-desk --release -- <project> <file-in-it>
+# A Markdown chapter's page — its formulas, figures and raw HTML — in both
+# themes, then image files beside it opened as pictures, an SVG's picture
+# over its source and edited, and the book's symbol table. On a copy of the
+# book: it edits an SVG and keeps the draft.
+RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data RUSTY_PROBE_BOOK=1 cargo run -p rusty-desk --release -- <book-copy> <chapter.md>
 
 # Drawing from code, the worked end: an f32 vector type, an example that
 # draws two vectors and their cross product, and a test that draws and
@@ -2261,6 +2266,76 @@ where anyone looks for it, and the margin had no room to say "Debug".
   **A program that ran to its end without once stopping says so** in the
   dock (`dock.debug.ran-past`), since the panel it leaves behind is the one
   a session that never started leaves.
+
+## A Markdown page, and a picture
+
+A `.md` file opens as a page (`src/markdown.rs` reads, `app/markdown_view.rs`
+makes the rows, `ui/markdown.slint` draws) and an image file as a picture
+(`src/picture.rs` reads, `app/pictures.rs` shows, `ui/picture.slint` draws).
+The book they are measured against is a flight-control textbook in Chinese:
+4,504 formulas, 140 figures, raw HTML round every figure.
+
+- **Formulas are RaTeX's** (`markdown/math.rs`): KaTeX's layout in Rust,
+  drawn as an SVG of glyph outlines from KaTeX's own fonts, so nothing
+  depends on the fonts of the machine showing it. Chosen by measuring four
+  engines on every formula of the book (`docs/slint.md`, *Formulas*):
+  latex-rust drew `\operatorname{Re}` as the symbol ℜ, set text-style
+  fractions at full size and refused all ninety `\text{中文}`; typst with
+  mitex is 46 MB and printed `[2pt]` into a `cases`; MathJax on boa is 72 ms
+  a formula and lacks `\boldsymbol`. RaTeX drew all 4,504, and the
+  characters each draws are MathJax's on every formula MathJax could draw
+  but 19, which differ only in how one symbol is drawn (`⊥` for `⟂`, an
+  arrow as a path rather than a glyph). The version is pinned exactly: a
+  layout engine's minor release moves formulas.
+- **The lessons of the old renderer are tests** (`math.rs`): `v_i^2` is a
+  superscript and a subscript stacked on the `v`, never a superscript on the
+  subscript — the reading `latex2mathml` once shipped; `aligned` rows are
+  rows with their `=` at one x; a control space draws nothing but space
+  (the old page printed `&nbsp;` there); `\operatorname{Re}` is two letters.
+- **A formula is black, and the page colours it** (`colorize` with the
+  text's colour), so a theme switch costs no formula. It is 1.2 ems of the
+  text's size, as KaTeX sets math beside text. A formula RaTeX refuses is
+  its source in a code span with the reason on the pointer — never dropped,
+  never part of it. Drawn off the UI thread on every core, kept by source.
+- **`StyledText` cannot hold a picture, so a paragraph with a formula is
+  laid out by rusty** (`markdown/flow.rs`, pure and tested): cut into atoms
+  — words, spaces, each Chinese character, formulas — measured by the
+  window's own `StyledText` (`md-probe` in `app.slint`, so a line broken in
+  Rust fits in Slint), broken greedily with CJK's rules (anywhere between
+  ideographs, never before `，。）` nor after `（`, a formula glued to the
+  punctuation beside it; a line with nowhere to break runs over rather than
+  begin with a comma), and set as one non-wrapping `StyledText` per run of
+  text and a picture per formula, all on the line's baseline: a tall
+  formula grows its line, never overlaps the next. Too wide, it is shrunk to
+  the column, never cut. Paragraphs without a formula stay one wrapping
+  `StyledText`, as before.
+- **The width comes back from the view.** A flowing paragraph's `Flow`
+  reports its width and text size as it appears and whenever either
+  changes (`Shell.md-flow-width`); the page lays out again, on the next
+  turn, only the blocks whose width moved (`App::md_reflow`). A zoom
+  changes the text size and so lays everything out again — nothing in Rust
+  assumes a size.
+- **Raw HTML is read, never run** (`markdown/html.rs`, a small tag reader):
+  a `<figure>` centres its picture with the `<figcaption>`'s Markdown under
+  it, an `<img>` is a picture wherever it is (a linked one too), `<b>`
+  `<i>` `<code>` `<a>` `<br>` are what Markdown's words for them are, a
+  `<span>` shows its text; a `<script>`, `<style>`, `<iframe>`, `<object>`
+  is named and its body never shown; any other tag stays the text it is.
+- **A picture a page names is read the way a picture file is** (one
+  `picture::read`): resolved against the page's own folder, never above the
+  project's root (`rusty_edit::absolute`), and never fetched from another
+  machine — a remote one is its alt text with the reason on the pointer,
+  because fetching it tells its host who opened the file. Read off the UI
+  thread, kept until the watcher says the file changed.
+- **An image file opened from the tree is a picture, not text**
+  (`Tab::Picture`): a PNG, JPEG, GIF, BMP, WebP or ICO never reaches the
+  editor or a language server; it is decoded with `image` so a failure says
+  why in the decoder's words (Slint's loader says only that it failed),
+  fitted to the pane and never enlarged past its own size until the wheel
+  zooms it, on a checkerboard. An SVG is text as well: it opens in the
+  editor with its picture over it and the page's toggle, the picture drawn
+  from the document — an unsaved edit shows the moment the toggle flips
+  back. `RUSTY_PROBE_BOOK` photographs all of it.
 
 ## Languages
 
