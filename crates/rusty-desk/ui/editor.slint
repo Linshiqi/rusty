@@ -19,9 +19,11 @@ export struct Piece {
 
 // Something drawn on a row behind or under its text: a selection (0), a
 // caret that is not the primary one (1), a match of the find bar's query
-// (2), the match the selection is (3), the scope find searches (4), and a
+// (2), the match the selection is (3), the scope find searches (4), a
 // squiggle under what a server found: an error (5), a warning (6),
-// something to know (7), whose line is `path`.
+// something to know (7), whose line is `path`; an indent guide (8); the
+// bracket beside the caret or its partner, outlined (9); and another place
+// the name under the caret occurs, washed (10).
 export struct Mark {
     x: length,
     width: length,
@@ -77,6 +79,12 @@ export struct HoverProblem {
     detail: string,
 }
 
+// A fix on the hover card: what it does, and the other files it changes.
+export struct HoverFix {
+    title: string,
+    detail: string,
+}
+
 // The document on screen, filled by `src/editor/`.
 export global Code {
     in property <[Row]> rows;
@@ -109,6 +117,10 @@ export global Code {
     in property <length> hover-x;
     in property <length> hover-width: 420px;
     in property <[HoverProblem]> hover-problems;
+    // The fixes the server offers for those problems, under them; a click
+    // applies one.
+    in property <[HoverFix]> hover-fixes;
+    callback hover-fix(int);
     in property <[Row]> hover-code;
     in property <bool> hover-has-docs;
     in property <styled-text> hover-docs;
@@ -271,7 +283,9 @@ component SignatureCard inherits Rectangle {
     }
 }
 
-// The card itself: problems first, then the code and its documentation.
+// The card itself: problems first and their fixes, then the code and its
+// documentation. Everything is inside the card's own touch area, so the
+// pointer on a fix is still on the card.
 component HoverCard inherits Rectangle {
     width: Code.hover-width;
     height: min(column.preferred-height, 360px);
@@ -290,57 +304,104 @@ component HoverCard inherits Rectangle {
                 Code.hovered(-1, 0, 0);
             }
         }
-    }
-    column := VerticalLayout {
-        padding: 10px;
-        spacing: 8px;
-        for problem in Code.hover-problems: HorizontalLayout {
+        column := VerticalLayout {
+            padding: 10px;
             spacing: 8px;
-            Icon {
-                y: 2px;
-                path: problem.kind == 1 ? Icons.close : problem.kind == 2 ? Icons.warn : Icons.check;
-                size: 14px;
-                color: problem.kind == 1 ? Theme.crimson : problem.kind == 2 ? Theme.amber : Theme.slate;
-            }
-            VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: problem.text;
-                    color: Theme.label;
-                    font-size: Theme.small;
-                    wrap: word-wrap;
+            for problem in Code.hover-problems: HorizontalLayout {
+                spacing: 8px;
+                Icon {
+                    y: 2px;
+                    path: problem.kind == 1 ? Icons.close : problem.kind == 2 ? Icons.warn : Icons.check;
+                    size: 14px;
+                    color: problem.kind == 1 ? Theme.crimson : problem.kind == 2 ? Theme.amber : Theme.slate;
                 }
-                if problem.detail != "": Text {
-                    text: problem.detail;
+                VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        text: problem.text;
+                        color: Theme.label;
+                        font-size: Theme.small;
+                        wrap: word-wrap;
+                    }
+                    if problem.detail != "": Text {
+                        text: problem.detail;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                    }
+                }
+            }
+            if Code.hover-fixes.length > 0: VerticalLayout {
+                spacing: 1px;
+                Text {
+                    text: @tr("desk.hover-fixes");
                     color: Theme.label-3;
                     font-size: Theme.caption;
                 }
-            }
-        }
-        if Code.hover-problems.length > 0 && (Code.hover-code.length > 0 || Code.hover-has-docs): Rectangle {
-            height: 1px;
-            background: Theme.line;
-        }
-        if Code.hover-code.length > 0: VerticalLayout {
-            for row in Code.hover-code: Rectangle {
-                height: Code.row-height;
-                for piece in row.pieces: Text {
-                    x: piece.x;
-                    height: parent.height;
-                    text: piece.text;
-                    color: Theme.token(piece.kind);
-                    font-italic: piece.kind == 4;
-                    font-family: Theme.mono;
-                    font-size: Code.font-size;
-                    vertical-alignment: center;
+                for fix[i] in Code.hover-fixes: Rectangle {
+                    height: max(22px, fix-row.preferred-height);
+                    border-radius: 4px;
+                    background: fix-touch.has-hover ? Theme.hover : transparent;
+                    fix-row := HorizontalLayout {
+                        padding-left: 2px;
+                        padding-right: 6px;
+                        spacing: 6px;
+                        Rectangle {
+                            width: 14px;
+                            Icon {
+                                y: (parent.height - self.height) / 2;
+                                path: Icons.bulb;
+                                size: 14px;
+                                color: Theme.amber;
+                            }
+                        }
+                        Text {
+                            text: fix.title;
+                            color: fix-touch.has-hover ? Theme.label : Theme.slate;
+                            font-size: Theme.small;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                        if fix.detail != "": Text {
+                            text: fix.detail;
+                            color: Theme.label-3;
+                            font-size: Theme.caption;
+                            vertical-alignment: center;
+                        }
+                    }
+                    fix-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Code.hover-fix(i);
+                        }
+                    }
                 }
             }
-        }
-        if Code.hover-has-docs: StyledText {
-            text: Code.hover-docs;
-            default-color: Theme.label-2;
-            default-font-size: Theme.small;
-            link-color: Theme.slate;
+            if Code.hover-problems.length > 0 && (Code.hover-code.length > 0 || Code.hover-has-docs): Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+            if Code.hover-code.length > 0: VerticalLayout {
+                for row in Code.hover-code: Rectangle {
+                    height: Code.row-height;
+                    for piece in row.pieces: Text {
+                        x: piece.x;
+                        height: parent.height;
+                        text: piece.text;
+                        color: Theme.token(piece.kind);
+                        font-italic: piece.kind == 4;
+                        font-family: Theme.mono;
+                        font-size: Code.font-size;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            if Code.hover-has-docs: StyledText {
+                text: Code.hover-docs;
+                default-color: Theme.label-2;
+                default-font-size: Theme.small;
+                link-color: Theme.slate;
+            }
         }
     }
 }
@@ -694,12 +755,16 @@ component RowPaint inherits Rectangle {
     }
     for mark in root.line.marks: Rectangle {
         x: root.gutter + mark.x;
-        y: mark.kind == 1 ? 2px : mark.kind >= 5 && mark.kind <= 7 ? parent.height - 4px : 0;
+        y: mark.kind == 1 ? 2px : mark.kind >= 5 && mark.kind <= 7 ? parent.height - 4px : mark.kind == 9 ? 1px : 0;
         // A caret, and a match of nothing (`^`), are a bar; an
         // indent guide (8) a hairline.
         width: mark.kind == 1 ? 2px : mark.kind == 8 ? 1px : max(mark.width, 2px);
-        height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : parent.height;
-        background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind >= 5 ? transparent : Theme.text-selection;
+        height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : mark.kind == 9 ? parent.height - 2px : parent.height;
+        background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind == 9 ? Theme.bracket-fill : mark.kind == 10 ? Theme.occurrence : mark.kind >= 5 ? transparent : Theme.text-selection;
+        // The bracket pair is a box round each, as VS Code draws it.
+        border-width: mark.kind == 9 ? 1px : 0;
+        border-color: Theme.bracket-match;
+        border-radius: mark.kind == 9 || mark.kind == 10 ? 2px : 0;
         // Drawn where the commands say: the default fit scales a
         // path into its box less the stroke, and a wave 3 px tall
         // shrank to two thirds of its width, centred.
@@ -880,12 +945,16 @@ export component CodeView inherits Rectangle {
                             Code.pointer(2, index, self.mouse-x + self.x - root.gutter, self.mouse-y, event.modifiers);
                         }
                     }
+                    // The pointer resting over the code: `moved` is called
+                    // only while a button is held, so a hover is the move
+                    // a pointer event reports.
+                    if (event.kind == PointerEventKind.move && !self.pressed) {
+                        Code.hovered(index, self.mouse-x + self.x - root.gutter, self.mouse-y);
+                    }
                 }
                 moved => {
                     if (self.pressed) {
                         Code.pointer(1, index, self.mouse-x + self.x - root.gutter, self.mouse-y, {});
-                    } else {
-                        Code.hovered(index, self.mouse-x + self.x - root.gutter, self.mouse-y);
                     }
                 }
                 changed has-hover => {

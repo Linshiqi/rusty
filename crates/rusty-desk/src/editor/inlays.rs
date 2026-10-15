@@ -108,6 +108,25 @@ pub fn char_x(m: &Metrics, text: &str, hints: &[InlayHint], col: usize) -> f32 {
     found
 }
 
+/// Where the characters `from..to` are drawn: from where the first starts
+/// to where the last ends — the hints at either edge left out, since what
+/// is marked is the code. Both at the line's end for a span past it.
+pub fn ink(m: &Metrics, text: &str, hints: &[InlayHint], from: usize, to: usize) -> (f32, f32) {
+    let (mut left, mut right) = (None, None);
+    let last = to.max(from + 1) - 1;
+    let end = walk(m, text, hints, |c, stop, advance| {
+        if c == from {
+            left = Some(stop.start);
+        }
+        if c == last && to > from {
+            right = Some(stop.start + advance);
+        }
+        c >= last
+    });
+    let left = left.unwrap_or(end);
+    (left, right.unwrap_or(left).max(left))
+}
+
 /// The column a point `x` along the line is nearest, as a caret goes: a
 /// point on a hint is the column the hint stands at.
 pub fn column_at(m: &Metrics, text: &str, hints: &[InlayHint], x: f32) -> usize {
@@ -199,6 +218,29 @@ mod tests {
         assert_eq!(column_at(&m(), text, &hints, 90.0 + w + 12.0), 10);
         assert_eq!(column_at(&m(), text, &hints, 32.0), 3);
         assert_eq!(column_at(&m(), text, &hints, 10_000.0), 14);
+    }
+
+    /// A mark over code covers its characters and not the hints at its
+    /// edges: `total` before its `: f32`, `x` after its `sensor:`.
+    #[test]
+    fn ink_covers_the_code_and_not_the_hints_beside_it() {
+        let text = "let total = f(x);";
+        let hints = [hint(9, ": f32", false), hint(14, "sensor:", true)];
+        let (t, s) = (width(&m(), &hints[0]), width(&m(), &hints[1]));
+        assert_eq!(ink(&m(), text, &hints, 4, 9), (40.0, 90.0));
+        assert_eq!(
+            ink(&m(), text, &hints, 14, 15),
+            (140.0 + t + s, 150.0 + t + s)
+        );
+        assert_eq!(
+            ink(&m(), text, &hints, 13, 14),
+            (130.0 + t, 140.0 + t),
+            "the bracket"
+        );
+        assert_eq!(
+            ink(&m(), text, &hints, 30, 31),
+            (170.0 + t + s, 170.0 + t + s)
+        );
     }
 
     /// With no hints the walk is the text's own arithmetic.

@@ -268,7 +268,7 @@ fn open_on_line(text: &str, caret: usize, open: u8, close: u8) -> bool {
 /// one character (or an escape) later, which a lifetime never does. On
 /// bytes: every delimiter is ASCII, and no byte of a multi-byte character
 /// is one.
-fn code_brackets(text: &str, end: usize) -> Vec<(usize, u8)> {
+pub(super) fn code_brackets(text: &str, end: usize) -> Vec<(usize, u8)> {
     let bytes = text.as_bytes();
     let end = end.min(bytes.len());
     let at = |i: usize| bytes.get(i).copied();

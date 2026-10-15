@@ -49,6 +49,13 @@ export global Theme {
     out property <color> find-current: dark ? #e4703f8c : #f0a35a99;
     out property <color> find-scope: dark ? #6ba3d61f : #3d6a9314;
 
+    // Where the caret rests: the bracket beside it and its partner, boxed,
+    // and where else the name under it occurs, washed — grey, so neither
+    // reads as a selection or a find.
+    out property <color> bracket-match: dark ? #f0ebe580 : #1c1a1766;
+    out property <color> bracket-fill: dark ? #f0ebe514 : #1c1a170d;
+    out property <color> occurrence: dark ? #f0ebe521 : #1c1a1717;
+
     // Syntax: the ANSI-and-token palette the editor and the terminal share.
     out property <color> term-1: dark ? #ef6b56 : #b3341f;
     out property <color> term-2: dark ? #92cf7b : #3f7a34;
