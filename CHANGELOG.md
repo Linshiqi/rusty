@@ -28,6 +28,18 @@ Settings ▸ Editor turns the minimap, sticky scroll, hints and guides on
 and off. rusty opens on the project you had open, with its tabs as you
 left them, and tabs that share a name say which directory each is in.
 
+**Where the caret rests.** The bracket beside the caret and its partner
+are outlined, and the other places the name under it occurs are washed.
+Rest the pointer on a problem and the card lists its quick fixes; click
+one to apply it. A right-click in the editor offers go to definition,
+type definition, references, implementations, rename, the call hierarchy
+— who calls a function and what it calls, a tree in the panel below — and
+expanding a macro, which opens the expansion beside the code.
+
+**A new installer.** On Windows the installer is a small window: where to
+install, a desktop shortcut, and what rusty can do while the files go in.
+The same window removes rusty again.
+
 **Install this version by hand.** Earlier versions do not update to it by
 themselves, and its installer does not replace them. On Windows, download
 `rusty-0.7.0-windows-x86_64-setup.exe`: it installs for your account,
@@ -44,18 +56,15 @@ signature, and installs it when you restart. Settings ▸ Updates shows
 where that stands. Each download's signature is published beside it as a
 `.minisig` file, which `minisign` can check too.
 
-**Not in the new window yet.** In the editor: quick fixes on the hover
-card (`Ctrl+.` still lists them), the matching bracket and the other
-places a name occurs drawn around the caret, dimming a file no `mod`
-declares, the call hierarchy, expanding a macro, go to type definition,
-and the finder's `@` (this file's symbols) and `#` (the workspace's). On
-the board: importing a KiCad or Wokwi schematic or an LCSC part, tidying
-the sheet, and the live readings under the pointer. Elsewhere: File ▸ New
-window, a file or a commit in a window of its own, pictures compared in
-the Git panel, a failed test's message on its line, choosing the
-terminal's shell (it starts PowerShell on Windows and your `$SHELL`
-elsewhere), moving the data directory, removing a project from the
-recent list, and the Help menu's links to the issue tracker and the
+**Not in the new window yet.** In the editor: dimming a file no `mod`
+declares, and the finder's `@` (this file's symbols) and `#` (the
+workspace's). On the board: importing a KiCad or Wokwi schematic or an
+LCSC part, tidying the sheet, and the live readings under the pointer.
+Elsewhere: File ▸ New window, a file or a commit in a window of its own,
+pictures compared in the Git panel, a failed test's message on its line,
+choosing the terminal's shell (it starts PowerShell on Windows and your
+`$SHELL` elsewhere), moving the data directory, removing a project from
+the recent list, and the Help menu's links to the issue tracker and the
 releases. They come back in the next releases.
 
 ## v0.6.77
