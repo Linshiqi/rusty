@@ -560,11 +560,13 @@ export struct DiffRow {
     right-text: string,
 }
 
-// A row of a right-click menu; an empty id is a divider.
+// A row of a right-click menu; an empty id is a divider. An action's row
+// carries its key, as the palette's does.
 export struct MenuItem {
     id: string,
     label: string,
     danger: bool,
+    chord: string,
 }
 
 // A run of a terminal's row in one style: its colours where the program
@@ -626,6 +628,26 @@ export struct DebugFrame {
     function: string,
     place: string,
     on: bool,
+}
+
+// A function in the call hierarchy: how deep, whether its own calls are
+// shown (0 no, 1 asked for, 2 yes, 3 asked for and there are none), its
+// name and what the server says of
+// it, where a click goes (the file and line, and the whole path), whether
+// it is the function above it on its branch again, how many calls brought
+// it there and what listing them is called, and whether it is the first.
+export struct CallLine {
+    id: int,
+    depth: int,
+    open: int,
+    name: string,
+    detail: string,
+    place: string,
+    whole: string,
+    recursive: bool,
+    count: int,
+    count-tip: string,
+    first: bool,
 }
 
 // A local or an argument of the frame.
@@ -897,6 +919,20 @@ export global Shell {
     in property <[DebugFrame]> debug-frames;
     in property <[DebugVariable]> debug-variables;
     callback debug-frame(int);
+
+    // The call hierarchy (`src/app/calls.rs`): which way it reads, a
+    // sentence in place of a tree — how to ask, asking, nothing there —
+    // the rows, and what the first row says when nothing came back.
+    in property <bool> calls-incoming: true;
+    in property <string> calls-said;
+    in property <[CallLine]> calls-rows;
+    in property <string> calls-empty;
+    // A row's chevron; a row clicked (true: its function, false: where its
+    // call is made); its calls listed; the other way round.
+    callback calls-toggle(int);
+    callback calls-go(int, bool);
+    callback calls-sites(int);
+    callback calls-direction(bool);
 
     // The math toolbox.
     // A face with the mathematical operators a formula uses — ⊗, ∠, √ —

@@ -100,6 +100,9 @@ export global Code {
     // A press (0), a move while pressed (1), a release (2), on a row, at a
     // point in it, with the modifiers held.
     callback pointer(int /* kind */, int /* row */, length /* x */, length /* y */, KeyboardModifiers);
+    // A right-click on a row, at a point in it, and where that is in the
+    // window, for the menu.
+    callback context-menu(int /* row */, length /* x */, length /* y */, length /* window x */, length /* window y */);
 
     // The hover card: over which line, from where along it, how wide, and
     // what it says — the problems there, the code the server showed, its
@@ -879,6 +882,8 @@ export component CodeView inherits Rectangle {
                         } else if (event.kind == PointerEventKind.up) {
                             Code.pointer(2, index, self.mouse-x + self.x - root.gutter, self.mouse-y, event.modifiers);
                         }
+                    } else if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                        Code.context-menu(index, self.mouse-x + self.x - root.gutter, self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                     }
                 }
                 moved => {

@@ -43,6 +43,10 @@ impl App {
     /// budget, and the answer used only while the draft is still the text
     /// it was sent.
     pub(super) fn save_file(self: &Rc<Self>, path: String, after: After) {
+        // A macro's expansion has no file to be written to.
+        if rusty_edit::is_expansion(&path) {
+            return;
+        }
         let (Some(root), Some((text, ..)), Some(version)) = (
             self.root(),
             self.editor.draft_of(&path),
@@ -133,6 +137,9 @@ impl App {
 
     /// Write a file's draft as it stands now, in what it was read as.
     pub(super) fn write_file(self: &Rc<Self>, path: String, after: After) {
+        if rusty_edit::is_expansion(&path) {
+            return;
+        }
         let (Some(root), Some((text, charset, ending))) =
             (self.root(), self.editor.draft_of(&path))
         else {

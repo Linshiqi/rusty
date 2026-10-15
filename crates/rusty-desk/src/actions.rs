@@ -65,6 +65,11 @@ pub const ALL: &[Action] = &[
         "menu.view.implementations",
         Some("Ctrl+F12"),
     ),
+    // No keys of their own, as in VS Code — whose Shift+Alt+H for the call
+    // hierarchy is an Alt-letter chord, which this window leaves to AltGr.
+    action("editor.type-definition", "menu.view.type-definition", None),
+    action("editor.call-hierarchy", "menu.view.call-hierarchy", None),
+    action("editor.expand-macro", "menu.view.expand-macro", None),
     action(
         "editor.quick-fix",
         "context.editor-quick-fix",

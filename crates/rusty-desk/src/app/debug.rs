@@ -407,6 +407,10 @@ impl App {
     /// A click beside a line's number: a breakpoint there, or not — and,
     /// during a session, placed or cleared at once.
     pub(super) fn debug_toggle(self: &Rc<Self>, file: String, line: u32) {
+        // A macro's expansion is no file a debugger has lines of.
+        if rusty_edit::is_expansion(&file) {
+            return;
+        }
         let existed = {
             let gutter = self.editor.gutter();
             let mut gutter = gutter.borrow_mut();

@@ -1,0 +1,220 @@
+// The Calls panel: who calls a function and what it calls, a level at a
+// time — VS Code's call hierarchy, in the bottom dock beside the other
+// lists. A row is a function: its chevron opens the calls into it (or out
+// of it), a click goes where the call is made, a double-click to the
+// function. Which way it reads is the pair of icons on the dock's row.
+// Filled by `src/app/calls.rs`; the tree is `src/calls.rs`.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons, Icon } from "icons.slint";
+import { Tip } from "widgets.slint";
+import { Shell, CallLine } from "shell.slint";
+
+// The chevron that shows or hides a row's calls; an ellipsis while they
+// are asked for, and nothing once they were and there are none.
+component Opener inherits Rectangle {
+    in property <CallLine> line;
+    property <bool> live: root.line.open == 0 || root.line.open == 2;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    background: touch.has-hover && root.live ? Theme.hover : transparent;
+    if root.live: Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        path: Icons.chevron;
+        size: 11px;
+        color: touch.has-hover ? Theme.label : Theme.label-3;
+        transform-rotation: root.line.open == 2 ? 0deg : -90deg;
+    }
+    if root.line.open == 1: Text {
+        text: "…";
+        color: Theme.label-3;
+        font-size: Theme.caption;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        enabled: root.live;
+        clicked => {
+            Tip.shown = false;
+            Shell.calls-toggle(root.line.id);
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && root.live && !Tip.shown;
+        triggered => {
+            Tip.text = root.line.open == 2 ? @tr("calls.close-row") : @tr("calls.open-row");
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
+// How many calls one place makes: a click lists them all in the picker,
+// since the row's own click can go to only the first.
+component Count inherits Rectangle {
+    in property <CallLine> line;
+    width: label.preferred-width + 10px;
+    height: 18px;
+    border-radius: 4px;
+    background: touch.has-hover ? Theme.hover : Theme.sunken;
+    label := Text {
+        text: "×" + root.line.count;
+        color: touch.has-hover ? Theme.label : Theme.label-2;
+        font-size: Theme.caption;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => {
+            Tip.shown = false;
+            Shell.calls-sites(root.line.id);
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && !Tip.shown;
+        triggered => {
+            Tip.text = root.line.count-tip;
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
+// One function: the chevron, its name, what the server says of it, how
+// many calls, and the file and line a click goes to.
+component CallRowView inherits Rectangle {
+    in property <CallLine> line;
+    height: 24px;
+    background: touch.has-hover ? Theme.hover : transparent;
+    touch := TouchArea {
+        clicked => {
+            Tip.shown = false;
+            Shell.calls-go(root.line.id, false);
+        }
+        double-clicked => {
+            Tip.shown = false;
+            Shell.calls-go(root.line.id, true);
+        }
+        changed has-hover => {
+            if (!self.has-hover) {
+                Tip.shown = false;
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 6px + root.line.depth * 16px;
+        padding-right: 10px;
+        spacing: 6px;
+        Opener {
+            y: (parent.height - self.height) / 2;
+            line: root.line;
+        }
+        Text {
+            text: root.line.name;
+            color: Theme.label;
+            font-family: Theme.mono;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        if root.line.recursive: Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: badge.preferred-width + 10px;
+            height: 16px;
+            border-radius: 4px;
+            background: Theme.sunken;
+            badge := Text {
+                text: @tr("calls.recursive");
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.line.detail;
+            color: Theme.label-3;
+            font-family: Theme.mono;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.line.count > 1: Count {
+            y: (parent.height - self.height) / 2;
+            line: root.line;
+        }
+        Text {
+            text: root.line.place;
+            color: Theme.label-3;
+            font-family: Theme.mono;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+    }
+    // Where a click goes, and what a click and a double-click do.
+    Timer {
+        interval: 900ms;
+        running: touch.has-hover && !Tip.shown;
+        triggered => {
+            Tip.text = root.line.whole + "\n" + (root.line.first ? @tr("calls.root-tip") : @tr("calls.row-tip"));
+            Tip.x = root.absolute-position.x + touch.mouse-x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
+export component CallsPanel inherits Rectangle {
+    // Nothing to draw yet: how to ask, asking, or why there is no tree.
+    if Shell.calls-rows.length == 0: Text {
+        x: 24px;
+        width: parent.width - 48px;
+        text: Shell.calls-said;
+        color: Theme.label-3;
+        font-size: Theme.small;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+    // Opened, and nothing came back: said under the function, rather than
+    // a lone row that reads as a hierarchy still loading.
+    if Shell.calls-empty != "": VerticalLayout {
+        alignment: start;
+        padding-top: 4px;
+        for line in Shell.calls-rows: CallRowView {
+            line: line;
+        }
+        HorizontalLayout {
+            padding-left: 38px;
+            height: 22px;
+            Text {
+                text: Shell.calls-empty;
+                color: Theme.label-3;
+                font-size: Theme.caption;
+                vertical-alignment: center;
+            }
+        }
+    }
+    if Shell.calls-rows.length > 0 && Shell.calls-empty == "": ListView {
+        for line in Shell.calls-rows: CallRowView {
+            line: line;
+        }
+    }
+}

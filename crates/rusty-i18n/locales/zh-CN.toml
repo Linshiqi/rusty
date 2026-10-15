@@ -35,6 +35,9 @@ quick-open = "转到文件…"
 go-to-line = "转到行…"
 references = "转到引用"
 implementations = "转到实现"
+type-definition = "转到类型定义"
+call-hierarchy = "显示调用层次"
+expand-macro = "递归展开宏"
 
 [menu.device]
 monitor = "串口监视"
@@ -245,6 +248,7 @@ registers = "寄存器"
 flight = "飞控"
 signals = "信号"
 draw = "图形"
+calls = "调用层次"
 
 [draw]
 scenes = "{count} 个场景"
@@ -276,6 +280,7 @@ kind-span = "平行四边形"
 kind-frame = "坐标系"
 
 [files]
+expansion-of = "{name} 在 {place} 处的展开"
 lens-run-test = "运行测试"
 lens-run-tests = "运行全部测试"
 lens-run = "运行"
@@ -701,6 +706,7 @@ reading-pressure = "气压"
 reading-humidity = "湿度"
 [misc]
 no-quick-fixes = "光标处没有快速修复"
+no-macro = "没有可展开的宏：光标不在宏调用上"
 edited-elsewhere = "这个修复还改动了 {count} 个其他文件"
 save-first = "请先保存 {path}——这个修复会直接改写它"
 vim-no-back = "已到最早位置"
@@ -775,6 +781,24 @@ image-failed = "无法显示 {path}：{error}"
 [places]
 references = "{name} 的引用"
 implementations = "{name} 的实现"
+type-definition = "{name} 的类型"
+
+[calls]
+idle = "在函数上右键，选择“显示调用层次”，查看谁调用它、它又调用了谁。"
+asking = "正在询问 {server}…"
+no-function = "光标不在函数上。"
+not-a-function = "“{name}”不是语言服务器能显示调用层次的函数。"
+incoming = "传入调用"
+outgoing = "传出调用"
+none-in = "没有函数调用 {name}。"
+none-out = "{name} 不调用任何函数。"
+recursive = "递归"
+open-row = "展开它的调用"
+close-row = "收起它的调用"
+root-tip = "单击跳到函数"
+row-tip = "单击跳到调用处，双击跳到函数"
+sites = "此处有 {count} 次调用，点击列出"
+sites-title = "{caller} 对 {callee} 的调用"
 
 [disk]
 title = "磁盘"
@@ -1147,6 +1171,7 @@ instrument = "机头高于地平线 {nose} · 右翼下沉 {bank} · 航向 {hea
 
 [desk]
 updates = "更新"
+server-could-not = "{server} 没能回答：{reason}"
 split = "拆分编辑器"
 fold-region = "折叠"
 unfold-region = "展开"

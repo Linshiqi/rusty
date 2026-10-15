@@ -23,6 +23,7 @@ mod activity;
 mod assistant;
 mod board;
 mod build;
+mod calls;
 mod clone;
 mod crates;
 mod debug;
@@ -30,6 +31,7 @@ mod device;
 mod drafts;
 mod draw;
 mod environment;
+mod expansion;
 mod flight;
 mod git;
 mod git_view;
@@ -157,6 +159,8 @@ struct State {
     next_note: i32,
     server: servers::ServerStatus,
     jumps: navigate::Jumps,
+    /// The call hierarchy the Calls panel shows.
+    calls: calls::Calls,
     /// The fixes the picker lists, with the version of the text they are for.
     fixes: Option<(u64, rusty_lsp::CodeActions)>,
     /// A rename being typed: where the symbol is, and its name now.
@@ -431,6 +435,13 @@ impl App {
         on!(on_draw_resized, |app, w, h| app.draw_resized(w, h));
         on!(on_lab_pick_source, |app, index| app.lab_pick_source(index));
         on!(on_debug_frame, |app, level| app.debug_frame(level));
+        on!(on_calls_toggle, |app, id| app
+            .calls_toggle(id.max(0) as u64));
+        on!(on_calls_go, |app, id, function| app
+            .calls_go(id.max(0) as u64, function));
+        on!(on_calls_sites, |app, id| app.calls_sites(id.max(0) as u64));
+        on!(on_calls_direction, |app, incoming| app
+            .calls_direction(incoming));
         on!(on_registers_pick, |app, name| app.registers_pick(&name));
         on!(on_search_edited, |app, what, text| app
             .search_edited(&what, &text));
@@ -660,8 +671,11 @@ impl App {
             "editor.go-to-line" => self.open_picker_with(Mode::Files, ":"),
             "editor.show-hover" => self.editor.hover_caret(),
             "editor.definition" => self.go_to_definition(),
-            "editor.references" => self.find_places(false),
-            "editor.implementations" => self.find_places(true),
+            "editor.references" => self.find_places(navigate::Places::References),
+            "editor.implementations" => self.find_places(navigate::Places::Implementations),
+            "editor.type-definition" => self.find_places(navigate::Places::TypeDefinitions),
+            "editor.call-hierarchy" => self.show_call_hierarchy(),
+            "editor.expand-macro" => self.expand_macro(),
             "editor.quick-fix" => self.quick_fix(),
             "editor.rename" => self.rename_prompt(),
             "editor.fold" => self.editor.fold_at_caret(true),
@@ -834,12 +848,15 @@ impl App {
                 state.recents.insert(0, root);
             }
             state.project = Some(project);
+            // A hierarchy is about the project it was asked in.
+            state.calls.forget();
             if !state.layout.left.open {
                 state.layout.left.open = true;
             }
         }
         self.sync_all();
         self.sync_problems();
+        self.sync_calls();
         // Where an example's main may run: not where `cargo run` flashes.
         {
             let state = self.state.borrow();
@@ -1568,6 +1585,7 @@ impl App {
         self.sync_notes();
         self.sync_settings();
         self.sync_update();
+        self.sync_calls();
     }
 
     fn sync_project(&self) {
@@ -1621,6 +1639,7 @@ impl App {
                 Glyph::Signals => icons.get_signals(),
                 Glyph::Debug => icons.get_bug(),
                 Glyph::Registers => icons.get_chip(),
+                Glyph::Calls => icons.get_calls(),
             }
         };
         let state = self.state.borrow();
@@ -1630,6 +1649,7 @@ impl App {
             "draw" => !state.draw.is_empty(),
             "flight" => !state.sim.sensors.is_empty(),
             "debug" | "registers" => state.debug.state.is_some(),
+            "calls" => !state.calls.is_idle(),
             "signals" => {
                 state.lab.has_signals()
                     || state
@@ -1768,6 +1788,8 @@ impl App {
         shell.set_encoding(encoding.into());
         shell.set_eol(eol.into());
         let language = match self.active_tab() {
+            // What rust-analyzer expands a macro to is Rust.
+            Some(Tab::File(path)) if rusty_edit::is_expansion(&path) => "Rust",
             Some(Tab::File(path)) => language::of(&path).map_or("Plain text", |l| l.name),
             _ => "",
         };

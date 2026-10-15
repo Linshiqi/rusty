@@ -256,4 +256,18 @@ mod tests {
         assert_eq!(expansion_parts("src/nav.rs"), None);
         assert!(!is_expansion("src/nav.rs"));
     }
+
+    /// The same call expanded again is the same document; another call of
+    /// the macro, or another macro on the line, is another.
+    #[test]
+    fn an_expansion_is_one_tab_per_call() {
+        let here = expansion_path("src/nav.rs", 37, "println!");
+        assert_eq!(here, expansion_path("src/nav.rs", 37, "println!"));
+        assert_ne!(here, expansion_path("src/nav.rs", 38, "println!"));
+        assert_ne!(here, expansion_path("src/lib.rs", 37, "println!"));
+        assert_ne!(here, expansion_path("src/nav.rs", 37, "vec!"));
+        // Named after the macro, which no grammar is read off and no
+        // server serves: nothing reads it as a file.
+        assert!(!here.ends_with(".rs"));
+    }
 }
