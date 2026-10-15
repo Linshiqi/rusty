@@ -817,18 +817,13 @@ image-failed = "无法显示 {path}：{error}"
 
 [strip]
 # 标签页的右键菜单，与 VS Code 一致；每一项也在命令面板中，作用于当前标签页。
+# 复制路径与在文件管理器中显示沿用文件树的用词（`context.tree-*`）。
 close-others = "关闭其他"
 close-right = "关闭右侧"
 close-saved = "关闭已保存"
 close-all = "全部关闭"
-copy-path = "复制路径"
-copy-relative-path = "复制相对路径"
-reveal-explorer = "在文件资源管理器中显示"
-reveal-finder = "在访达中显示"
-reveal-folder = "打开文件所在的文件夹"
 split-right = "向右拆分"
 not-a-file = "{name} 不是磁盘上的文件"
-reveal-failed = "无法显示 {path}：{reason}"
 
 [places]
 references = "{name} 的引用"

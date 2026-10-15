@@ -3,6 +3,9 @@
 //! project; show it in the file manager; open it in the group beside.
 //! Every row is an action (`actions.rs`), named and keyed as the palette
 //! names and keys it, and the palette's way in acts on the tab in front.
+//! What a tab and a row of the tree both do — copy a path, reveal it, open
+//! it beside — is done the tree's way (`app/tree.rs`, `crate::reveal`), so
+//! the two menus cannot disagree about it.
 //!
 //! A tab is named by its group as well as its id, because one file can be
 //! a tab in both groups and a verb on one must not land on the other.
@@ -11,7 +14,7 @@ use std::rc::Rc;
 
 use rusty_i18n::t;
 
-use super::{App, Tab, git};
+use super::{App, Tab};
 
 /// The menu's rows, in VS Code's order and groups; an empty id is a
 /// divider. Another row is one more id here and one more arm in
@@ -150,25 +153,16 @@ impl App {
                 self.close_around(verb, other, id);
             }
             "tab.copy-path" | "tab.copy-relative-path" | "tab.reveal" => {
-                let (Tab::File(path), Some(root)) = (&tab, self.root()) else {
+                let Tab::File(path) = &tab else {
                     return self.not_on_disk(&tab);
                 };
                 if rusty_edit::is_expansion(path) {
                     return self.not_on_disk(&tab);
                 }
                 match verb {
-                    "tab.copy-path" => {
-                        git::copy_text(&crate::os_paths::absolute(&root, path).to_string_lossy())
-                    }
-                    "tab.copy-relative-path" => git::copy_text(&crate::os_paths::relative(path)),
-                    _ => {
-                        if let Err(reason) = crate::os_paths::reveal(&root, path) {
-                            self.note(
-                                2,
-                                t!("strip.reveal-failed", path = path.clone(), reason = reason),
-                            );
-                        }
-                    }
+                    "tab.copy-path" => self.tree_copy_path(path, false),
+                    "tab.copy-relative-path" => self.tree_copy_path(path, true),
+                    _ => self.tree_reveal(path.clone()),
                 }
             }
             "tab.split-right" => {
@@ -220,19 +214,22 @@ impl App {
 
     /// Split right: `path` in the group to the right of the one its tab is
     /// in, which gets the keys — a new group when the window is not split,
-    /// as Ctrl+\ makes one.
+    /// as the tree's Open to the side makes one. Split already, with the
+    /// keys on the right, the tab clicked is on the left and the group
+    /// with the keys is the one beside it.
     fn split_right(self: &Rc<Self>, other: bool, path: String) {
-        if !self.state.borrow().split {
-            self.split_with(path);
-            return;
-        }
         if !self.opens_beside(other) {
             return;
         }
-        if self.state.borrow().focus == 0 {
-            self.swap_groups();
+        let keys_on_right = {
+            let state = self.state.borrow();
+            state.split && state.focus == 1
+        };
+        if keys_on_right {
+            self.open_tab(Tab::File(path));
+        } else {
+            self.open_to_side(path);
         }
-        self.open_tab(Tab::File(path));
     }
 }
 
