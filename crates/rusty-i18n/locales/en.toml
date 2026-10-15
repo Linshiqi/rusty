@@ -10,6 +10,8 @@ new-project = "New project…"
 open-project = "Open project…"
 clone = "Clone repository…"
 open-recent = "Open Recent"
+new-window = "New Window"
+open-project-new-window = "Open project in new window…"
 
 [menu.edit]
 rename = "Rename symbol…"
@@ -40,6 +42,38 @@ monitor = "Monitor"
 [menu.help]
 check-updates = "Check for updates…"
 
+[shortcuts]
+# Keyboard Shortcuts: the page that lists every action's key and rebinds it.
+title = "Keyboard Shortcuts"
+settings-group = "Keyboard"
+open = "Open"
+search = "Search by command or key"
+search-keys = "Search by pressing keys"
+search-keys-hint = "Press the keys to search for"
+reset-all = "Reset all"
+reset = "Reset to the default"
+column-command = "Command"
+column-key = "Keybinding"
+column-source = "Source"
+source-default = "Default"
+source-user = "User"
+edit = "Click, then press the new keys"
+press = "Press the keys, then Enter"
+recording-hint = "Enter keeps it · Escape cancels"
+shared = "Also bound to {names}"
+code-takes = "The editor takes {key} for itself while you type in it"
+refused-types = "A key without Ctrl types text, so it cannot be a shortcut — only F1 to F12 stand alone"
+refused-altgr = "Alt with a character types it on keyboards with AltGr, so it cannot be a shortcut"
+waiting = "({keys}) was pressed. Waiting for the second key of the chord…"
+not-a-command = "The key combination ({keys}) is not a command."
+
+[windows]
+# More than one rusty: a window per project.
+open-new = "Open in new window"
+open-here = "{name} is already open in this window."
+open-elsewhere = "{name} is open in another rusty window."
+new-failed = "Could not open a new window: {reason}"
+
 [context]
 # Right-click menus. Every surface answers a right-click with its own menu
 # or not at all.
@@ -47,6 +81,47 @@ editor-definition = "Go to definition"
 editor-quick-fix = "Quick fix"
 editor-fold-all = "Fold all"
 editor-unfold-all = "Unfold all"
+# The project tree's: VS Code's explorer menu.
+tree-new-file = "New file…"
+tree-new-folder = "New folder…"
+tree-refresh = "Refresh"
+tree-open-side = "Open to the side"
+tree-reveal-explorer = "Reveal in File Explorer"
+tree-reveal-finder = "Reveal in Finder"
+tree-reveal = "Open containing folder"
+tree-cut = "Cut"
+tree-copy = "Copy"
+tree-paste = "Paste"
+tree-copy-path = "Copy path"
+tree-copy-relative-path = "Copy relative path"
+tree-rename = "Rename…"
+tree-delete = "Delete"
+
+[tree]
+# The project tree's own verbs: what the box a name is typed in says about
+# the name, the question before a delete, and a write that could not be
+# done.
+name-empty = "A file or folder name must be provided."
+name-taken = "A file or folder “{name}” already exists here. Choose a different name."
+name-separator = "A name cannot contain a slash. To move it, drag it, or cut and paste it."
+name-edge = "A name cannot start or end with a slash, or have two together."
+name-dots = "“{name}” is not a file name."
+name-invalid = "“{name}” is not a name this system takes for a file."
+name-blocked = "“{name}” is a file, so nothing can be made inside it."
+delete-bin = "Delete “{name}”?\nIt goes to the Recycle Bin, and can be restored from there."
+delete-trash = "Delete “{name}”?\nIt goes to the Trash, and can be restored from there."
+delete-folder-bin = "Delete the folder “{name}” and everything in it?\nIt goes to the Recycle Bin, and can be restored from there."
+delete-folder-trash = "Delete the folder “{name}” and everything in it?\nIt goes to the Trash, and can be restored from there."
+create-failed = "Could not create “{name}”: {reason}"
+rename-failed = "Could not rename to “{name}”: {reason}"
+move-failed = "Could not move “{name}”: {reason}"
+copy-failed = "Could not copy “{name}”: {reason}"
+delete-failed = "Could not delete “{name}”: {reason}"
+reveal-failed = "Could not open the file manager: {reason}"
+exists = "“{name}” is already there."
+gone = "“{name}” is no longer there."
+into-itself = "a folder cannot go into itself."
+outside = "“{name}” is outside the project."
 
 [panel]
 files = "Files"
@@ -831,6 +906,17 @@ size = "{width} × {height} px"
 failed = "This picture could not be shown: {reason}"
 reading = "Reading the picture…"
 
+[strip]
+# A tab's right-click menu, VS Code's rows; each is also in the palette, for
+# the tab in front. Copying a path and revealing a file use the tree's words
+# (`context.tree-*`).
+close-others = "Close others"
+close-right = "Close to the right"
+close-saved = "Close saved"
+close-all = "Close all"
+split-right = "Split right"
+not-a-file = "{name} is not a file on disk"
+
 [places]
 # The finder's title over a list of places the language server named.
 references = "References to {name}"
@@ -927,6 +1013,8 @@ restart = "Restart now"
 releases = "Open the releases page"
 restart-while-running = "{what} is still running. Restarting now stops it halfway — and an install cut off in the middle can leave a toolchain that builds nothing."
 restart-anyway = "Restart anyway?"
+restart-question = "Restart now?"
+others-stay = "{count} other rusty window(s) stay open, still running rusty {current}, until you close them."
 running-something = "A command"
 
 [activity]
@@ -1288,7 +1376,7 @@ board = "Board"
 project = "Project"
 welcome = "Welcome"
 tagline = "An embedded Rust workbench"
-keys-hint = "Ctrl+Shift+P runs any command · Ctrl+P opens any file"
+keys-hint = "{palette} runs any command · {finder} opens any file"
 settings = "Settings"
 theme = "Theme"
 theme-system = "System"
@@ -1306,7 +1394,7 @@ open-failed = "Could not open {path}: {reason}"
 dock-left = "Show or hide the left dock"
 dock-bottom = "Show or hide the bottom dock"
 dock-right = "Show or hide the right dock"
-close-tab = "Close the tab"
+close-tab = "Close"
 zoom-in = "Zoom in"
 zoom-out = "Zoom out"
 zoom-reset = "Reset zoom"

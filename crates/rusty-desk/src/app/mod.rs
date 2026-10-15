@@ -43,6 +43,7 @@ mod math_words;
 mod memory;
 mod menu;
 mod navigate;
+mod new_window;
 mod part;
 mod pictures;
 mod playground;
@@ -52,10 +53,13 @@ mod saving;
 mod search;
 mod servers;
 mod sheet;
+mod shortcuts;
 mod sim;
 mod strip;
+mod tab_menu;
 mod terminal;
 mod testing;
+mod tree;
 mod updating;
 mod watch;
 mod waves;
@@ -70,7 +74,7 @@ use crate::{
         Document, Surface,
         backup::{self, Keeper},
     },
-    keys, language,
+    language,
     lsp::{Problems, Servers},
     picker::{self, Mode, Pick},
     project::Project,
@@ -89,6 +93,16 @@ pub enum Tab {
 }
 
 impl Tab {
+    /// The tab a project file opens as: a picture, drawn, or a file the
+    /// editor holds — an SVG is the second, with its picture over it.
+    fn of(path: String) -> Tab {
+        if crate::picture::is_picture(&path) && !crate::picture::is_svg(&path) {
+            Tab::Picture(path)
+        } else {
+            Tab::File(path)
+        }
+    }
+
     fn id(&self) -> String {
         match self {
             Tab::File(path) => format!("file:{path}"),
@@ -111,6 +125,7 @@ impl Tab {
             Tab::Page("memory") => t!("panel.memory"),
             Tab::Page("crates") => t!("panel.crates"),
             Tab::Page("math") => t!("panel.math"),
+            Tab::Page("keys") => t!("shortcuts.title"),
             Tab::Page(kind) => (*kind).to_string(),
         }
     }
@@ -189,6 +204,9 @@ struct State {
     search: search::Search,
     git: git::Git,
     menu: Option<&'static str>,
+    /// The tab a right-click menu is open for: whether it is the other
+    /// group's, and its id.
+    tab_menu: Option<(bool, String)>,
     memory: memory::Memory,
     crates: crates::Crates,
     assistant: assistant::Assistant,
@@ -204,6 +222,10 @@ struct State {
     watching: watch::Watching,
     testing: testing::Testing,
     term: terminal::Term,
+    /// The keys in force, a chord half pressed, and the shortcuts page.
+    keys: shortcuts::Keys,
+    /// The project tree's selection, clipboard, naming box and drag.
+    tree: tree::Tree,
 }
 
 pub struct App {
@@ -246,6 +268,8 @@ pub struct App {
     strip_back: Cell<bool>,
     /// The strip as it was last written.
     strip_saved: RefCell<Option<rusty_embed::model::ProjectTabs>>,
+    /// The project tree's rows, changed in place (`tree::patch`).
+    tree_rows: Rc<VecModel<TreeRow>>,
 }
 
 impl App {
@@ -257,6 +281,10 @@ impl App {
             .global::<Shell>()
             .set_output(ModelRc::from(output.clone()));
         let runner = Runner::new(output);
+        let tree_rows = Rc::new(VecModel::<TreeRow>::default());
+        window
+            .global::<Shell>()
+            .set_tree(ModelRc::from(tree_rows.clone()));
         let servers = Servers::new();
         let problems = Problems::default();
         let editor = Surface::new(window, files.clone(), servers.clone(), problems.clone());
@@ -284,11 +312,13 @@ impl App {
             clock: slint::Timer::default(),
             strip_back: Cell::new(false),
             strip_saved: RefCell::default(),
+            tree_rows,
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 view: saved.editor,
                 vim: saved.vim,
                 recents: saved.recent_projects.clone(),
+                keys: shortcuts::Keys::new(&saved.keybinds),
                 tabs: vec![Tab::Page("welcome")],
                 active: Some(0),
                 ..State::default()
@@ -421,7 +451,12 @@ impl App {
         on!(on_pick_tab, |app, id| app.pick_tab(&id));
         on!(on_close_tab, |app, id| app.close_tab(&id));
         on!(on_shade_pick, |app, id| app.shade_pick(&id));
-        on!(on_shade_close, |app, id| app.close_tab(&id));
+        on!(on_shade_close, |app, id| {
+            app.close_tab_in(true, &id);
+        });
+        on!(on_tab_menu, |app, id, other, x, y| app
+            .tab_menu(&id, other, x, y));
+        on!(on_split_resized, |app, share| app.split_resized(share));
         let weak = Rc::downgrade(self);
         window
             .global::<crate::Shade>()
@@ -430,7 +465,22 @@ impl App {
                     app.shade_pressed(row.max(0) as usize, x, y);
                 }
             });
-        on!(on_tree_click, |app, index| app.tree_click(index as usize));
+        on!(on_tree_click, |app, index| app.tree_click(index));
+        on!(on_tree_double_click, |app, index| app
+            .tree_double_click(index));
+        on!(on_tree_menu, |app, index, x, y| app.tree_menu(index, x, y));
+        on!(on_tree_name_edited, |app, text| app.tree_name_edited(&text));
+        on!(on_tree_name_done, |app, ok| app.tree_name_done(ok));
+        on!(on_tree_name_left, |app| app.tree_name_left());
+        on!(on_tree_drag, |app, from, over| app.tree_drag(from, over));
+        on!(on_tree_drop, |app, from, over| app.tree_drop(from, over));
+        let weak = Rc::downgrade(self);
+        shell.on_tree_key(move |event| {
+            weak.upgrade().is_some_and(|app| {
+                let m = event.modifiers;
+                app.tree_key(&event.text, m.control || m.meta, m.alt, m.shift)
+            })
+        });
         on!(on_open_recent, |app, path| app
             .open_project(PathBuf::from(path.as_str()), None));
         on!(on_picker_query, |app, query| app.picker_query(&query));
@@ -609,27 +659,43 @@ impl App {
         on!(on_board_add, |app, id| app.board_add(&id));
         let weak = Rc::downgrade(self);
         shell.on_key(move |event| {
-            let Some(app) = weak.upgrade() else {
-                return false;
-            };
-            let modifiers = event.modifiers;
-            let Some(chord) = keys::chord(
-                &event.text,
-                modifiers.control,
-                modifiers.alt,
-                modifiers.shift,
-                modifiers.meta,
-            ) else {
-                return false;
-            };
-            match actions::bound_to(&chord) {
-                Some(action) => {
-                    app.act(action.id);
-                    true
-                }
-                None => false,
-            }
+            let m = event.modifiers;
+            weak.upgrade()
+                .is_some_and(|app| app.window_key(&event.text, m.control, m.alt, m.shift, m.meta))
         });
+        let weak = Rc::downgrade(self);
+        self.editor.on_chord(move |text, ctrl, alt, shift, meta| {
+            weak.upgrade()
+                .is_some_and(|app| app.chord_key(text, ctrl, alt, shift, meta))
+        });
+        let weak = Rc::downgrade(self);
+        shell.on_keys_stroke(move |event| {
+            let m = event.modifiers;
+            weak.upgrade()
+                .is_some_and(|app| app.keys_stroke(&event.text, m.control, m.alt, m.shift, m.meta))
+        });
+        let weak = Rc::downgrade(self);
+        shell.on_keys_search_stroke(move |event| {
+            let m = event.modifiers;
+            weak.upgrade().is_some_and(|app| {
+                app.keys_search_stroke(&event.text, m.control, m.alt, m.shift, m.meta)
+            })
+        });
+        let weak = Rc::downgrade(self);
+        shell.on_key_of(move |id, _version| {
+            weak.upgrade()
+                .map(|app| app.key_suffix(&id))
+                .unwrap_or_default()
+                .into()
+        });
+        on!(on_keys_query_edited, |app, query| app.keys_query(&query));
+        on!(on_keys_record, |app, id| app.keys_record(&id));
+        on!(on_keys_reset, |app, id| app.keys_reset(&id));
+        on!(on_keys_lost, |app| app.keys_lost());
+        on!(on_open_recent_new_window, |app, path| app
+            .new_window(Some(PathBuf::from(path.as_str()))));
+        on!(on_picker_pick_new_window, |app, index| app
+            .picker_pick_with(index as usize, true));
         let weak = Rc::downgrade(self);
         self.editor.on_breakpoint(move |path, line| {
             if let Some(app) = weak.upgrade() {
@@ -660,6 +726,13 @@ impl App {
         self.editor.on_caret(move || {
             if let Some(app) = weak.upgrade() {
                 app.sync_status();
+                app.caret_moved();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.editor.on_lines(move |path, first, removed, added| {
+            if let Some(app) = weak.upgrade() {
+                app.lines_moved(path, first, removed, added);
             }
         });
     }
@@ -673,6 +746,11 @@ impl App {
             "palette.open" => self.open_picker(Mode::Commands),
             "finder.open" => self.open_picker(Mode::Files),
             "project.open" => self.choose_project(),
+            "project.open-new-window" => self.choose_project_new_window(),
+            "window.new" => self.new_window(None),
+            "keys.open" => self.open_shortcuts(),
+            "keys.reset-all" => self.keys_reset_all(),
+            "keys.search-keys" => self.keys_search_keys(),
             "settings.open" => self.open_tab(Tab::Page("settings")),
             "environment.open" => self.open_tab(Tab::Page("environment")),
             "environment.refresh" => self.probe_environment(),
@@ -685,7 +763,10 @@ impl App {
             "playground.keep" => self.keep_playground(),
             "wizard.create" => self.wizard_create(),
             "wizard.install" => self.wizard_install(),
-            "welcome.open" => self.open_tab(Tab::Page("welcome")),
+            "welcome.open" => {
+                self.open_tab(Tab::Page("welcome"));
+                self.reread_workbench();
+            }
             "file.save" => self.save(),
             "find.open" => self.editor.find_open(false),
             "find.replace" => self.editor.find_open(true),
@@ -725,6 +806,14 @@ impl App {
                     self.close_tab(&id);
                 }
             }
+            "tab.close-others"
+            | "tab.close-right"
+            | "tab.close-saved"
+            | "tab.close-all"
+            | "tab.copy-path"
+            | "tab.copy-relative-path"
+            | "tab.reveal"
+            | "tab.split-right" => self.tab_act(id),
             "dock.left" => self.toggle_dock(Dock::Left),
             "dock.bottom" => self.toggle_dock(Dock::Bottom),
             "dock.right" => self.toggle_dock(Dock::Right),
@@ -735,7 +824,11 @@ impl App {
             "theme.system" => self.set_theme("system"),
             "theme.dark" => self.set_theme("dark"),
             "theme.light" => self.set_theme("light"),
-            "project.menu" => self.open_picker(Mode::Projects),
+            "project.menu" => {
+                self.open_picker(Mode::Projects);
+                // What another window opened since is a recent project too.
+                self.reread_workbench();
+            }
             "app.menu" => self.open_picker(Mode::Commands),
             "run.stop" => {
                 // Debugging stops with the run that booted the target.
@@ -784,6 +877,7 @@ impl App {
                 self.git_shown();
             }
             other if other.starts_with("git.") => self.git_act(&other["git.".len()..]),
+            other if other.starts_with("tree.") => self.tree_act(&other["tree.".len()..]),
             other if other.starts_with("memory.") => self.memory_act(&other["memory.".len()..]),
             other if other.starts_with("crates.") => self.crates_act(&other["crates.".len()..]),
             other if other.starts_with("ai.") => self.ai_act(&other["ai.".len()..]),
@@ -816,10 +910,25 @@ impl App {
         );
     }
 
-    /// Open a project, and then `file` in it when one is named.
+    /// Open a project, and then `file` in it when one is named. One open in
+    /// another rusty window is said rather than opened twice: two windows
+    /// on one project are two language servers at one build directory, and
+    /// two hot exits keeping drafts of the same files.
     pub fn open_project(self: &Rc<Self>, root: PathBuf, file: Option<String>) {
         work::spawn(
-            move || Project::read(root.clone()).map_err(|reason| (root, reason)),
+            move || {
+                if crate::instances::holding(&root) {
+                    let name = root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| root.display().to_string());
+                    return Err((1, t!("windows.open-elsewhere", name = name)));
+                }
+                Project::read(root.clone()).map_err(|reason| {
+                    let path = root.display().to_string();
+                    (2, t!("desk.open-failed", path = path, reason = reason))
+                })
+            },
             move |app, read| match read {
                 Ok(project) => {
                     app.project_opened(project);
@@ -827,14 +936,7 @@ impl App {
                         app.open_file(file);
                     }
                 }
-                Err((root, reason)) => app.note(
-                    2,
-                    t!(
-                        "desk.open-failed",
-                        path = root.display().to_string(),
-                        reason = reason
-                    ),
-                ),
+                Err((level, said)) => app.note(level, said),
             },
         );
     }
@@ -896,27 +998,7 @@ impl App {
         self.probe_environment();
         self.load_board(None);
         self.bring_back(opened);
-    }
-
-    fn tree_click(self: &Rc<Self>, index: usize) {
-        let row = {
-            let state = self.state.borrow();
-            state
-                .project
-                .as_ref()
-                .and_then(|project| project.rows().into_iter().nth(index))
-        };
-        let Some(row) = row else { return };
-        if row.dir {
-            if let Some(project) = self.state.borrow_mut().project.as_mut()
-                && !project.expanded.remove(&row.path)
-            {
-                project.expanded.insert(row.path.clone());
-            }
-            self.sync_tree();
-        } else {
-            self.open_file(row.path);
-        }
+        self.tell_instances();
     }
 
     /// Open a file of the project: in front if it is open, read off the
@@ -928,20 +1010,42 @@ impl App {
     /// Open a file and put the caret at a line and column, counted from
     /// zero, when one is given.
     pub fn open_file_at(self: &Rc<Self>, path: String, at: Option<(usize, usize)>) {
-        // A picture is drawn, not read as text; an SVG is both, and opens
-        // as text with its picture over it.
-        if crate::picture::is_picture(&path) && !crate::picture::is_svg(&path) {
-            self.open_picture(path);
-            return;
-        }
-        let go = move |app: &Rc<App>| {
+        self.open_file_then(path, move |app| {
             if let Some((line, col)) = at {
                 app.editor.go_to(line + 1, Some(col + 1));
             }
-        };
+        });
+    }
+
+    /// Open a file in front, and then `then` — the tree, which opens a
+    /// file and keeps the keys, takes them back there.
+    pub(super) fn open_file_then(
+        self: &Rc<Self>,
+        path: String,
+        then: impl FnOnce(&Rc<App>) + Send + 'static,
+    ) {
+        // A picture is drawn, not read as text; an SVG is both, and opens
+        // as text with its picture over it.
+        if let Tab::Picture(path) = Tab::of(path.clone()) {
+            self.open_picture(path);
+            then(self);
+            return;
+        }
+        self.hold_then(path, move |app, path| {
+            app.open_tab(Tab::File(path));
+            then(app);
+        });
+    }
+
+    /// `path` held by the editor — read off the UI thread when it is not —
+    /// and then `then`, with no tab opened for it yet.
+    pub(super) fn hold_then(
+        self: &Rc<Self>,
+        path: String,
+        then: impl FnOnce(&Rc<App>, String) + Send + 'static,
+    ) {
         if self.editor.holds(&path) {
-            self.open_tab(Tab::File(path));
-            go(self);
+            then(self, path);
             return;
         }
         let Some(root) = self.state.borrow().project.as_ref().map(|p| p.root.clone()) else {
@@ -957,8 +1061,7 @@ impl App {
                 // the case — and the document that is open is the one to
                 // keep: read again it would replace the draft with the disk.
                 if app.editor.holds(&path) {
-                    app.open_tab(Tab::File(path));
-                    go(app);
+                    then(app, path);
                     return;
                 }
                 let refused =
@@ -970,9 +1073,8 @@ impl App {
                         ending,
                     }) => {
                         let document = Document::new(path.clone(), text, charset, ending);
-                        app.editor.show_new(document);
-                        app.open_tab(Tab::File(path));
-                        go(app);
+                        app.editor.add(document);
+                        then(app, path);
                     }
                     Ok(TextFile::Binary) => app.note(1, refused(t!("desk.binary"))),
                     Ok(TextFile::TooLarge) => app.note(1, refused(t!("desk.too-large"))),
@@ -1021,18 +1123,18 @@ impl App {
         }
     }
 
-    /// Close a tab; a file with changes not saved asks first — save, throw
-    /// the changes away, or keep the tab — as every editor does.
+    /// Close a tab, of the group with the keys when that group has it.
     fn close_tab(self: &Rc<Self>, id: &str) {
-        let tab = {
-            let state = self.state.borrow();
-            state
-                .tabs
-                .iter()
-                .chain(&state.other)
-                .find(|t| t.id() == id)
-                .cloned()
-        };
+        let other = !self.state.borrow().tabs.iter().any(|t| t.id() == id);
+        self.close_tab_in(other, id);
+    }
+
+    /// Close a tab of one group — `other` for the group without the keys,
+    /// since one file can be a tab in both. A file with changes not saved
+    /// asks first — save, throw the changes away, or keep the tab — as
+    /// every editor does; false when the answer was to keep it.
+    fn close_tab_in(self: &Rc<Self>, other: bool, id: &str) -> bool {
+        let tab = self.tab_in(other, id);
         // The last view of a file with changes asks; one of two does not,
         // since the other still holds them.
         if let Some(Tab::File(path)) = tab
@@ -1045,23 +1147,32 @@ impl App {
                     if let Some(root) = self.root() {
                         self.keeper.remove(&root, &path);
                     }
-                    self.drop_tab(id);
+                    self.drop_tab(other, id);
                 }
-                None => {}
+                None => return false,
             }
-            return;
+            return true;
         }
-        self.drop_tab(id);
+        self.drop_tab(other, id);
+        true
     }
 
-    fn drop_tab(self: &Rc<Self>, id: &str) {
+    /// Drop a tab from whichever group has it, the keys group's first: for
+    /// a file gone from the disk, whose tabs go from both groups, asking
+    /// nothing — the same id twice drops both.
+    fn drop_tab_anywhere(self: &Rc<Self>, id: &str) {
+        let other = !self.state.borrow().tabs.iter().any(|t| t.id() == id);
+        self.drop_tab(other, id);
+    }
+
+    fn drop_tab(self: &Rc<Self>, other: bool, id: &str) {
         let closed = {
             let mut state = self.state.borrow_mut();
             let state = &mut *state;
-            let (tabs, active) = if state.tabs.iter().any(|t| t.id() == id) {
-                (&mut state.tabs, &mut state.active)
-            } else {
+            let (tabs, active) = if other {
                 (&mut state.other, &mut state.other_active)
+            } else {
+                (&mut state.tabs, &mut state.active)
             };
             let Some(at) = tabs.iter().position(|t| t.id() == id) else {
                 return;
@@ -1247,6 +1358,16 @@ impl App {
         self.save_layout();
     }
 
+    /// The divider between the editor groups let go of: where the groups
+    /// part is kept with the docks' sizes.
+    fn split_resized(self: &Rc<Self>, share: f32) {
+        if !share.is_finite() {
+            return;
+        }
+        self.state.borrow_mut().layout.split = share.clamp(0.05, 0.95);
+        self.save_layout();
+    }
+
     fn save_layout(&self) {
         let layout = self.state.borrow().layout.clone();
         let _ = rusty_embed::config::update(move |saved| saved.layout = layout);
@@ -1357,7 +1478,7 @@ impl App {
             return;
         };
         let found = match mode {
-            Mode::Commands => picker::commands(query),
+            Mode::Commands => picker::commands(query, &self.state.borrow().keys.map),
             Mode::Files if picker::line_target(query).is_some() => self.line_rows(query),
             Mode::Files => {
                 let state = self.state.borrow();
@@ -1381,7 +1502,10 @@ impl App {
         };
         let rows: Vec<PickRow> = found
             .iter()
-            .map(|(title, detail, _)| PickRow {
+            .map(|(title, detail, pick)| PickRow {
+                // A project opens here, or with Ctrl+Enter or its button in
+                // a window of its own, as in VS Code's recents.
+                windowed: matches!(pick, Pick::Project(_)),
                 title: title.into(),
                 detail: if mode == Mode::Commands {
                     SharedString::new()
@@ -1404,6 +1528,11 @@ impl App {
     }
 
     fn picker_pick(self: &Rc<Self>, index: usize) {
+        self.picker_pick_with(index, false);
+    }
+
+    /// A row picked, a project's opening in a new window when `windowed`.
+    fn picker_pick_with(self: &Rc<Self>, index: usize, windowed: bool) {
         let pick = self
             .state
             .borrow_mut()
@@ -1416,6 +1545,7 @@ impl App {
         match pick {
             Some(Pick::Action(id)) => self.act(id),
             Some(Pick::File(path)) => self.open_file(path),
+            Some(Pick::Project(path)) if windowed => self.new_window(Some(PathBuf::from(path))),
             Some(Pick::Project(path)) => self.open_project(PathBuf::from(path), None),
             Some(Pick::Line(line, col)) => self.editor.go_to(line, col),
             Some(Pick::Place(location)) => self.jump(&location),
@@ -1616,6 +1746,7 @@ impl App {
         self.sync_settings();
         self.sync_update();
         self.sync_calls();
+        self.sync_keys();
     }
 
     fn sync_project(&self) {
@@ -1718,6 +1849,7 @@ impl App {
         shell.set_right_size(layout.right.size);
         shell.set_right_panels(panels(Dock::Right));
         shell.set_right_front(Dock::Right.front(layout).into());
+        shell.set_split_share(layout.split);
     }
 
     fn sync_tabs(&self) {
@@ -1768,31 +1900,6 @@ impl App {
             _ => "rusty".to_string(),
         };
         window.set_caption(title.into());
-    }
-
-    fn sync_tree(&self) {
-        let Some(window) = self.window() else { return };
-        let state = self.state.borrow();
-        let active = match state.active.and_then(|at| state.tabs.get(at)) {
-            Some(Tab::File(path)) => Some(path.clone()),
-            _ => None,
-        };
-        let rows: Vec<TreeRow> = state.project.as_ref().map_or(Vec::new(), |project| {
-            project
-                .rows()
-                .into_iter()
-                .map(|row| TreeRow {
-                    depth: row.depth as i32,
-                    selected: active.as_deref() == Some(row.path.as_str()),
-                    name: row.name.into(),
-                    dir: row.dir,
-                    open: row.open,
-                })
-                .collect()
-        });
-        window
-            .global::<Shell>()
-            .set_tree(ModelRc::new(VecModel::from(rows)));
     }
 
     fn sync_status(&self) {

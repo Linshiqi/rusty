@@ -183,13 +183,29 @@ impl App {
             Stage::Ready { feed, file } => (feed.clone(), file.clone()),
             _ => return,
         };
-        if self.runner.is_running() {
-            let what = t!("update.running-something");
-            let question = format!(
-                "{}\n\n{}",
-                t!("update.restart-while-running", what = what),
+        // The other rusty windows are not closed by an update: on Windows
+        // the installer renames aside what they hold, elsewhere the bundle
+        // or the image is replaced under them, and each keeps running the
+        // version it started with until it is closed — which the question
+        // says, since a window still on the old version after "Restart now"
+        // reads as an update that did not take.
+        let others = crate::instances::others();
+        let running = self.runner.is_running();
+        if running || others > 0 {
+            let mut said = Vec::new();
+            if running {
+                let what = t!("update.running-something");
+                said.push(t!("update.restart-while-running", what = what));
+            }
+            if others > 0 {
+                said.push(t!("update.others-stay", count = others, current = VERSION));
+            }
+            said.push(if running {
                 t!("update.restart-anyway")
-            );
+            } else {
+                t!("update.restart-question")
+            });
+            let question = said.join("\n\n");
             let go = rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Warning)
                 .set_title("rusty")
@@ -202,7 +218,9 @@ impl App {
             ) {
                 return;
             }
-            self.runner.stop();
+            if running {
+                self.runner.stop();
+            }
         }
         match put_in_place(&file) {
             Ok(()) => self.act("app.exit"),
