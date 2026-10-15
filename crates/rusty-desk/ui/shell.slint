@@ -30,6 +30,25 @@ export struct PickRow {
     title: string,
     detail: string,
     chord: string,
+    // A project, which can open in a new window instead.
+    windowed: bool,
+}
+
+// A row of the Keyboard Shortcuts page: an action, the key it has now, and
+// what is said about that key.
+export struct KeyRow {
+    id: string,
+    title: string,
+    // The key in force; while it records, what has been pressed so far.
+    chord: string,
+    // Somebody's key, not the table's: it can be reset.
+    rebound: bool,
+    recording: bool,
+    // Said under it: another action on the same key, a key refused, how to
+    // finish recording. Empty for nothing.
+    note: string,
+    // The note is trouble — a collision or a refusal — not a hint.
+    warn: bool,
 }
 
 export struct Note {
@@ -1332,6 +1351,33 @@ export global Shell {
 
     // The welcome page.
     in property <[Recent]> recents;
+    // Its line of keys, with the keys in force.
+    in property <string> keys-hint;
+    // A recent project, in a window of its own.
+    callback open-recent-new-window(string);
+
+    // Keyboard Shortcuts: every action and its key; the search, typed or
+    // pressed; the row being rebound.
+    in property <[KeyRow]> keys-rows;
+    in-out property <string> keys-query;
+    // The search takes keys pressed rather than typed.
+    in property <bool> keys-search-keys;
+    // A row records: the page's keys go to it until Enter or Escape.
+    in property <bool> keys-recording;
+    // Anything is rebound, so the whole page can be reset.
+    in property <bool> keys-rebound;
+    // Counts every change of a key: what shows one asks `key-of` again.
+    in property <int> keys-version;
+    callback keys-query-edited(string);
+    callback keys-record(string);
+    callback keys-stroke(KeyEvent) -> bool;
+    callback keys-search-stroke(KeyEvent) -> bool;
+    callback keys-reset(string);
+    // The recording row lost the keys: as Escape.
+    callback keys-lost();
+    // An action's key in force, as a tooltip ends — ` (F10)` — or nothing;
+    // handed `keys-version` so it is asked again when a key changes.
+    pure callback key-of(string, int) -> string;
 
     // The picker: the command palette and the file finder are one list.
     in-out property <bool> picker-open;
@@ -1371,6 +1417,8 @@ export global Shell {
     callback open-recent(string);
     callback picker-query(string);
     callback picker-pick(int);
+    // A project's row, opened in a new window: Ctrl+Enter or its button.
+    callback picker-pick-new-window(int);
     callback dismiss-note(int);
     callback problem-click(int);
     callback note-action(int);

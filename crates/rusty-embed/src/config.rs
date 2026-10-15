@@ -773,8 +773,10 @@ fn copy_tree(from: &Path, to: &Path, anchor: &Path) -> Result<usize> {
     Ok(copied)
 }
 
-/// Path equality as the filesystem sees it, not as the string does.
-fn same_dir(a: &Path, b: &Path) -> bool {
+/// Path equality as the filesystem sees it, not as the string does. The
+/// recents, the tab strips and the window that has a project open all
+/// answer "is this that directory" by it.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         // One of them may not exist yet; fall back to a spelling-insensitive

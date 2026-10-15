@@ -66,6 +66,7 @@ impl App {
             ids.extend(["", "editor.rename", "editor.quick-fix", ""]);
         }
         ids.push("palette.open");
+        let keys = self.state.borrow().keys.map.clone();
         let rows = ids
             .into_iter()
             .map(|id| {
@@ -77,7 +78,8 @@ impl App {
                         .unwrap_or_default()
                         .into(),
                     danger: false,
-                    chord: action.and_then(|a| a.chord).unwrap_or_default().into(),
+                    // The key in force: a rebound key is the key shown.
+                    chord: keys.chord(id).unwrap_or_default().into(),
                 }
             })
             .collect();

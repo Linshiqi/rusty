@@ -1,6 +1,7 @@
 //! rusty's desktop window, drawn with Slint. docs/slint.md is the design.
 //!
-//! `rusty [project] [file]` opens the project and the file in it when given.
+//! `rusty [project] [file]` opens the project and the file in it when given;
+//! `rusty --new-window` is New Window's, and opens on the welcome page.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -11,6 +12,7 @@ mod catalogue;
 mod docks;
 mod editor;
 mod format;
+mod instances;
 mod keys;
 mod language;
 mod lsp;
@@ -29,7 +31,14 @@ fn main() -> Result<(), slint::PlatformError> {
         eprintln!("rusty: {refusal}");
         std::process::exit(2);
     }
-    let mut args = std::env::args().skip(1);
+    // Started by another window's New Window: the welcome page, not the
+    // project the last session had, which is open in the window that asked.
+    let fresh = std::env::args()
+        .skip(1)
+        .any(|arg| arg == instances::NEW_WINDOW);
+    let mut args = std::env::args()
+        .skip(1)
+        .filter(|arg| arg != instances::NEW_WINDOW);
     // Absolute, as every path the window keeps is: a relative root gave
     // the language server `file://examples/…`, which it refuses as no file.
     // Not canonicalised — on Windows that is a `\\?\` path, which tools
@@ -48,6 +57,8 @@ fn main() -> Result<(), slint::PlatformError> {
     if let Some(dir) = bundled_dir() {
         rusty_embed::tools::set_bundled_dir(dir);
     }
+    // Counted by the other rusty windows on this machine.
+    instances::register();
     let saved = rusty_embed::config::workbench();
     let window = AppWindow::new()?;
     // After the window: Slint's translations are bundled with the component,
@@ -78,15 +89,18 @@ fn main() -> Result<(), slint::PlatformError> {
             });
             app.open_project(root, file)
         }
+        // A new window: the welcome page, and the machine was asked about
+        // by the window that opened it.
+        None if fresh => {}
         // No project named: the one worked on last, as it was left, when it
-        // is still there. Without one the machine is still worth asking
-        // about: a first run with no Rust says so before anybody opens
-        // anything.
+        // is still there and no other window has it open. Without one the
+        // machine is still worth asking about: a first run with no Rust
+        // says so before anybody opens anything.
         None => match saved
             .recent_projects
             .first()
             .map(std::path::PathBuf::from)
-            .filter(|root| root.is_dir())
+            .filter(|root| root.is_dir() && !instances::holding(root))
         {
             Some(root) => app.open_project(root, None),
             None => app.act("environment.refresh"),
