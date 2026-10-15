@@ -109,6 +109,13 @@ impl Keeper {
         })));
     }
 
+    /// Run `job` on the keeper's thread, after everything asked before:
+    /// the tab strip, which outlives the window as the drafts do, and is
+    /// written in the order it changed for the same reason.
+    pub fn then(&self, job: impl FnOnce() + Send + 'static) {
+        let _ = self.jobs.send(Job::Then(Box::new(move |_| job())));
+    }
+
     /// Wait until everything asked so far is on disk — for the window
     /// closing, after which nothing would be. False when it took too long.
     pub fn flush(&self, wait: Duration) -> bool {

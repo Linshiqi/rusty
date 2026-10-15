@@ -77,9 +77,19 @@ fn main() -> Result<(), slint::PlatformError> {
             });
             app.open_project(root, file)
         }
-        // Without a project the machine is still worth asking about: a
-        // first run with no Rust says so before anybody opens anything.
-        None => app.act("environment.refresh"),
+        // No project named: the one worked on last, as it was left, when it
+        // is still there. Without one the machine is still worth asking
+        // about: a first run with no Rust says so before anybody opens
+        // anything.
+        None => match saved
+            .recent_projects
+            .first()
+            .map(std::path::PathBuf::from)
+            .filter(|root| root.is_dir())
+        {
+            Some(root) => app.open_project(root, None),
+            None => app.act("environment.refresh"),
+        },
     }
     probe::start(&window);
     slint::run_event_loop()
