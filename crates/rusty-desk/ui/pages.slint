@@ -6,7 +6,8 @@ import { GitPage, GitDiffPage } from "git.slint";
 import { MemoryPage } from "memory.slint";
 import { CratesPage } from "crates.slint";
 import { AssistantSettings } from "assistant.slint";
-import { MarkdownView } from "markdown.slint";
+import { MarkdownView, PagePointer } from "markdown.slint";
+import { PictureView } from "picture.slint";
 import { MathPage } from "math.slint";
 import { Transport } from "debug.slint";
 import { ScrollView, Switch } from "std-widgets.slint";
@@ -724,7 +725,10 @@ component PageBody inherits Rectangle {
     if root.kind == "crates": CratesPage { }
     if root.kind == "math": MathPage { }
     if root.kind == "keys": KeysPage { }
-    if root.kind != "file" && root.kind != "welcome" && root.kind != "settings" && root.kind != "environment" && root.kind != "wizard" && root.kind != "git" && root.kind != "gitdiff" && root.kind != "memory" && root.kind != "crates" && root.kind != "math" && root.kind != "keys" && root.kind != "": NotYet {
+    if root.kind == "picture": PictureView {
+        checker: Theme.dark ? Shell.picture-checker-dark : Shell.picture-checker;
+    }
+    if root.kind != "file" && root.kind != "welcome" && root.kind != "settings" && root.kind != "environment" && root.kind != "wizard" && root.kind != "git" && root.kind != "gitdiff" && root.kind != "memory" && root.kind != "crates" && root.kind != "math" && root.kind != "keys" && root.kind != "picture" && root.kind != "": NotYet {
         name: root.title;
     }
     if root.kind == "": Welcome { }
@@ -777,8 +781,12 @@ export component EditorArea inherits Rectangle {
                         code := CodeView {
                             visible: Shell.active-kind == "file";
                         }
+                        // An SVG's picture, over its source.
+                        if Shell.active-kind == "file" && Shell.md-page && Shell.picture-page: PictureView {
+                            checker: Theme.dark ? Shell.picture-checker-dark : Shell.picture-checker;
+                        }
                         // A Markdown file read as a page, over its source.
-                        if Shell.active-kind == "file" && Shell.md-page: md-area := Rectangle {
+                        if Shell.active-kind == "file" && Shell.md-page && !Shell.picture-page: md-area := Rectangle {
                             background: Theme.content;
                             ScrollView {
                                 // A reading column, centred: margins from the page's own
@@ -803,11 +811,15 @@ export component EditorArea inherits Rectangle {
                             // size its text, and a right-click opens its menu — the text
                             // takes every press itself, so nothing under it would hear the
                             // right button. A click is made again underneath, with this
-                            // stepped aside, so a link still answers.
+                            // stepped aside, so a link still answers; and where the pointer
+                            // is goes to `PagePointer`, so a tip under it still shows.
                             TouchArea {
                                 x: 0;
                                 width: parent.width - 14px;
                                 enabled: !Shell.page-through;
+                                changed has-hover => {
+                                    PagePointer.inside = self.has-hover;
+                                }
                                 scroll-event(event) => {
                                     if (event.modifiers.control) {
                                         Shell.content-zoom("page", event.delta-y);
@@ -816,6 +828,10 @@ export component EditorArea inherits Rectangle {
                                     reject
                                 }
                                 pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.move) {
+                                        PagePointer.x = self.absolute-position.x + self.mouse-x;
+                                        PagePointer.y = self.absolute-position.y + self.mouse-y;
+                                    }
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                         Shell.surface-menu("page", "", -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                                     }

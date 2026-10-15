@@ -43,7 +43,21 @@ regex = "1.13.1"
 # A problem copied as VS Code copies one: JSON, its message escaped whole.
 serde_json = "1.0.151"
 sys-locale = "0.3.2"
-image = { version = "0.25", default-features = false, features = ["png"] }
+# A picture opened from the tree or named by a page, decoded here so a
+# failure can say why. GIF, WebP and BMP reuse what resvg already compiles
+# for Slint's SVGs; ICO is PNG and BMP in a directory.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+# Why an SVG would not load, in the parser's words: Slint's own error says
+# only that it did not. The same usvg Slint draws SVGs with.
+usvg = { version = "0.48.1", default-features = false }
+# Formulas: RaTeX, KaTeX's layout in Rust, drawn to SVG with KaTeX's fonts
+# embedded. Chosen by measuring every formula in a real book against
+# latex-rust, typst with mitex and MathJax (docs/slint.md). Pinned: a layout
+# engine's minor release can move every formula on every page.
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-types = "=0.1.14"
+ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

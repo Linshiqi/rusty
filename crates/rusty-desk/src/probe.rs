@@ -88,6 +88,9 @@
 //! project refused — and writes what it saw to `said.txt`, which this
 //! window prints once the second has gone, with its own project and the
 //! recents both windows wrote.
+//! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
+//! page's formulas and figures in both themes, the pictures beside it as
+//! pages of their own, and the book's symbol table (`book` below).
 
 use std::{
     cell::{Cell, RefCell},
@@ -195,6 +198,8 @@ pub fn start(window: &AppWindow) {
     // wheel's animation runs.
     let photos: Rc<RefCell<Vec<image::RgbaImage>>> = Rc::default();
     let frames: Rc<RefCell<Vec<(String, image::RgbaImage)>>> = Rc::default();
+    let reading_book = std::env::var_os("RUSTY_PROBE_BOOK").is_some();
+    let chapter: Rc<RefCell<String>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -414,6 +419,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if gliding {
                     step.set(3200);
+                }
+                if reading_book {
+                    step.set(6400);
                 }
             }
             // Ctrl and the wheel over the code, a page and the terminal; and
@@ -704,6 +712,9 @@ pub fn start(window: &AppWindow) {
                 snapshot(&window, &dir.join("refused.png"));
                 told("second: done".to_string());
                 app.act("app.exit");
+            }
+            n if reading_book && (6400..6600).contains(&n) => {
+                book(n, &window, &app, &dir, &step, &waited, &chapter);
             }
             500 if sim => app.act("run.run"),
             // A breakpoint beside the line that toggles the LED, then F5: the
@@ -3750,6 +3761,494 @@ pub fn start(window: &AppWindow) {
         }
     });
     std::mem::forget(timer);
+}
+
+/// `RUSTY_PROBE_BOOK`, on a chapter of a book (a copy: it ends by keeping
+/// a draft of an SVG it edits): the page with its formulas and figures,
+/// photographed at four places down it in the light theme and again in the
+/// dark; then the pictures beside it, by the names the flight-control book
+/// gives them — `figures/fig-16-e1mini.png` opened from the tree, fitted
+/// and then zoomed by the wheel, `figures/fig-04-phone-euler.svg` drawn over
+/// its source, its source, and its picture again after an edit nobody
+/// saved, and `figures/broken.png` when the copy has one — then the book's
+/// symbol table (`G-symbols.md`), whose cells hold formulas. Last, through
+/// the touch laid over a page for Ctrl, the wheel and the right button, a
+/// page it writes beside the chapter (`rusty-probe-page.md`): a link in a
+/// paragraph laid round formulas clicked, a refused formula's tip on the
+/// pointer, and the formulas' sizes before and after Ctrl and the wheel;
+/// then Ctrl and the wheel over a picture, which zoom the picture and not
+/// the page, and the picture's menu and its tab's. What the page counted,
+/// and what it says in place of what it will not draw, is printed at each
+/// stop.
+fn book(
+    n: u32,
+    window: &AppWindow,
+    app: &Rc<crate::app::App>,
+    dir: &Path,
+    step: &Cell<u32>,
+    waited: &Cell<u32>,
+    chapter: &RefCell<String>,
+) {
+    let shell = window.global::<Shell>();
+    let scroll = |by: f32| {
+        let size = window
+            .window()
+            .size()
+            .to_logical(window.window().scale_factor());
+        window.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(size.width * 0.62, size.height * 0.5),
+        });
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(size.width * 0.62, size.height * 0.5),
+                delta_x: 0.0,
+                delta_y: by,
+            });
+    };
+    // Wait, at most a minute, until what the page asked for has arrived.
+    let settle = |what: &str| {
+        if !app.page_settled() && waited.get() < 1500 {
+            waited.set(waited.get() + 1);
+            step.set(n);
+            return false;
+        }
+        eprintln!("book: {what}: {}", app.page_report());
+        waited.set(0);
+        true
+    };
+    let folder = || {
+        chapter
+            .borrow()
+            .rsplit_once('/')
+            .map(|(dir, _)| format!("{dir}/"))
+            .unwrap_or_default()
+    };
+    let picture_ready = |what: &str| {
+        let note = shell.get_picture_note();
+        let reading = note.is_empty() || note.as_str() == rusty_i18n::t!("picture.reading");
+        if !shell.get_picture_shown() && reading && waited.get() < 500 {
+            waited.set(waited.get() + 1);
+            step.set(n);
+            return;
+        }
+        waited.set(0);
+        eprintln!(
+            "book: {what}: shown {} note {:?} info {:?}",
+            shell.get_picture_shown(),
+            shell.get_picture_note(),
+            shell.get_picture_info()
+        );
+    };
+    let photo = |name: &str| snapshot(window, &dir.join(name));
+    match n {
+        6400 => {
+            // The chapter the command line named is read off the UI thread.
+            if (shell.get_active_kind() != "file" || !shell.get_md_page()) && waited.get() < 1500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            *chapter.borrow_mut() = app.editor().current_path().unwrap_or_default();
+            shell.set_theme_choice("light".into());
+        }
+        6401 => {
+            settle("the chapter");
+        }
+        6405 => {
+            // What the page says in place of what it will not draw.
+            for block in shell.get_md_blocks().iter() {
+                for line in block.flow.iter() {
+                    for piece in line.pieces.iter().filter(|p| p.kind == 2) {
+                        eprintln!("book: a formula as its source, tip {:?}", piece.tip);
+                    }
+                }
+                match block.kind {
+                    5 | 6 if !block.shown => {
+                        eprintln!(
+                            "book: block {} not shown: {:?} tip {:?}",
+                            block.kind, block.marker, block.tip
+                        )
+                    }
+                    7 => eprintln!("book: withheld: {:?}", block.marker),
+                    _ => {}
+                }
+            }
+            photo("book-light-1.png");
+        }
+        6406 | 6411 | 6416 | 6426 | 6431 | 6436 => scroll(-1100.0),
+        6410 => photo("book-light-2.png"),
+        6415 => photo("book-light-3.png"),
+        6420 => photo("book-light-4.png"),
+        6421 => {
+            shell.set_theme_choice("dark".into());
+            scroll(100_000.0);
+        }
+        6425 => photo("book-dark-1.png"),
+        6430 => photo("book-dark-2.png"),
+        6435 => photo("book-dark-3.png"),
+        6440 => photo("book-dark-4.png"),
+        6445 => app.open_file(format!("{}figures/fig-16-e1mini.png", folder())),
+        6446 => picture_ready("a PNG"),
+        6450 => photo("picture-png-dark.png"),
+        6451 => shell.set_theme_choice("light".into()),
+        6454 => photo("picture-png-light.png"),
+        6455..=6457 => scroll(120.0),
+        6460 => photo("picture-png-zoomed.png"),
+        6461 => app.open_file(format!("{}figures/fig-04-phone-euler.svg", folder())),
+        6462 => {
+            if shell.get_active_kind() != "file" && waited.get() < 500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            eprintln!(
+                "book: an SVG: page {} picture {} shown {} info {:?}",
+                shell.get_md_page(),
+                shell.get_picture_page(),
+                shell.get_picture_shown(),
+                shell.get_picture_info()
+            );
+        }
+        6466 => photo("svg-page.png"),
+        6467 => app.act("markdown.toggle"),
+        6470 => photo("svg-source.png"),
+        6471 => {
+            // An edit nobody saves: a red disc over the figure's middle.
+            let editor = app.editor();
+            if let Some(path) = editor.current_path()
+                && let Some((text, ..)) = editor.draft_of(&path)
+            {
+                let version = editor.version_of(&path).unwrap_or(0);
+                let edited = text.replacen(
+                    "</svg>",
+                    "<circle cx=\"50%\" cy=\"50%\" r=\"60\" fill=\"#e5484d\" opacity=\"0.8\"/></svg>",
+                    1,
+                );
+                editor.replace(&path, version, edited);
+            }
+            app.act("markdown.toggle");
+        }
+        6475 => {
+            eprintln!(
+                "book: the SVG after an unsaved edit: shown {}",
+                shell.get_picture_shown()
+            );
+            photo("svg-edited.png");
+        }
+        6476 => app.open_file(format!("{}figures/broken.png", folder())),
+        6477 => picture_ready("a broken PNG"),
+        6480 => {
+            photo("picture-broken.png");
+            // The file mended on disk, as another program would: a picture
+            // half transparent, so the ground shows through. The watcher
+            // brings it in.
+            if let Some(root) = app.root_path() {
+                let path = root.join(format!("{}figures/broken.png", folder()));
+                let mended = image::RgbaImage::from_fn(240, 160, |x, y| {
+                    image::Rgba([
+                        (x * 255 / 240) as u8,
+                        90,
+                        (y * 255 / 160) as u8,
+                        (x * 255 / 240) as u8,
+                    ])
+                });
+                if let Err(e) = mended.save(&path) {
+                    eprintln!("book: could not mend {}: {e}", path.display());
+                }
+            }
+        }
+        6481 => {
+            if !shell.get_picture_shown() && waited.get() < 500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            eprintln!(
+                "book: the PNG mended on disk: shown {} info {:?}",
+                shell.get_picture_shown(),
+                shell.get_picture_info()
+            );
+        }
+        6482 => photo("picture-mended.png"),
+        6483 => app.open_file(format!("{}G-symbols.md", folder())),
+        6485 => {
+            // Read off the UI thread: the table is in front once its tab is.
+            let opened = app
+                .editor()
+                .current_path()
+                .is_some_and(|path| path.ends_with("G-symbols.md"));
+            if !opened && waited.get() < 1500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            settle("the symbol table");
+        }
+        6490 => photo("symbols-light.png"),
+        6491 => shell.set_theme_choice("dark".into()),
+        6494 => photo("symbols-dark.png"),
+        6495 => scroll(-2500.0),
+        6499 => photo("symbols-dark-2.png"),
+        // The page under the touch laid over it (`pages.slint`): a link in a
+        // paragraph laid out round formulas still answers a click, a refused
+        // formula's reason still shows on the pointer, and Ctrl and the wheel
+        // size the formulas with the text — on a page written for it.
+        6500 => {
+            if let Some(root) = app.root_path() {
+                let page = "[probe link](https://example.invalid/rusty-book) beside \
+                    $a^2 + b^2 = c^2$ and $\\undefinedmacro x$ in one line.\n\n\
+                    $$\\int_0^1 x^2\\,dx = \\frac{1}{3}$$\n";
+                let path = root.join(format!("{}rusty-probe-page.md", folder()));
+                if let Err(e) = std::fs::write(&path, page) {
+                    eprintln!("book: could not write {}: {e}", path.display());
+                }
+            }
+            shell.set_theme_choice("light".into());
+            shell.on_open_link(|link| {
+                BOOK_LINK.with(|heard| *heard.borrow_mut() = Some(link.to_string()));
+            });
+        }
+        6501 => app.open_file(format!("{}rusty-probe-page.md", folder())),
+        6502 => {
+            let opened = app
+                .editor()
+                .current_path()
+                .is_some_and(|path| path.ends_with("rusty-probe-page.md"));
+            if !(opened && shell.get_md_page()) && waited.get() < 1500 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            settle("the probe's page");
+        }
+        6505 => {
+            eprintln!(
+                "book: at page zoom {}: {}",
+                shell.get_page_zoom(),
+                page_sizes(&shell)
+            );
+            photo("page-zoom-1.png");
+        }
+        6506 | 6516 => {
+            // Down the first line's height a few pixels at a time, on the
+            // link's words, until the click reaches it.
+            let heard = BOOK_LINK.with(|heard| heard.borrow_mut().take());
+            if heard.is_none() && waited.get() < 16 {
+                let (x, top) = page_origin(window, &shell);
+                let y = top + 2.0 + waited.get() as f32 * 3.0;
+                click_at(window, x + 20.0, y);
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            eprintln!(
+                "book: a click on the flowing paragraph's link at page zoom {} reached {heard:?}",
+                shell.get_page_zoom()
+            );
+        }
+        6507 => {
+            // The pointer on the refused formula's source, in the line's
+            // middle: its reason is the tip, though the touch over the page
+            // takes every move.
+            let piece = shell
+                .get_md_blocks()
+                .row_data(0)
+                .and_then(|block| block.flow.row_data(0))
+                .and_then(|line| {
+                    line.pieces
+                        .iter()
+                        .find(|piece| piece.kind == 2)
+                        .map(|piece| (piece.x, line.height))
+                });
+            let Some((at, height)) = piece else {
+                eprintln!("book: no refused formula on the probe's page");
+                return;
+            };
+            let (x, top) = page_origin(window, &shell);
+            window.window().dispatch_event(WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(x + at + 8.0, top + height / 2.0),
+            });
+        }
+        6508 => {
+            let tip = window.global::<crate::Tip>();
+            if !tip.get_shown() && waited.get() < 60 {
+                waited.set(waited.get() + 1);
+                step.set(n);
+                return;
+            }
+            waited.set(0);
+            eprintln!(
+                "book: the refused formula under the pointer: tip shown {} {:?}",
+                tip.get_shown(),
+                tip.get_text()
+            );
+            photo("page-tip.png");
+        }
+        6509 => {
+            // Two notches up with Ctrl held, over the page.
+            let (x, top) = page_origin(window, &shell);
+            ctrl_wheel(window, x + 200.0, top + 200.0, 120.0);
+        }
+        6512 => {
+            eprintln!(
+                "book: at page zoom {}: {}",
+                shell.get_page_zoom(),
+                page_sizes(&shell)
+            );
+            photo("page-zoom-1.2.png");
+        }
+        6520 => {
+            app.open_file(format!("{}figures/fig-16-e1mini.png", folder()));
+        }
+        6521 => picture_ready("the PNG again"),
+        6522 => {
+            // Ctrl and the wheel over a picture are the picture's zoom, and
+            // the page's text keeps its size.
+            let size = window
+                .window()
+                .size()
+                .to_logical(window.window().scale_factor());
+            ctrl_wheel(window, size.width * 0.62, size.height * 0.5, 120.0);
+        }
+        6524 => {
+            eprintln!(
+                "book: Ctrl and the wheel over the picture: info {:?}, the page zoom still {}",
+                shell.get_picture_info(),
+                shell.get_page_zoom()
+            );
+            // The picture's own menu, and its tab's.
+            let size = window
+                .window()
+                .size()
+                .to_logical(window.window().scale_factor());
+            let position = slint::LogicalPosition::new(size.width * 0.62, size.height * 0.5);
+            let button = PointerEventButton::Right;
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerMoved { position });
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerPressed { position, button });
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerReleased { position, button });
+        }
+        6526 => {
+            eprintln!(
+                "book: the picture's menu: open {} {:?}",
+                shell.get_menu_open(),
+                menu_rows(&shell)
+            );
+            photo("picture-menu.png");
+            shell.invoke_menu_dismissed();
+            let id = format!("picture:{}figures/fig-16-e1mini.png", folder());
+            shell.invoke_tab_menu(id.into(), false, 420.0, 60.0);
+        }
+        6528 => {
+            eprintln!(
+                "book: the picture tab's menu: open {} {:?}",
+                shell.get_menu_open(),
+                menu_rows(&shell)
+            );
+            photo("picture-tab-menu.png");
+            shell.invoke_menu_dismissed();
+            app.act("page.zoom-reset");
+        }
+        6530 => {
+            eprintln!("book: Reset page zoom: {}", shell.get_page_zoom());
+            app.act("app.exit");
+        }
+        _ => {}
+    }
+}
+
+thread_local! {
+    /// The link a click on the book probe's page reached, heard instead of
+    /// a browser opening it.
+    static BOOK_LINK: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Where a Markdown page's column begins across and its first block down,
+/// in the window: past the left dock, centred as `pages.slint` centres it at
+/// the page's zoom, under the title bar, the tab strip and the page's top.
+fn page_origin(window: &AppWindow, shell: &Shell) -> (f32, f32) {
+    let left = if shell.get_left_open() {
+        shell.get_left_size() + 1.0
+    } else {
+        0.0
+    };
+    let right = if shell.get_right_open() {
+        window.get_laid_width() - shell.get_right_size() - 1.0
+    } else {
+        window.get_laid_width()
+    };
+    let column = f32::max(32.0, (right - left - 820.0 * shell.get_page_zoom()) / 2.0);
+    (left + column, 41.0 + 36.0 + 28.0)
+}
+
+/// A left click at a point of the window.
+fn click_at(window: &AppWindow, x: f32, y: f32) {
+    let position = slint::LogicalPosition::new(x, y);
+    let button = PointerEventButton::Left;
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed { position, button });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased { position, button });
+}
+
+/// The wheel turned at a point with Ctrl held.
+fn ctrl_wheel(window: &AppWindow, x: f32, y: f32, delta: f32) {
+    let position = slint::LogicalPosition::new(x, y);
+    let window = window.window();
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Control.into(),
+    });
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: delta,
+    });
+    window.dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Control.into(),
+    });
+}
+
+/// What sizes the probe's page drew its formulas at: each inline formula's
+/// width and height on the first block's first line, the line's height,
+/// and the display formula's box in ems of the text.
+fn page_sizes(shell: &Shell) -> String {
+    let blocks = shell.get_md_blocks();
+    let inline: Vec<String> = blocks
+        .row_data(0)
+        .and_then(|block| block.flow.row_data(0))
+        .map(|line| {
+            let mut sizes: Vec<String> = line
+                .pieces
+                .iter()
+                .filter(|piece| piece.kind == 1)
+                .map(|piece| format!("{:.1}x{:.1}", piece.w, piece.h))
+                .collect();
+            sizes.push(format!("line {:.1}", line.height));
+            sizes
+        })
+        .unwrap_or_default();
+    let display: Vec<String> = blocks
+        .iter()
+        .filter(|block| block.kind == 6)
+        .map(|block| format!("{:.2}x{:.2} em", block.mw, block.mh))
+        .collect();
+    format!("inline {inline:?}, display {display:?}")
 }
 
 /// The marks of `kind` on the code view's rows: each row's line number and

@@ -1,9 +1,97 @@
 // Markdown's blocks, drawn: paragraphs and list items as styled text,
-// headings, code in the editor's colours, quotes, rules and tables. Read in
-// `src/markdown.rs`, made rows in `src/app/markdown_view.rs`.
+// headings, code in the editor's colours, quotes, rules, tables, pictures
+// and formulas. Read in `src/markdown.rs`, made rows in
+// `src/app/markdown_view.rs`.
 
 import { Theme } from "theme.slint";
-import { Shell, MdBlock } from "shell.slint";
+import { Shell, MdBlock, MdLine } from "shell.slint";
+import { Tip } from "widgets.slint";
+
+// Where the pointer is over a Markdown page read as a page. The touch laid
+// over that page (`pages.slint`) hears Ctrl and the wheel and the right
+// button, and so takes every move: nothing under it is hovered, and a tip
+// there asks this instead.
+export global PagePointer {
+    in-out property <bool> inside;
+    in-out property <length> x;
+    in-out property <length> y;
+}
+
+// Says `tip` when the pointer rests on what it covers — hovered itself, or
+// under the page's pointer.
+component TipArea inherits TouchArea {
+    in property <string> tip;
+    property <bool> pointed: self.has-hover || (PagePointer.inside && PagePointer.x >= self.absolute-position.x && PagePointer.x < self.absolute-position.x + self.width && PagePointer.y >= self.absolute-position.y && PagePointer.y < self.absolute-position.y + self.height);
+    changed pointed => {
+        if (!self.pointed) {
+            Tip.shown = false;
+        }
+    }
+    Timer {
+        interval: 600ms;
+        running: root.pointed && root.tip != "" && !Tip.shown;
+        triggered => {
+            Tip.text = root.tip;
+            Tip.x = root.absolute-position.x;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
+        }
+    }
+}
+
+// A paragraph that holds a formula: lines Rust broke it into for the width
+// and text size this reports — when it appears and whenever either changes
+// — each piece placed on the line's baseline. Its own width is whatever the
+// layout gives it, never what its text would like.
+component Flow inherits VerticalLayout {
+    in property <[MdLine]> lines;
+    in property <int> key;
+    in property <length> font-size;
+    in property <brush> color;
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    init => {
+        Shell.md-flow-width(root.key, root.width, root.font-size);
+    }
+    changed width => {
+        Shell.md-flow-width(root.key, root.width, root.font-size);
+    }
+    changed font-size => {
+        Shell.md-flow-width(root.key, root.width, root.font-size);
+    }
+    for line in root.lines: Rectangle {
+        height: line.height;
+        min-width: 0px;
+        preferred-width: 0px;
+        for piece in line.pieces: Rectangle {
+            x: piece.x;
+            y: piece.y;
+            width: piece.w;
+            height: piece.kind == 1 ? piece.h : text.preferred-height;
+            if piece.kind == 1: Image {
+                width: parent.width;
+                height: parent.height;
+                source: piece.image;
+                colorize: root.color;
+            }
+            text := StyledText {
+                visible: piece.kind != 1;
+                width: parent.width;
+                text: piece.text;
+                default-color: root.color;
+                default-font-size: root.font-size;
+                link-color: Theme.slate;
+                link-clicked(link) => {
+                    Shell.open-link(link);
+                }
+            }
+            if piece.kind == 2: TipArea {
+                tip: piece.tip;
+            }
+        }
+    }
+}
 
 export component MarkdownView inherits VerticalLayout {
     in property <[MdBlock]> blocks;
@@ -11,7 +99,7 @@ export component MarkdownView inherits VerticalLayout {
     spacing: 8px;
     for block in root.blocks: VerticalLayout {
         // Text, indented for the quotes and lists it is in.
-        if block.kind == 0: HorizontalLayout {
+        if block.kind == 0 && !block.caption: HorizontalLayout {
             padding-left: block.quote * 12px + max(0, block.depth - 1) * 16px;
             spacing: 6px;
             if block.quote > 0: Rectangle {
@@ -26,7 +114,7 @@ export component MarkdownView inherits VerticalLayout {
                 font-size: root.font-size;
                 horizontal-alignment: right;
             }
-            StyledText {
+            if !block.flowing: StyledText {
                 horizontal-stretch: 1;
                 text: block.text;
                 default-color: block.quote > 0 ? Theme.label-2 : Theme.label;
@@ -36,14 +124,49 @@ export component MarkdownView inherits VerticalLayout {
                     Shell.open-link(link);
                 }
             }
+            if block.flowing: Flow {
+                lines: block.flow;
+                key: block.key;
+                font-size: root.font-size;
+                color: block.quote > 0 ? Theme.label-2 : Theme.label;
+            }
+        }
+        // A figure's caption: under its picture, centred, quieter.
+        if block.kind == 0 && block.caption: HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            if !block.flowing: StyledText {
+                horizontal-stretch: 1;
+                text: block.text;
+                default-color: Theme.label-2;
+                default-font-size: root.font-size * 0.92;
+                horizontal-alignment: center;
+                link-color: Theme.slate;
+                link-clicked(link) => {
+                    Shell.open-link(link);
+                }
+            }
+            if block.flowing: Flow {
+                lines: block.flow;
+                key: block.key;
+                font-size: root.font-size * 0.92;
+                color: Theme.label-2;
+            }
         }
         if block.kind == 1: VerticalLayout {
             padding-top: block.level <= 2 ? 6px : 2px;
-            StyledText {
+            property <length> size: block.level == 1 ? root.font-size * 1.6 : block.level == 2 ? root.font-size * 1.35 : block.level == 3 ? root.font-size * 1.15 : root.font-size;
+            if !block.flowing: StyledText {
                 text: block.text;
                 default-color: Theme.label;
-                default-font-size: block.level == 1 ? root.font-size * 1.6 : block.level == 2 ? root.font-size * 1.35 : block.level == 3 ? root.font-size * 1.15 : root.font-size;
+                default-font-size: parent.size;
                 link-color: Theme.slate;
+            }
+            if block.flowing: Flow {
+                lines: block.flow;
+                key: block.key;
+                font-size: parent.size;
+                color: Theme.label;
             }
         }
         if block.kind == 2: Rectangle {
@@ -72,23 +195,89 @@ export component MarkdownView inherits VerticalLayout {
         if block.kind == 5 && block.shown: VerticalLayout {
             spacing: 4px;
             alignment: start;
-            // Its own size when that fits, smaller and whole when not.
-            Image {
-                source: block.image;
-                min-width: 0px;
-                max-width: self.source.width * 1px;
-                max-height: min(480px, self.source.height * 1px);
-                image-fit: contain;
-                horizontal-alignment: left;
+            // Its own size when that fits, smaller and whole when not, never
+            // taller than a screenful; a figure's centred. Sized here: left
+            // to the layout, every figure of a chapter was drawn zero pixels
+            // tall, its caption standing under nothing.
+            Rectangle {
+                property <length> natural-w: max(1px, block.image.width * 1px);
+                property <length> natural-h: max(1px, block.image.height * 1px);
+                property <float> fit: min(1, min(self.width / self.natural-w, 480px / self.natural-h));
+                height: self.natural-h * self.fit;
+                Image {
+                    x: block.figure ? (parent.width - self.width) / 2 : 0px;
+                    width: parent.natural-w * parent.fit;
+                    height: parent.height;
+                    source: block.image;
+                }
             }
-            if block.marker != "": Text {
+            if block.marker != "" && !block.figure: Text {
                 text: block.marker;
                 color: Theme.label-3;
                 font-size: root.font-size * 0.9;
                 wrap: word-wrap;
             }
         }
-        if block.kind == 5 && !block.shown: Text {
+        // A picture not shown: the words that stand in for it, and why on
+        // the pointer.
+        if block.kind == 5 && !block.shown: HorizontalLayout {
+            alignment: block.figure ? center : start;
+            Rectangle {
+                min-width: 0px;
+                preferred-width: alt.preferred-width;
+                min-height: alt.preferred-height;
+                alt := Text {
+                    width: parent.width;
+                    text: block.marker;
+                    color: Theme.label-3;
+                    font-size: root.font-size * 0.9;
+                    font-italic: true;
+                    wrap: word-wrap;
+                }
+                TipArea {
+                    tip: block.tip;
+                }
+            }
+        }
+        // A formula set apart: centred, at its own size when that fits and
+        // shrunk to the column when not, in the text's colour.
+        if block.kind == 6 && block.shown: VerticalLayout {
+            padding-top: 4px;
+            padding-bottom: 4px;
+            padding-left: block.quote * 12px;
+            Rectangle {
+                property <length> natural: block.mw * root.font-size;
+                property <float> fit: min(1, self.width / max(1px, self.natural));
+                height: block.mh * root.font-size * self.fit;
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    width: parent.natural * parent.fit;
+                    height: parent.height;
+                    source: block.image;
+                    colorize: block.quote > 0 ? Theme.label-2 : Theme.label;
+                }
+            }
+        }
+        // A formula not drawn: its source, and why on the pointer.
+        if block.kind == 6 && !block.shown: HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                min-width: 0px;
+                preferred-width: source.preferred-width;
+                min-height: source.preferred-height;
+                source := StyledText {
+                    width: parent.width;
+                    text: block.text;
+                    default-color: Theme.label-2;
+                    default-font-size: root.font-size;
+                }
+                TipArea {
+                    tip: block.tip;
+                }
+            }
+        }
+        // Markup the page does not run, named.
+        if block.kind == 7: Text {
             text: block.marker;
             color: Theme.label-3;
             font-size: root.font-size * 0.9;
@@ -113,10 +302,16 @@ export component MarkdownView inherits VerticalLayout {
                         border-color: Theme.line;
                         VerticalLayout {
                             padding: 6px;
-                            StyledText {
+                            if !cell.flowing: StyledText {
                                 text: cell.text;
                                 default-color: Theme.label;
                                 default-font-size: root.font-size;
+                            }
+                            if cell.flowing: Flow {
+                                lines: cell.flow;
+                                key: cell.key;
+                                font-size: root.font-size;
+                                color: Theme.label;
                             }
                         }
                     }
