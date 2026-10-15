@@ -38,6 +38,12 @@ export struct Row {
     breakpoint: int,
     // The debugger stopped here.
     stopped: bool,
+    // A lens on the line: 1 a test, 3 a module of them (Run | Debug), 2 an
+    // example's main (Run); where it starts; and the last run's
+    // verdict, 1 passed, 2 failed.
+    lens: int,
+    lens-x: length,
+    verdict: int,
 }
 
 // A row of the completion popup: what it inserts, the note beside it, its
@@ -95,6 +101,8 @@ export global Code {
     callback hovered(int /* row */, length /* x */, length /* y */);
     // A click beside a line's number: a breakpoint there, or none.
     callback toggle-breakpoint(int /* row */);
+    // A lens's verb on a row: "run" or "debug".
+    callback lens(int /* row */, string /* verb */);
 
     // The completion popup: under which line, from where along it, the
     // rows drawn and which the keys are on, and how many there are in all.
@@ -669,15 +677,16 @@ export component CodeView inherits Rectangle {
             }
             for mark in row.marks: Rectangle {
                 x: root.gutter + mark.x;
-                y: mark.kind == 1 ? 2px : mark.kind >= 5 ? parent.height - 4px : 0;
-                // A caret, and a match of nothing (`^`), are a bar.
-                width: mark.kind == 1 ? 2px : max(mark.width, 2px);
-                height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 ? 3px : parent.height;
-                background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind >= 5 ? transparent : Theme.text-selection;
+                y: mark.kind == 1 ? 2px : mark.kind >= 5 && mark.kind <= 7 ? parent.height - 4px : 0;
+                // A caret, and a match of nothing (`^`), are a bar; an
+                // indent guide (8) a hairline.
+                width: mark.kind == 1 ? 2px : mark.kind == 8 ? 1px : max(mark.width, 2px);
+                height: mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : parent.height;
+                background: mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind >= 5 ? transparent : Theme.text-selection;
                 // Drawn where the commands say: the default fit scales a
                 // path into its box less the stroke, and a wave 3 px tall
                 // shrank to two thirds of its width, centred.
-                if mark.kind >= 5: Path {
+                if mark.kind >= 5 && mark.kind <= 7: Path {
                     width: parent.width;
                     height: parent.height;
                     fit: preserve;
@@ -762,6 +771,49 @@ export component CodeView inherits Rectangle {
                 changed has-hover => {
                     if (!self.has-hover) {
                         Code.hovered(-1, 0, 0);
+                    }
+                }
+            }
+            // ▶ Run Test | Debug beside a test, where VS Code puts it; the
+            // last run's verdict before it.
+            if row.lens > 0: HorizontalLayout {
+                x: root.gutter + row.lens-x;
+                height: parent.height;
+                spacing: 4px;
+                if row.verdict > 0: Text {
+                    text: row.verdict == 1 ? "✓" : "✗";
+                    color: row.verdict == 1 ? Theme.patina : Theme.crimson;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: row.lens == 2 ? @tr("files.lens-run") : row.lens == 3 ? @tr("files.lens-run-tests") : @tr("files.lens-run-test");
+                    color: run-touch.has-hover ? Theme.rust : Theme.label-3;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                    run-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Code.lens(index, "run");
+                        }
+                    }
+                }
+                if row.lens != 2: Text {
+                    text: "|";
+                    color: Theme.label-4;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                }
+                if row.lens != 2: Text {
+                    text: @tr("files.lens-debug");
+                    color: debug-touch.has-hover ? Theme.rust : Theme.label-3;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                    debug-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Code.lens(index, "debug");
+                        }
                     }
                 }
             }

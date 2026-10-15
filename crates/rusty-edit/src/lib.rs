@@ -19,6 +19,10 @@ pub mod modules;
 pub mod tests_in;
 
 pub use fold::{Folded, Region};
+pub mod guides;
+pub mod lens;
+/// What a test harness said: each test's verdict, each failure's place.
+pub mod testrun;
 pub use model::*;
 pub use tests_in::{Runnable, RunnableKind};
 

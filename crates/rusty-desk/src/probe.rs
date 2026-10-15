@@ -92,6 +92,7 @@ pub fn start(window: &AppWindow) {
     let sums = std::env::var_os("RUSTY_PROBE_MATH").is_some();
     let cloning = std::env::var_os("RUSTY_PROBE_CLONE").map(PathBuf::from);
     let following = std::env::var_os("RUSTY_PROBE_WATCH").is_some();
+    let lenses = std::env::var_os("RUSTY_PROBE_LENS").is_some();
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -225,6 +226,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if following {
                     step.set(1900);
+                }
+                if lenses {
+                    step.set(2300);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -762,6 +766,39 @@ pub fn start(window: &AppWindow) {
                     return;
                 }
                 eprintln!("watch: reloaded {reloaded} after {} ticks; draft {:?}", waited.get(), draft());
+                app.act("app.exit");
+            }
+            // The lenses of a file with tests: listed, one run, its verdict.
+            2300 if lenses => {
+                let found: Vec<(usize, i32)> = code
+                    .get_rows()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.lens > 0)
+                    .map(|(i, r)| (i, r.lens))
+                    .collect();
+                eprintln!("lens: rows {found:?}");
+                if let Some((row, _)) = found.iter().find(|(_, kind)| *kind == 1) {
+                    code.invoke_lens(*row as i32, "run".into());
+                    waited.set(*row as u32);
+                }
+            }
+            2301 if lenses => {
+                if app.runner().is_running() {
+                    step.set(2301);
+                }
+            }
+            2310 if lenses => {
+                let row = waited.get() as usize;
+                let verdicts: Vec<(usize, i32)> = code
+                    .get_rows()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.lens > 0)
+                    .map(|(i, r)| (i, r.verdict))
+                    .collect();
+                eprintln!("lens: after the run of row {row}, verdicts {verdicts:?}");
+                snapshot(&window, &dir.join("lens.png"));
                 app.act("app.exit");
             }
             // An example that draws, run as its lens runs it.
@@ -1352,7 +1389,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",

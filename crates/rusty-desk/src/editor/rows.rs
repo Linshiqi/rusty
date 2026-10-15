@@ -24,7 +24,21 @@ pub struct Rows {
     problems: Problems,
     gutter: Rc<RefCell<Gutter>>,
     notify: ModelNotify,
+    /// Each line's indent guides, for the document and version they are of:
+    /// counted for the whole text at once, since a blank line takes its
+    /// neighbours', and kept until the text changes.
+    levels: ByVersion<Vec<u8>>,
+    /// The lenses of the document and version they are of: the line each is
+    /// drawn on, and what it runs.
+    lenses: ByVersion<Lenses>,
 }
+
+/// Something worked out from one version of one document, kept until the
+/// text changes.
+type ByVersion<T> = RefCell<Option<(String, u64, Rc<T>)>>;
+
+/// What a file can run, by the line each lens is drawn on.
+pub type Lenses = std::collections::BTreeMap<u32, rusty_edit::Runnable>;
 
 /// What the margin shows besides the numbers: each file's breakpoints —
 /// placed, or asked for where the debugger found no code — and the line the
@@ -33,6 +47,14 @@ pub struct Rows {
 pub struct Gutter {
     pub breakpoints: std::collections::BTreeMap<String, std::collections::BTreeMap<u32, bool>>,
     pub stopped: Option<(String, u32)>,
+    /// Whether an example's `main` gets ▶ Run: not where `cargo run` would
+    /// flash a board — a root that is its own firmware, or inside the
+    /// excluded firmware crate (`firmware`).
+    pub runs_examples: bool,
+    pub firmware: Option<String>,
+    /// The last run's verdicts, by the harness's name for each test; a
+    /// lens finds its own by its file's module path.
+    pub verdicts: std::collections::HashMap<String, rusty_edit::testrun::Verdict>,
 }
 
 impl Gutter {
@@ -60,7 +82,65 @@ impl Rows {
             problems,
             gutter,
             notify: ModelNotify::default(),
+            levels: RefCell::default(),
+            lenses: RefCell::default(),
         }
+    }
+
+    /// The lenses of `doc`, found once per version: a test, a module of
+    /// them, or an example's `main` where running it runs it here.
+    pub fn lenses(&self, doc: &Document) -> Rc<Lenses> {
+        let mut cached = self.lenses.borrow_mut();
+        if let Some((path, version, lenses)) = cached.as_ref()
+            && *path == doc.path
+            && *version == doc.version
+        {
+            return lenses.clone();
+        }
+        let mut found = Lenses::new();
+        if doc.path.ends_with(".rs") {
+            let lines: Vec<&str> = doc.text.split('\n').collect();
+            for runnable in rusty_edit::tests_in::runnables(&doc.text) {
+                if let Some(line) = rusty_edit::lens::lens_line(&lines, runnable.line) {
+                    found.insert(line, runnable);
+                }
+            }
+            let gutter = self.gutter.borrow();
+            let inside_firmware = gutter
+                .firmware
+                .as_ref()
+                .is_some_and(|dir| doc.path.starts_with(&format!("{dir}/")));
+            if gutter.runs_examples
+                && !inside_firmware
+                && let Some(main) = rusty_edit::tests_in::example_main(&doc.path, &doc.text)
+            {
+                found.insert(main.line, main);
+            }
+        }
+        let found = Rc::new(found);
+        *cached = Some((doc.path.clone(), doc.version, found.clone()));
+        found
+    }
+
+    /// What the lens on `row` of the document on screen runs.
+    pub fn runnable_at(&self, row: usize) -> Option<rusty_edit::Runnable> {
+        let doc = self.doc.borrow().clone()?;
+        let doc = doc.borrow();
+        self.lenses(&doc).get(&(row as u32)).cloned()
+    }
+
+    /// The indent guides of `doc`, counted once per version.
+    fn levels(&self, doc: &Document) -> Rc<Vec<u8>> {
+        let mut cached = self.levels.borrow_mut();
+        if let Some((path, version, levels)) = cached.as_ref()
+            && *path == doc.path
+            && *version == doc.version
+        {
+            return levels.clone();
+        }
+        let levels = Rc::new(rusty_edit::guides::indent_levels(&doc.text));
+        *cached = Some((doc.path.clone(), doc.version, levels.clone()));
+        levels
     }
 
     /// Another document is on screen, or too much changed to name: every
@@ -126,21 +206,57 @@ impl Model for Rows {
             .stopped
             .as_ref()
             .is_some_and(|(path, at)| *path == doc.path && *at == line);
+        // A lens after everything on its line.
+        let lenses = self.lenses(&doc);
+        let (lens, lens_x, verdict) = match lenses.get(&line) {
+            Some(runnable) => {
+                let end = metrics.x_of(text, text.chars().count());
+                let kind = match runnable.kind {
+                    rusty_edit::RunnableKind::Test => 1,
+                    rusty_edit::RunnableKind::Example => 2,
+                    rusty_edit::RunnableKind::Module => 3,
+                };
+                let verdict = match rusty_edit::testrun::verdict_of_lens(
+                    &gutter.verdicts,
+                    &doc.path,
+                    &runnable.filter,
+                    runnable.kind == rusty_edit::RunnableKind::Module,
+                ) {
+                    Some(rusty_edit::testrun::Verdict::Passed) => 1,
+                    Some(rusty_edit::testrun::Verdict::Failed) => 2,
+                    _ => 0,
+                };
+                (kind, end + metrics.ascii() * 3.0, verdict)
+            }
+            None => (0, 0.0, 0),
+        };
         Some(Row {
             number: row as i32 + 1,
             breakpoint,
             stopped,
+            lens,
+            lens_x,
+            verdict,
             pieces: ModelRc::new(VecModel::from(pieces)),
-            marks: ModelRc::new(VecModel::from(marks(
-                &doc,
-                &metrics,
-                &self.found.borrow(),
-                self.problems
-                    .borrow()
-                    .get(&doc.path)
-                    .map_or(&[][..], Vec::as_slice),
-                row,
-            ))),
+            marks: ModelRc::new(VecModel::from({
+                // The guides first: everything else is drawn over them.
+                let level = self.levels(&doc).get(row).copied().unwrap_or(0);
+                let tab = rusty_edit::guides::TAB_SIZE as f32 * metrics.ascii();
+                let mut all: Vec<Mark> = (0..level)
+                    .map(|k| mark(f32::from(k) * tab, 1.0, 8))
+                    .collect();
+                all.extend(marks(
+                    &doc,
+                    &metrics,
+                    &self.found.borrow(),
+                    self.problems
+                        .borrow()
+                        .get(&doc.path)
+                        .map_or(&[][..], Vec::as_slice),
+                    row,
+                ));
+                all
+            })),
         })
     }
 
@@ -258,6 +374,9 @@ pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
         number: 0,
         breakpoint: 0,
         stopped: false,
+        lens: 0,
+        lens_x: 0.0,
+        verdict: 0,
         pieces: ModelRc::new(VecModel::from(pieces)),
         marks: ModelRc::default(),
     }

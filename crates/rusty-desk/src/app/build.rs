@@ -53,6 +53,7 @@ impl App {
             (path, place.line as i32 - 1, place.col as i32 - 1)
         });
         self.runner.say_at(text, run::kind_of(text), place);
+        self.testing_heard(text);
         if self.activity_kind() == Some(Kind::Build) {
             let found = self.state.borrow_mut().build_log.reader.read(text);
             if let Some(mut found) = found

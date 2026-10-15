@@ -67,6 +67,7 @@ type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
 /// Who is told when the caret moves.
 type OnCaret = RefCell<Option<Box<dyn Fn()>>>;
 type OnBreakpoint = RefCell<Option<Box<dyn Fn(String, u32)>>>;
+type OnLens = RefCell<Option<Box<dyn Fn(rusty_edit::Runnable, String)>>>;
 
 /// A press being dragged: what the press itself selected — a point, a word
 /// or a line — which every move extends from.
@@ -111,6 +112,8 @@ pub struct Surface {
     gutter: Rc<RefCell<Gutter>>,
     /// Told the line a click beside its number asked a breakpoint for.
     on_breakpoint: OnBreakpoint,
+    /// Told what a lens's verb asked to run.
+    on_lens: OnLens,
     window: slint::Weak<AppWindow>,
     on_edit: OnEdit,
     on_caret: OnCaret,
@@ -166,6 +169,7 @@ impl Surface {
             rows,
             gutter,
             on_breakpoint: RefCell::default(),
+            on_lens: RefCell::default(),
             window: window.as_weak(),
             on_edit: RefCell::default(),
             on_caret: RefCell::default(),
@@ -193,6 +197,28 @@ impl Surface {
 
     /// Who decides what a click beside a line's number does: the debugger
     /// holds the breakpoints.
+    /// What a lens runs, and which verb: `run` or `debug`.
+    pub fn on_lens(&self, tell: impl Fn(rusty_edit::Runnable, String) + 'static) {
+        *self.on_lens.borrow_mut() = Some(Box::new(tell));
+    }
+
+    /// The last run's verdicts, by test filter; the lenses redrawn.
+    pub fn set_verdicts(
+        &self,
+        verdicts: std::collections::HashMap<String, rusty_edit::testrun::Verdict>,
+    ) {
+        self.gutter.borrow_mut().verdicts = verdicts;
+        self.rows.reset();
+    }
+
+    /// Where an example's `main` may be run from: not a root that is its own
+    /// firmware, and not inside the excluded firmware crate.
+    pub fn set_examples(&self, runs: bool, firmware: Option<String>) {
+        let mut gutter = self.gutter.borrow_mut();
+        gutter.runs_examples = runs;
+        gutter.firmware = firmware;
+    }
+
     pub fn on_breakpoint(&self, tell: impl Fn(String, u32) + 'static) {
         *self.on_breakpoint.borrow_mut() = Some(Box::new(tell));
     }
@@ -566,6 +592,16 @@ impl Surface {
         code.on_completion_pick(move |row| {
             if let Some(this) = this.upgrade() {
                 this.completion_pick(row as usize);
+            }
+        });
+        let this = Rc::downgrade(self);
+        code.on_lens(move |row, verb| {
+            let Some(this) = this.upgrade() else { return };
+            let Some(runnable) = this.rows.runnable_at(row.max(0) as usize) else {
+                return;
+            };
+            if let Some(tell) = this.on_lens.borrow().as_ref() {
+                tell(runnable, verb.to_string());
             }
         });
         let this = Rc::downgrade(self);

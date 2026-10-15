@@ -92,6 +92,7 @@ pub const ALL: &[Action] = &[
     action("run.run", "desk.run", Some("Ctrl+F5")),
     action("run.stop", "toolbar.stop", Some("Shift+F5")),
     action("run.build", "toolbar.build", Some("Ctrl+Shift+B")),
+    action("run.test", "menu.project.test", None),
     action("run.flash", "toolbar.flash", Some("Ctrl+U")),
     action("run.monitor", "menu.device.monitor", Some("Ctrl+Shift+M")),
     action("run.debug", "toolbar.debug", Some("F5")),

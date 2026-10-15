@@ -51,6 +51,7 @@ mod servers;
 mod sheet;
 mod sim;
 mod terminal;
+mod testing;
 mod watch;
 mod waves;
 mod wizard;
@@ -168,6 +169,7 @@ struct State {
     /// Markdown files shown as their source rather than as a page.
     markdown_source: HashSet<String>,
     watching: watch::Watching,
+    testing: testing::Testing,
     term: terminal::Term,
 }
 
@@ -568,6 +570,12 @@ impl App {
             }
         });
         let weak = Rc::downgrade(self);
+        self.editor.on_lens(move |runnable, verb| {
+            if let Some(app) = weak.upgrade() {
+                app.lens(runnable, &verb);
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.editor.on_edit(move |path| {
             if let Some(app) = weak.upgrade() {
                 app.sync_tabs();
@@ -598,6 +606,7 @@ impl App {
             "environment.install-missing" => self.install_missing(),
             "project.new" => self.open_wizard(),
             "project.clone" => self.clone_act("open"),
+            "run.test" => self.run_test(String::new()),
             other if other.starts_with("clone.") => self.clone_act(&other["clone.".len()..]),
             "playground.reset" => self.reset_playground(),
             "playground.keep" => self.keep_playground(),
@@ -775,6 +784,17 @@ impl App {
         }
         self.sync_all();
         self.sync_problems();
+        // Where an example's main may run: not where `cargo run` flashes.
+        {
+            let state = self.state.borrow();
+            let embedded = state
+                .project
+                .as_ref()
+                .and_then(|p| p.embedded.as_ref().ok());
+            let runs = embedded.is_none_or(|e| !e.root_is_firmware());
+            let firmware = embedded.and_then(|e| e.firmware_dir.clone());
+            self.editor.set_examples(runs, firmware);
+        }
         self.start_servers();
         self.watch_project();
         self.probe_environment();

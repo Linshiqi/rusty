@@ -163,7 +163,7 @@ impl App {
 
     /// A session started: hold it, and read its states on a thread of their
     /// own until it ends.
-    fn debug_own(self: &Rc<Self>, session: AnySession, events: Events) {
+    pub(super) fn debug_own(self: &Rc<Self>, session: AnySession, events: Events) {
         let epoch = {
             let mut state = self.state.borrow_mut();
             let debug = &mut state.debug;
