@@ -1,13 +1,13 @@
 //! rusty updating itself: the release feed, whether it offers anything
 //! newer, and whether a download is what the release was signed as.
 //!
-//! The feed is `latest.json` on the newest GitHub release — the format the
-//! Tauri updater polled, kept so that a copy of rusty from before the window
-//! moved to Slint finds, verifies and installs this one: `version`, `notes`
-//! (the release's CHANGELOG section), `pub_date`, and per platform the
-//! artifact's `url` and its minisign `signature`, base64 of the signature
-//! file. The key is the one those copies carry ([`PUBLIC_KEY`]); the release
-//! workflow signs with its secret half.
+//! The feed is [`FEED_FILE`] on the newest GitHub release, written by the
+//! release workflow: the `version`, its `notes` (the release's CHANGELOG
+//! section), when it was `published`, and per platform the download's
+//! `url` and its `signature` — the text of the `.minisig` file published
+//! beside it, so a download can be checked by hand with `minisign -Vm
+//! <file> -P <PUBLIC_KEY>` as well as by rusty. The release workflow signs
+//! with the secret half of [`PUBLIC_KEY`].
 //!
 //! **Nothing is installed that was not signed for the version announced.**
 //! The feed itself is not signed, so a version number in it proves nothing
@@ -21,20 +21,21 @@ use serde::Deserialize;
 
 use crate::model::{REPO_RELEASES, UpdateProgress};
 
-/// The public half of the updater key: base64 of minisign's public key
-/// file, as the Tauri updater's configuration carried it.
-pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVGQTY5NkI1QUI2MzlEMDYKUldRR25XT3J0WmFtWDFYTW9EUjh6NGYxYkEzK1JlYmVVbUdnbnB3Y0xJbHZDZ1Nla0ZmL1Z3WHUK";
+/// The public half of the updater key, as minisign prints it.
+pub const PUBLIC_KEY: &str = "RWQGnWOrtZamX1XMoDR8z4f1bA3+RebeUmGgnpwcLIlvCgSekFf/VwXu";
 
-/// Where the feed is: the newest release's `latest.json`. A debug build
-/// takes `RUSTY_UPDATE_FEED` instead, which is how the whole flow is tried
-/// without a release.
+/// The feed's name among the newest release's files.
+pub const FEED_FILE: &str = "rusty-update.json";
+
+/// Where the feed is. A debug build takes `RUSTY_UPDATE_FEED` instead,
+/// which is how the whole flow is tried without a release.
 pub fn feed_url() -> String {
     if cfg!(debug_assertions)
         && let Ok(url) = std::env::var("RUSTY_UPDATE_FEED")
     {
         return url;
     }
-    format!("{REPO_RELEASES}/latest/download/latest.json")
+    format!("{REPO_RELEASES}/latest/download/{FEED_FILE}")
 }
 
 /// The feed, as the release workflow writes it.
@@ -43,16 +44,19 @@ pub struct Feed {
     pub version: String,
     #[serde(default)]
     pub notes: String,
+    /// RFC 3339.
     #[serde(default)]
-    pub pub_date: Option<String>,
+    pub published: Option<String>,
+    /// Each platform's download, by [`platform`]'s name for it.
     #[serde(default)]
-    pub platforms: std::collections::BTreeMap<String, Artifact>,
+    pub downloads: std::collections::BTreeMap<String, Artifact>,
 }
 
 /// One platform's download and its signature.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Artifact {
     pub url: String,
+    /// The `.minisig` file's text.
     pub signature: String,
 }
 
@@ -61,32 +65,33 @@ impl Feed {
         serde_json::from_str(text).map_err(|e| format!("the release feed does not read: {e}"))
     }
 
-    /// The artifact for the machine this runs on, when the release has one.
+    /// The download for the machine this runs on, when the release has one.
     pub fn artifact(&self) -> Option<&Artifact> {
-        self.platforms.get(platform())
+        self.downloads.get(platform())
     }
 
     /// The day it was published, `YYYY-MM-DD`.
     pub fn date(&self) -> Option<String> {
-        self.pub_date
+        self.published
             .as_deref()
             .and_then(|date| date.get(..10))
             .map(str::to_string)
     }
 }
 
-/// The feed's name for this machine: `windows-x86_64`, `darwin-aarch64`,
-/// `linux-x86_64` — Tauri's, so one feed serves both kinds of install.
+/// The feed's name for this machine. One macOS download serves both
+/// architectures: the app is universal.
 pub fn platform() -> &'static str {
+    let arm = cfg!(target_arch = "aarch64");
     if cfg!(windows) {
-        "windows-x86_64"
-    } else if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") {
-            "darwin-aarch64"
+        if arm {
+            "windows-aarch64"
         } else {
-            "darwin-x86_64"
+            "windows-x86_64"
         }
-    } else if cfg!(target_arch = "aarch64") {
+    } else if cfg!(target_os = "macos") {
+        "macos-universal"
+    } else if arm {
         "linux-aarch64"
     } else {
         "linux-x86_64"
@@ -152,23 +157,15 @@ pub fn download(
 /// Whether `data` is what the release workflow signed for `version`: the
 /// signature verifies against [`PUBLIC_KEY`], and its trusted comment —
 /// covered by the signature — names that version. A signature that names
-/// none is from before versions were recorded, and is refused: the feed's
-/// own number cannot be trusted alone.
+/// none is refused: the feed's own number cannot be trusted alone.
 pub fn verify(data: &[u8], signature: &str, version: &str) -> Result<(), String> {
     verify_with(data, signature, version, PUBLIC_KEY)
 }
 
 fn verify_with(data: &[u8], signature: &str, version: &str, key: &str) -> Result<(), String> {
-    use base64::Engine;
-    let text = |b64: &str, what: &str| -> Result<String, String> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64.trim())
-            .map_err(|e| format!("the {what} is not base64: {e}"))?;
-        String::from_utf8(bytes).map_err(|_| format!("the {what} is not text"))
-    };
-    let key = minisign_verify::PublicKey::decode(&text(key, "public key")?)
+    let key = minisign_verify::PublicKey::from_base64(key.trim())
         .map_err(|e| format!("the public key does not read: {e}"))?;
-    let signature = minisign_verify::Signature::decode(&text(signature, "signature")?)
+    let signature = minisign_verify::Signature::decode(signature)
         .map_err(|e| format!("the signature does not read: {e}"))?;
     key.verify(data, &signature, true)
         .map_err(|e| format!("the download is not what was signed: {e}"))?;
@@ -192,10 +189,10 @@ mod tests {
     const FEED: &str = r#"{
         "version": "0.7.0",
         "notes": "Changes",
-        "pub_date": "2026-10-20T08:00:00Z",
-        "platforms": {
-            "windows-x86_64": { "signature": "c2ln", "url": "https://example.com/setup.exe" },
-            "linux-x86_64": { "signature": "c2ln", "url": "https://example.com/rusty.AppImage" }
+        "published": "2026-10-20T08:00:00Z",
+        "downloads": {
+            "windows-x86_64": { "signature": "sig", "url": "https://example.com/setup.exe" },
+            "linux-x86_64": { "signature": "sig", "url": "https://example.com/rusty.AppImage" }
         }
     }"#;
 
@@ -204,7 +201,7 @@ mod tests {
         let feed = Feed::parse(FEED).unwrap();
         assert_eq!(feed.version, "0.7.0");
         assert_eq!(feed.date().as_deref(), Some("2026-10-20"));
-        assert_eq!(feed.platforms.len(), 2);
+        assert_eq!(feed.downloads.len(), 2);
         assert!(Feed::parse("{}").is_err(), "a feed without a version");
     }
 
@@ -222,13 +219,11 @@ mod tests {
     /// comment carrying the version — and held to both.
     #[test]
     fn a_signature_is_held_to_the_key_and_to_the_version_it_names() {
-        use base64::Engine;
-        let b64 = |s: String| base64::engine::general_purpose::STANDARD.encode(s);
         let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
-        let key = b64(pair.pk.to_box().unwrap().to_string());
+        let key = pair.pk.to_base64();
         let sign = |data: &[u8], comment: &str| {
             let signed = minisign::sign(Some(&pair.pk), &pair.sk, data, Some(comment), None);
-            b64(signed.unwrap().to_string())
+            signed.unwrap().to_string()
         };
         let data = b"rusty".as_slice();
         let signature = sign(
@@ -246,9 +241,8 @@ mod tests {
             "other bytes"
         );
         let other = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
-        let stranger = b64(other.pk.to_box().unwrap().to_string());
         assert!(
-            verify_with(data, &signature, "1.2.3", &stranger).is_err(),
+            verify_with(data, &signature, "1.2.3", &other.pk.to_base64()).is_err(),
             "another key"
         );
         let unversioned = sign(data, "timestamp:1760000000\tfile:rusty-setup.exe");
@@ -256,18 +250,11 @@ mod tests {
             verify_with(data, &unversioned, "1.2.3", &key).is_err(),
             "no version named"
         );
-        assert!(verify_with(data, "not base64!", "1.2.3", &key).is_err());
+        assert!(verify_with(data, "not a signature", "1.2.3", &key).is_err());
     }
 
-    /// The key in the code is the one the updater configuration carried,
-    /// which every copy of rusty installed before this one checks against.
     #[test]
     fn the_key_is_a_minisign_public_key() {
-        use base64::Engine;
-        let text = base64::engine::general_purpose::STANDARD
-            .decode(PUBLIC_KEY)
-            .unwrap();
-        let text = String::from_utf8(text).unwrap();
-        assert!(minisign_verify::PublicKey::decode(&text).is_ok(), "{text}");
+        assert!(minisign_verify::PublicKey::from_base64(PUBLIC_KEY).is_ok());
     }
 }

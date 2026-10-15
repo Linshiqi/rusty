@@ -544,21 +544,22 @@ tests green, and CLAUDE.md saying how it works.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 
-   *Done:* `rusty_embed::update` is the feed (`latest.json`, Tauri's
-   format), the version comparison and the signature check (minisign,
-   `minisign-verify`), against the key the Tauri updater carried — checked:
-   the secret key the repository holds signs, and the key in the code
-   verifies — so every copy of rusty installed before Slint finds, verifies
-   and installs this one. A signature must name the version the feed
-   announces. The window checks quietly a moment after it opens and says
+   *Done:* `rusty_embed::update` is the feed (`rusty-update.json` on the
+   newest release), the version comparison and the signature check: an
+   ordinary minisign `.minisig`, published beside each download and carried
+   in the feed, whose trusted comment must name the version the feed
+   announces. **Nothing from before Slint updates onto it** — the feed has
+   a name the Tauri updater never asked for, so an old copy finds nothing
+   and is installed over by hand. The window checks quietly a moment after it opens and says
    only a newer release, in a note; Check for updates opens Settings ▸
    Updates and says whatever it found; the download runs in the
    background, its progress in the status bar, and the restart that
    installs it is asked for. On Windows the installer is our own
    (`crates/rusty-setup`): the app and its tools zipped and appended to it,
-   installed per user where the Tauri installer put rusty, taking over its
-   uninstall entry and shortcuts, answering its command line
-   (`/P /UPDATE /R /ARGS`), and, cut down to its own part, the uninstaller.
+   installed per user in `%LOCALAPPDATA%\Programs\rusty` with an entry of
+   its own in Settings ▸ Apps (`dev.rusty.workbench`), run by the updater
+   as `--quiet --run --wait <pid>`, and, cut down to its own part, the
+   uninstaller.
    Staged beside the install and moved into place, with a list of what it
    put there, so an update removes what it no longer carries and the
    uninstaller removes exactly that. macOS gets an app bundle, ad-hoc
@@ -566,11 +567,11 @@ tests green, and CLAUDE.md saying how it works.
    `.deb`. `crates/rusty-release` packs the installer and signs and checks
    every updater artifact in the workflow. The tools are found beside the
    executable (`bundled_dir`), wherever each package puts them. Proven
-   here: a silent install over a copy of the Tauri layout and an uninstall
-   back to nothing, in a sandbox; a debug build pointed at a local feed
-   found 0.6.78, downloaded it, verified it and offered the restart. The
-   macOS and Linux packaging is the release workflow's, and is proven by
-   its first run.
+   here: a silent install and an uninstall back to nothing, in a sandbox;
+   a debug build pointed at a local feed found a newer version, downloaded
+   it, verified it and offered the restart; and the repository's key signs
+   what the key in the code verifies. The macOS and Linux packaging is the
+   release workflow's, and is proven by its first run.
 
    Then `rusty-ui`, `rusty-app` and `rusty-ipc` were deleted, in v0.7.0.
    The `backend` feature split, which existed for the wasm frontend, is
@@ -586,13 +587,15 @@ tests green, and CLAUDE.md saying how it works.
 ## Decided
 
 - **Shipping is our own, not a packager's.** `cargo-packager` was the
-  plan; what decided against it is that the copies of rusty already
-  installed update by running whatever installer their feed names with
-  the Tauri installer's switches, and from the per-user place the Tauri
-  installer chose. An installer of our own answers both exactly, and the
-  three others (a bundle, an AppImage, a `.deb`) are a directory layout
-  each, which a workflow step writes. The updater key carries over:
-  checked before the first release.
+  plan. An installer of our own is one small crate that does exactly what
+  rusty needs — per user, a list of what it installed, an update that
+  removes what it no longer carries — and the three others (a bundle, an
+  AppImage, a `.deb`) are a directory layout each, which a workflow step
+  writes.
+- **No upgrade from the Tauri window.** Copies of rusty before 0.7.0 are
+  not offered 0.7.0 and are not taken over by its installer: they are
+  uninstalled by hand and the new one installed beside where they were.
+  Settings, drafts and projects are rusty's own files and carry over.
 - **The licence is GPLv3**, for rusty and for Slint, which it uses under
   its GPLv3 option — rusty was PolyForm Noncommercial, which that option
   cannot be combined with. Every dependency was checked against it (all

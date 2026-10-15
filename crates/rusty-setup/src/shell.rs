@@ -1,10 +1,9 @@
 //! Where Windows learns rusty is installed: the entry Settings ▸ Apps lists
-//! (`HKCU\…\Uninstall\rusty`, the key the Tauri installer used, so an
-//! install over it replaces its entry rather than adding a second), the
-//! Start menu's shortcut and the desktop's.
+//! (`HKCU\…\Uninstall\dev.rusty.workbench`), the Start menu's shortcut and
+//! the desktop's.
 //!
-//! Per user, as the Tauri installer was: no elevation, nothing under
-//! `Program Files`, nothing another account sees.
+//! Per user: no elevation, nothing under `Program Files`, nothing another
+//! account sees.
 
 use std::path::{Path, PathBuf};
 
@@ -13,8 +12,9 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 /// The entry's key, under `HKCU`. `RUSTY_SETUP_KEY` moves it — the
 /// installer's own test puts it somewhere Settings does not look.
 pub fn key() -> String {
-    std::env::var("RUSTY_SETUP_KEY")
-        .unwrap_or_else(|_| r"Software\Microsoft\Windows\CurrentVersion\Uninstall\rusty".into())
+    std::env::var("RUSTY_SETUP_KEY").unwrap_or_else(|_| {
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\dev.rusty.workbench".into()
+    })
 }
 
 /// Where an earlier install says it is, quotes and all taken off.
@@ -25,12 +25,13 @@ pub fn installed_at() -> Option<PathBuf> {
     (!location.is_empty()).then(|| PathBuf::from(location))
 }
 
-/// The directory a fresh install goes to: `%LOCALAPPDATA%\rusty`, where
-/// the Tauri installer put it.
+/// The directory a fresh install goes to: `%LOCALAPPDATA%\Programs\rusty`,
+/// where a per-user install of a program goes.
 pub fn default_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Local"))
+        .join("Programs")
         .join("rusty")
 }
 
@@ -46,7 +47,7 @@ pub fn register(dir: &Path, version: &str, size_kb: u64) -> std::io::Result<()> 
     entry.set_value("UninstallString", &quoted(&dir.join("uninstall.exe")))?;
     entry.set_value(
         "QuietUninstallString",
-        &format!("{} /S", quoted(&dir.join("uninstall.exe"))),
+        &format!("{} --silent", quoted(&dir.join("uninstall.exe"))),
     )?;
     entry.set_value("URLInfoAbout", &rusty_embed::model::REPO)?;
     entry.set_value("NoModify", &1u32)?;

@@ -13,8 +13,8 @@ publish = false
 rusty-setup = { path = "../rusty-setup" }
 # The updater's own signature check, run on every artifact before upload.
 rusty-embed = { path = "../rusty-embed" }
-# Signs as the Tauri CLI did, with the same key, so the copies of rusty
-# installed before the window moved to Slint verify what they download.
+# Signs each download with the updater key; base64 because a CI secret may
+# hold the key file that way.
 minisign = "0.9"
 base64 = "0.22.1"
 

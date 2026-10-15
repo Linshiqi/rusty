@@ -1,8 +1,7 @@
 # Tag → installers for every desktop → one GitHub Release.
 #
 # Push `v0.7.0` and three runners build the window (rusty-desk, drawn with
-# Slint) and the headless rusty-cli, and package them with no Tauri left in
-# the chain:
+# Slint) and the headless rusty-cli, and package them:
 #
 #   Windows  rusty-setup (crates/rusty-setup) with the app and its tools
 #            appended: one .exe that installs per user, takes over an
@@ -10,21 +9,20 @@
 #            uninstalls.
 #   macOS    rusty.app, universal (Intel and Apple Silicon), ad-hoc signed,
 #            in a disk image; and as .app.tar.gz, which the updater unpacks.
-#   Linux    an AppImage (linuxdeploy, as Tauri's bundler used) and a .deb.
+#   Linux    an AppImage (linuxdeploy) and a .deb.
 #
 # A final job publishes everything on one Release, the body taken from
 # CHANGELOG.md — never generated from the commit log, which is written for
 # whoever maintains this rather than for whoever downloads it.
 #
-# Updates: with the updater key in the repo secrets
-# (TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD — the Tauri CLI's names, and its
-# key, which every copy of rusty installed before the window moved to Slint
-# checks downloads against), each build signs its updater artifact with
-# `rusty-release sign`, checks the signature with the updater's own check
-# (`rusty-release verify`), and the publish job merges them into
-# latest.json — the feed both kinds of install poll, in the format both
-# read. Without the secrets the release still ships, and nothing updates
-# onto it.
+# Updates: with the updater key in the repo secrets (RUSTY_UPDATE_KEY,
+# minisign's secret key file or base64 of it, and RUSTY_UPDATE_KEY_PASSWORD
+# when it has one), each build signs its updater artifact with
+# `rusty-release sign` — an ordinary `.minisig`, uploaded beside it —
+# checks the signature with the updater's own check (`rusty-release
+# verify`), and the publish job merges them into rusty-update.json, the
+# feed the running app polls (`rusty_embed::update`). Without the secret
+# the release still ships, and nothing updates onto it.
 
 name: release
 
@@ -115,8 +113,7 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then packages="$packages -p rusty-setup"; fi
           cargo build --release $packages
 
-      # Both architectures, joined: one app for every Mac, as the Tauri
-      # build's universal DMG was.
+      # Both architectures, joined: one app for every Mac.
       - name: Build (macOS, universal)
         if: runner.os == 'macOS'
         run: |
@@ -142,11 +139,10 @@ jobs:
           target/release/rusty-release.exe pack --stub target/release/rusty-setup.exe \
             --dir pkg/payload --out "stage/rusty-$v-windows-x86_64-setup.exe"
           echo "UPDATER_ARTIFACT=stage/rusty-$v-windows-x86_64-setup.exe" >> "$GITHUB_ENV"
-          echo "UPDATER_KEYS=windows-x86_64" >> "$GITHUB_ENV"
+          echo "UPDATER_KEY=windows-x86_64" >> "$GITHUB_ENV"
 
       # A bundle by hand: what the executable is called, its icon, its
-      # version and identifier — the Tauri app's, so the system takes the
-      # new one for the same app — and the tools under Resources, where the
+      # version and identifier, and the tools under Resources, where the
       # window looks (`bundled_dir`). Ad-hoc signed: Apple Silicon runs
       # nothing unsigned, and no identity is in the secrets.
       - name: Package (macOS)
@@ -194,7 +190,7 @@ jobs:
           hdiutil create -volname rusty -srcfolder pkg/dmg -ov -format UDZO \
             "stage/rusty-$v-macos-universal.dmg"
           echo "UPDATER_ARTIFACT=stage/rusty-$v-macos-universal.app.tar.gz" >> "$GITHUB_ENV"
-          echo "UPDATER_KEYS=darwin-x86_64 darwin-aarch64" >> "$GITHUB_ENV"
+          echo "UPDATER_KEY=macos-universal" >> "$GITHUB_ENV"
 
       # The AppImage by linuxdeploy — pinned, as every tool here is — which
       # brings along the libraries the app and the bundled tools link and a
@@ -242,7 +238,7 @@ jobs:
             > "$deb/DEBIAN/control"
           dpkg-deb --build --root-owner-group "$deb" "stage/rusty_${v}_amd64.deb"
           echo "UPDATER_ARTIFACT=stage/rusty-$v-linux-x86_64.AppImage" >> "$GITHUB_ENV"
-          echo "UPDATER_KEYS=linux-x86_64" >> "$GITHUB_ENV"
+          echo "UPDATER_KEY=linux-x86_64" >> "$GITHUB_ENV"
 
       - name: The headless CLI
         shell: bash
@@ -254,14 +250,14 @@ jobs:
       # Signed with the key the installed copies carry, and checked with
       # their own check before anything is uploaded: a signature they would
       # refuse is a release nobody's rusty ever installs, and nothing else
-      # would say so. Then the feed fragment: platform → {signature, url}.
+      # would say so. Then the feed fragment: platform → {url, signature}.
       - name: Sign the updater artifact
         shell: bash
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RUSTY_UPDATE_KEY: ${{ secrets.RUSTY_UPDATE_KEY }}
+          RUSTY_UPDATE_KEY_PASSWORD: ${{ secrets.RUSTY_UPDATE_KEY_PASSWORD }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+          if [ -z "$RUSTY_UPDATE_KEY" ]; then
             echo "no updater key in the secrets: this release ships, and nothing updates onto it"
             exit 0
           fi
@@ -276,8 +272,8 @@ jobs:
           artifact = os.environ["UPDATER_ARTIFACT"]
           name = os.path.basename(artifact)
           url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['GITHUB_REF_NAME']}/{name}"
-          signature = open(artifact + ".sig", encoding="utf-8").read()
-          entries = {key: {"signature": signature, "url": url} for key in os.environ["UPDATER_KEYS"].split()}
+          signature = open(artifact + ".minisig", encoding="utf-8").read()
+          entries = {os.environ["UPDATER_KEY"]: {"url": url, "signature": signature}}
           json.dump(entries, open(f"stage/feed-{os.environ['RUNNER_OS']}.json", "w"))
           PY
 
@@ -339,7 +335,7 @@ jobs:
           open("release-body.md", "w", encoding="utf-8").write(
               body + "\n\n" + badge + "\n")
 
-      # latest.json: every platform's signed entry in one feed.
+      # rusty-update.json: every platform's signed download in one feed.
       - name: Merge the updater feed
         shell: python
         run: |
@@ -352,16 +348,16 @@ jobs:
               feed = {
                   "version": os.environ["GITHUB_REF_NAME"].lstrip("v"),
                   "notes": open("release-notes.md", encoding="utf-8").read().strip(),
-                  "pub_date": datetime.datetime.now(datetime.timezone.utc)
+                  "published": datetime.datetime.now(datetime.timezone.utc)
                       .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                  "platforms": platforms,
+                  "downloads": platforms,
               }
-              json.dump(feed, open("assets/latest.json", "w"), indent=2)
+              json.dump(feed, open("assets/rusty-update.json", "w"), indent=2)
 
       # A tag with a suffix — `v0.7.0-rc.1` — is a pre-release, which GitHub
       # never calls the latest: every installed rusty polls
-      # `releases/latest/download/latest.json`, and a candidate published as
-      # the latest would update all of them onto it. This is what lets the
+      # `releases/latest/download/rusty-update.json`, and a candidate
+      # published as the latest would update all of them onto it. This is what lets the
       # whole pipeline be tried before a release.
       - uses: softprops/action-gh-release@v2
         with:

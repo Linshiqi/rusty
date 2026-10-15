@@ -67,12 +67,14 @@ scripts/bundle-tools.sh
 # `rusty.app` in a DMG and as `.app.tar.gz`, Linux an AppImage and a .deb.
 # The workflow stamps the tag into the workspace manifest as a safety net —
 # the repository said 0.6.12 for twelve releases while the installers were
-# right. The updater key is in the repo secrets under the Tauri CLI's names
-# (TAURI_SIGNING_PRIVATE_KEY, …_PASSWORD; the public half is
-# `rusty_embed::update::PUBLIC_KEY`): `rusty-release sign` signs each
-# updater artifact, `rusty-release verify` checks it with the app's own
-# check, and the publish job merges them into latest.json with the tag's
-# CHANGELOG section as its `notes`. See "Updating itself" below.
+# right. The updater key is in the repo secrets (RUSTY_UPDATE_KEY, the
+# minisign secret key file or base64 of it, and RUSTY_UPDATE_KEY_PASSWORD;
+# the public half is `rusty_embed::update::PUBLIC_KEY`): `rusty-release
+# sign` writes each updater artifact's `.minisig`, `rusty-release verify`
+# checks it with the app's own check, and the publish job merges them into
+# rusty-update.json with the tag's CHANGELOG section as its `notes`. A tag
+# with a hyphen (`v0.7.0-rc.1`) is published as a pre-release, which the
+# feed never points at. See "Updating itself" below.
 rusty-release sign <file> --version <v> [--key <file>]
 rusty-release verify <file> --version <v>
 
@@ -224,8 +226,8 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — WCH's CH32V003 and CH32X035, which nobody's QEMU models. Pure: `cpu` is a QingKe hart, the V2A's RV32EC or the V4C's RV32IMAC (`Core`), with Zicsr, the address vector table and the hardware stack; `elf` loads a flasher's view of an image; `ch32/` is one machine for both parts — the clock tree, GPIO with AFIO's remaps and EXTI, the timers, SysTick, the PFIC, the USARTs and the debug registers SDI print writes through — with what differs between them as data in `ch32/part.rs`; its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *WCH's parts* |
 | `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
 | `rusty-desk` | **The window, in Slint** — what replaced `rusty-ui`, `rusty-app` and `rusty-ipc`; `docs/slint.md` is the design and the order of the work. One process, no IPC: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width |
-| `rusty-setup` | The Windows installer: one executable carrying the app and its tools (`payload`: a zip appended, found by a footer), installing per user where the Tauri installer did and taking over its uninstall entry and shortcuts (`shell`), answering that installer's command line (`/P /S /R /UPDATE /ARGS`) because an older rusty runs whatever its updater downloaded that way, and — cut down to its own part — the uninstaller. `files` stages the payload beside the install and moves it into place, and writes down what it put there (`install.txt`), so an update removes what it no longer carries and the uninstaller removes exactly that |
-| `rusty-release` | What the release workflow runs between the build and the upload: `pack` appends the install directory to the installer, `sign` writes a Tauri-format `.sig` with the updater key, `verify` checks it with `rusty_embed::update::verify` before anything is published |
+| `rusty-setup` | The Windows installer: one executable carrying the app and its tools (`payload`: a zip appended, found by a footer), installing per user in `%LOCALAPPDATA%\Programs\rusty` with an uninstall entry and shortcuts of its own (`shell`), run by the updater as `--quiet --run --wait <pid>`, and — cut down to its own part — the uninstaller. `files` stages the payload beside the install and moves it into place, and writes down what it put there (`install.txt`), so an update removes what it no longer carries and the uninstaller removes exactly that |
+| `rusty-release` | What the release workflow runs between the build and the upload: `pack` appends the install directory to the installer, `sign` writes a minisign `.minisig` with the updater key, `verify` checks it with `rusty_embed::update::verify` before anything is published |
 
 ## The rules that are load-bearing
 
@@ -2486,17 +2488,15 @@ Settings ▸ Updates shows the release's notes, the download's progress and
 check; `rusty-desk`'s `app/updating.rs` is when to ask and how the verified
 download is put in place.
 
-- **The feed and the key are the Tauri updater's, on purpose.**
-  `latest.json` on the newest release, in Tauri's format (`version`,
-  `notes`, `pub_date`, per platform `url` and `signature`), signed with the
-  key the Tauri updater checked (`PUBLIC_KEY`, the old
-  `plugins.updater.pubkey`). So every copy of rusty installed before the
-  window moved to Slint finds this release, verifies it and installs it:
-  on Windows it runs the downloaded `setup.exe` as `/P /UPDATE /R /ARGS …`,
-  which `rusty-setup` answers; on macOS it replaces the bundle with the one
-  in `.app.tar.gz`; on Linux the AppImage with the new AppImage. The key
-  carrying over was checked before the first release: the secret the
-  repository holds signs, and the key in the code verifies.
+- **The feed is rusty's own, and nothing before 0.7.0 reads it.**
+  `rusty-update.json` on the newest release: the version, the notes, when
+  it was published, and per platform the download's `url` and the text of
+  its `.minisig`, an ordinary minisign signature anybody can check with
+  `minisign -Vm <file> -P <PUBLIC_KEY>`. The Tauri window polled a file of
+  another name, so a copy of it finds nothing to update to. 0.7.0 is
+  installed by hand, beside the old one rather than over it — its
+  installer does not take the old one over, so two entries named rusty in
+  Settings ▸ Apps is the honest picture until the old one is uninstalled.
 - **A signature names the version it was made for, and the feed's must
   match.** The feed is not signed, so its version number proves nothing
   about the file its `url` names; `rusty-release sign` puts
@@ -2515,21 +2515,20 @@ download is put in place.
   since a restart stops it, and an install cut off halfway is how a
   toolchain loses its compiler. Drafts are kept as at any exit.
 - **How the verified file goes in place is the system's.** Windows: the
-  installer, run passively with this process's id to wait for, then rusty
-  opened again. macOS: the `.app.tar.gz` unpacked beside the running bundle,
-  swapped for it, opened with `open -n`. Linux: `$APPIMAGE` replaced. A
+  installer, run as `--quiet --run --wait <pid>` — no questions, this
+  process gone first, then rusty opened again. macOS: the `.app.tar.gz`
+  unpacked beside the running bundle, swapped for it, opened with
+  `open -n`. Linux: `$APPIMAGE` replaced. A
   `.deb` install has no `$APPIMAGE`, and the update says to get the new
   package rather than touching `/usr`.
 - **The whole flow is testable without a release.** A debug build honours
-  `RUSTY_UPDATE_FEED=<url>`; serve a `latest.json` and an installer signed
-  with `rusty-release sign --key ~/.tauri/rusty.key` over
+  `RUSTY_UPDATE_FEED=<url>`; serve a `rusty-update.json` and an installer
+  signed with `rusty-release sign --key <the key file>` over
   `python -m http.server`, and probe it with `RUSTY_PROBE_UPDATE=1`. The
   installer honours `RUSTY_SETUP_DIR`, `RUSTY_SETUP_KEY` and
   `RUSTY_SETUP_LINKS` (the install directory, the registry key under HKCU,
   the shortcuts' folder) so it can be installed and uninstalled in a
-  sandbox. **Run it from PowerShell, never Git Bash**: MSYS rewrites `/S`
-  into a path, and the installer then runs interactively, its questions on
-  the screen and the app opened at the end.
+  sandbox, with `--silent`.
 
 ## The gutter, and one line height
 
