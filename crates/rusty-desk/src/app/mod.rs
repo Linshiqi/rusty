@@ -1136,14 +1136,7 @@ impl App {
         let Some(Tab::File(path)) = self.active_tab() else {
             return;
         };
-        self.split_with(path);
-    }
-
-    /// Split, with `path` alone in the new group on the right, which gets
-    /// the keys; the left keeps every tab it had, drawn where it was.
-    fn split_with(self: &Rc<Self>, path: String) {
         let scroll = self.editor.scroll();
-        let same = self.active_tab() == Some(Tab::File(path.clone()));
         {
             let mut state = self.state.borrow_mut();
             state.other = std::mem::take(&mut state.tabs);
@@ -1155,11 +1148,7 @@ impl App {
         }
         self.editor.show_shade(self.shade_file().as_deref(), scroll);
         self.front_tab();
-        // The file beside itself starts where it was; another file where
-        // it was left.
-        if same {
-            self.editor.set_scroll(scroll);
-        }
+        self.editor.set_scroll(scroll);
     }
 
     /// The keys to the other group: it is put in front where its view was

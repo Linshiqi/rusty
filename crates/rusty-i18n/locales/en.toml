@@ -864,20 +864,14 @@ image-failed = "{path} could not be shown: {error}"
 
 [strip]
 # A tab's right-click menu, VS Code's rows; each is also in the palette, for
-# the tab in front. Showing a file in the file manager is named as each
-# system names it: Explorer, Finder, or the folder that holds it.
+# the tab in front. Copying a path and revealing a file use the tree's words
+# (`context.tree-*`).
 close-others = "Close others"
 close-right = "Close to the right"
 close-saved = "Close saved"
 close-all = "Close all"
-copy-path = "Copy path"
-copy-relative-path = "Copy relative path"
-reveal-explorer = "Reveal in File Explorer"
-reveal-finder = "Reveal in Finder"
-reveal-folder = "Open containing folder"
 split-right = "Split right"
 not-a-file = "{name} is not a file on disk"
-reveal-failed = "Could not show {path}: {reason}"
 
 [places]
 # The finder's title over a list of places the language server named.

@@ -17,7 +17,7 @@ use std::path::Path;
 
 /// The catalogue key of the menu row that reveals, named as the platform
 /// names its file manager.
-pub fn label_key() -> &'static str {
+pub const fn label_key() -> &'static str {
     if cfg!(windows) {
         "context.tree-reveal-explorer"
     } else if cfg!(target_os = "macos") {

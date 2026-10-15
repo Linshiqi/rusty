@@ -1273,7 +1273,9 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   relative path (the system's separator, as VS Code's `auto`); Reveal in
   File Explorer (Finder, or the containing folder, named as each system
   names it); Split right — the file in the group to its right, a new one
-  when the window is not split. Each row is an action, named and keyed as
+  when the window is not split. The paths, Reveal and the new group are the
+  tree's (`app/tree.rs`, `crate::reveal`), words and all, so a tab and a row
+  of the tree do them one way. Each row is an action, named and keyed as
   the palette names and keys it, and the palette's way in acts on the tab
   in front. What would do nothing is left out rather than offered: nothing
   to close beside it, no file on disk behind a page or an expansion, no
@@ -1786,10 +1788,9 @@ pointer and the keys and photographs it.
   `raw_arg` so a space in a folder name holds. A path a program takes and a
   command line is handed are two different contracts. `open -R` on macOS,
   and the containing folder through `xdg-open` elsewhere, where no file
-  manager takes a selection portably. **It is `crate::os_paths` in the
-  window**, one door for the tab menu and the tree: `reveal`, and the paths
-  Copy path and Copy relative path put on the clipboard, in the system's
-  spelling.
+  manager takes a selection portably. A tab's menu reveals, copies a path
+  and opens to the side through the tree's own functions (`tree_reveal`,
+  `tree_copy_path`, `open_to_side`), so the two menus cannot disagree.
 
 ## Two crates from the wizard
 
