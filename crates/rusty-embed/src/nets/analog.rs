@@ -153,9 +153,9 @@ pub const ADC_MAX: u16 = 4095;
 /// middle of rusty's eight-bit turn.
 pub const POT_REST: u8 = 128;
 
-// What an analog part's props say, at their defaults. The backend reads them
-// to send a run's first counts and the panel to place its sliders, and the
-// two have to agree before anybody drags anything.
+// What an analog part's props say, at their defaults. A run reads them to
+// send its first counts and the panel to place its sliders, and the two have
+// to agree before anybody drags anything.
 
 /// The counts at full scale, from `max`.
 pub fn adc_max(part: &Instance) -> u16 {

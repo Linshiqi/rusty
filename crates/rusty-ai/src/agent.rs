@@ -163,9 +163,11 @@ impl Assistant {
     ///
     /// `history` is appended to in place, so the caller keeps the conversation
     /// and can send it back for the next question.
-    /// `on_event` is `Send` so the returned future is too — Tauri's async
-    /// command handlers require it, and a callback that pins the loop to one
-    /// thread would be a poor default regardless.
+    /// `on_event` is `Send` so the returned future is too, and the loop can
+    /// run wherever its caller puts it: the window runs each question on a
+    /// thread of its own, off its UI thread, and hands every event back. A
+    /// callback that pinned the loop to one thread would be a poor default
+    /// regardless.
     pub async fn ask(
         &self,
         ctx: &ToolContext<'_>,

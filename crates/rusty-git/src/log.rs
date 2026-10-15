@@ -2,12 +2,11 @@
 //! a search matches, what a drawn row is keyed on, and the shape of every
 //! line between two rows.
 //!
-//! The log drew every row it had — four hundred small SVGs, each with its
-//! labels — and rebuilt all of them whenever the selection moved or the
-//! history was read again, which was every save. It draws the rows on screen
-//! now, plus a few each side. Every row is the same height, so which rows
-//! those are is division, and the division is here, under tests, rather than
-//! discovered in a scrolling window.
+//! The log draws the rows on screen and a few each side, never every row it
+//! has: the rows are rebuilt whenever the selection moves or the history is
+//! read again, which is every save. Every row is the same height, so which
+//! rows those are is division, and the division is here, under tests, rather
+//! than discovered in a scrolling window.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;

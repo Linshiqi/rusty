@@ -3,8 +3,8 @@
 //! [`model`] is what the editor draws — diagnostics, completions,
 //! locations, all in scalar columns.
 //!
-//! [`positions`] is column arithmetic — scalars, UTF-8 and UTF-16 — shared
-//! by the client and the editor, so both convert by one rule. [`follow`]
+//! [`positions`] is column arithmetic — scalars, UTF-8 and UTF-16 — in one
+//! place, so every conversion follows one rule. [`follow`]
 //! is what the server said about one text, carried across an edit to the
 //! next — the client's diagnostics and the editor's inlay hints by one
 //! rule. And [`squiggle`]: where a diagnostic is drawn on its line, for

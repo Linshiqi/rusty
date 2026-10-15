@@ -866,7 +866,7 @@ void blinky_tick(void);
     /// The trailing newline is fed to the parser but must not reach the view,
     /// or every line gains a blank cell and the gutter stops lining up. What
     /// follows the last newline is a line of its own — empty, and the one the
-    /// caret stands on — so a painting has as many lines as the textarea.
+    /// caret stands on — so a painting has as many lines as the editor.
     #[test]
     fn the_newline_fed_to_the_parser_is_not_returned() {
         let syntaxes = SyntaxSet::load_defaults_newlines();

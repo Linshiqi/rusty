@@ -4,8 +4,8 @@
 //!
 //! **Bring your own model.** Users supply their own endpoint and key — a
 //! frontier API, a domestic provider, or a model running on their own machine.
-//! Keys live in the OS credential store and every request is issued from Rust,
-//! so credentials never reach the WebView. See [`config`] and [`secrets`].
+//! Keys live in the OS credential store, never in a settings file, and are
+//! read only where a request is built. See [`config`] and [`secrets`].
 //!
 //! **The analyses are the tools.** The assistant does not read
 //! `.cargo/config.toml` and guess at why a build fails. It calls into

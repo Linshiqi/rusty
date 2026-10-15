@@ -52,10 +52,8 @@ pub enum WizardLayout {
 
 /// A generator option, with what turning it on costs.
 ///
-/// A model type rather than a DTO in the Tauri layer: the frontend renders
-/// these, and rule 1 is that it `use`s model types directly. A struct declared
-/// beside the command would have to be mirrored by hand in the frontend, which
-/// is the drift the shared types exist to make impossible.
+/// A model type: the window draws these and `wizard` fills them in, so they
+/// are one struct rather than two kept in step by hand.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WizardOption {
@@ -91,10 +89,11 @@ pub struct Explanation {
 /// Here in the model rather than beside the generator, so the *field* can say
 /// it while it is being typed — the Git panel's `ref_name_problem` rule,
 /// applied to the one name the generator never sees. It used to be checked
-/// only on the backend, on every keystroke, and each refusal arrived as a red
-/// banner over the workbench: typing `flyegg` through a Chinese IME put two
-/// of them there, about `f'l` and `f'l'y`, which are the input method's own
-/// pinyin segmentation and not anything the user had typed.
+/// only when a plan was asked for, on every keystroke, and each refusal
+/// arrived as a red banner over the workbench: typing `flyegg` through a
+/// Chinese IME put two of them there, about `f'l` and `f'l'y`, which are the
+/// input method's own pinyin segmentation and not anything the user had
+/// typed.
 ///
 /// The workspace layout is what makes this matter: the project's name becomes
 /// `<name>-core`, a package cargo has to accept, and the generator is asked
@@ -169,8 +168,8 @@ mod name_tests {
             crate_name_problem("-lead"),
             Some(CrateNameProblem::Start('-'))
         );
-        // An input method's own pinyin segmentation, which is what reached
-        // the backend on every keystroke and bannered.
+        // An input method's own pinyin segmentation, which is what was once
+        // checked on every keystroke and bannered.
         assert_eq!(
             crate_name_problem("f'l'y"),
             Some(CrateNameProblem::Character('\''))

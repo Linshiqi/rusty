@@ -1,7 +1,7 @@
-//! How long the Cargo analysis takes for a project — the two steps
-//! `open_project` awaits before the frontend is told anything at all, so
-//! every millisecond here is time the window spends showing the last
-//! project. Run it against a real project and against a freshly generated
+//! How long the Cargo analysis takes for a project — the two steps the
+//! Crates panel waits on, and the reason neither is on the path of opening
+//! a project: a millisecond there is time the window spends showing the
+//! last one. Run it against a real project and against a freshly generated
 //! one: the second is the case the user reported, and the one where nothing
 //! cargo needs is warm yet.
 //!

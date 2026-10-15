@@ -5,7 +5,8 @@
 //! has a proxy setting, the tool installer and the update check honour it, and
 //! the assistant — on exactly the machines that need one — could not reach its
 //! endpoint, with a timeout for a diagnosis. **No timeout:** an SSE stream
-//! that stalled stalled `ai_ask` for ever, and the panel sat on its spinner.
+//! that stalled stalled the question for ever, and the panel sat on its
+//! spinner.
 //! **No retry:** a 429 from a rate-limited key or a 503 from a busy server was
 //! the end of the question, when the same request a second later would have
 //! answered.

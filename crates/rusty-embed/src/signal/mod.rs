@@ -29,8 +29,8 @@
 //! a key it does not know is an error naming it, never a component quietly
 //! missing from what the firmware was fed.
 //!
-//! Compiled unconditionally, like `protocol` and `plant`: the frontend
-//! renders what it draws, and the backend renders what the emulator plays.
+//! Free of IO, like `protocol` and `plant`: the window renders what it
+//! draws, and a run renders what the emulator plays, with the same code.
 
 use std::f64::consts::TAU;
 
@@ -130,7 +130,7 @@ pub enum Component {
 }
 
 impl Component {
-    /// The word the text form and the wire form both call it by.
+    /// The word the text form and the serialised form both call it by.
     pub fn kind(&self) -> &'static str {
         match self {
             Component::Dc { .. } => "dc",
@@ -326,7 +326,7 @@ fn sweep_turns(from: f64, to: f64, period: f64, log: bool, into: f64) -> f64 {
     }
 }
 
-/// A signal the frontend offers by name: a case from a real bench.
+/// A signal the window offers by name: a case from a real bench.
 ///
 /// `id` is what the name is translated by, so there is no English in here
 /// to show.

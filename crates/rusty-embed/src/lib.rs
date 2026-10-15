@@ -9,51 +9,51 @@
 //! part includes the overlays.
 
 pub mod model;
-// The plant is arithmetic and no IO, like `protocol` — the frontend runs
-// it on a timer, so it compiles to wasm with the model types.
 pub mod nets;
 // The sheet averaged over a PWM period — the rules and the solver read at
-// each moment of it. Wasm-safe with both: the board view is its reader.
+// each moment of it. Pure, like both: the board view is its reader.
 pub mod period;
+// The plant is arithmetic and no IO, like `protocol` — the window runs it
+// on a timer.
 pub mod plant;
 pub mod protocol;
-// A sensor's registers from the readings a slider sets — the backend encodes
-// a run's first readings and every later move with it, and the frontend
-// reads its channels to draw the sliders.
+// A sensor's registers from the readings a slider sets — a run encodes its
+// first readings and every later move with it, and the window reads its
+// channels to draw the sliders.
 pub mod sensor;
 // What a character LCD was told to show. Beside `screen` rather than in it
 // because the bytes crossing the bus for an HD44780 are an expander's port
 // states, not display data — the picture is recovered from their edges.
 pub mod lcd;
 // What a monochrome OLED was told to draw, from the bytes the emulator
-// reports crossing the bus. Wasm-safe with the rest: the frontend reads the
+// reports crossing the bus. Pure, with the rest: the window reads the
 // stream as it passes and draws the screen from it.
 pub mod screen;
 // What a signal generator produces — tones, sweeps, noise, spikes and steps
-// as one line of text — rendered into samples. Wasm-safe: the frontend draws
-// what the backend will play into the emulator's converter.
+// as one line of text — rendered into samples. Pure: the window draws what a
+// run will play into the emulator's converter.
 pub mod signal;
 // Spectra, single tones and the filters a firmware runs, designed and held to
-// their closed forms. Wasm-safe with `signal`, which it measures.
+// their closed forms. Pure, like `signal`, which it measures.
 pub mod dsp;
 // Vectors, quaternions, Euler angles and frames, and the math toolbox's sheet
-// language over them. Wasm-safe: the panel evaluates the sheet as it is typed.
+// language over them. Pure: the panel evaluates the sheet as it is typed.
 pub mod spatial;
 // What a program asked to be drawn — the `[rusty:draw]` lines `rusty-draw`
-// writes — and the angles between what it drew. Wasm-safe beside `protocol`:
-// the frontend reads the stream as it passes.
+// writes — and the angles between what it drew. Pure, beside `protocol`:
+// the window reads the stream as it passes.
 pub mod draw;
 // What a fresh machine is missing, derived from the toolchain report. Pure,
-// and unconditional so the setup screen can reason about a report it already
-// holds rather than asking the backend what it just told it.
+// so the setup screen can reason about a report it already holds rather than
+// probing the machine again.
 pub mod setup;
 // What a run is doing and how it ended, read off the lines it prints — the
-// title bar's activity view in both windows. Pure: lines in, a verdict out.
+// title bar's activity view. Pure: lines in, a verdict out.
 pub mod activity;
 // Where a build's errors are, from what the compiler printed. Pure.
 pub mod buildlog;
 // The board sheet drawn and edited — the parts' art, the geometry, the
-// layout. Pure: both windows draw the same board from it.
+// layout. Pure: the window draws the board from it.
 pub mod board;
 // Named channels over time and the range each is drawn against: the Plot
 // panel's arithmetic. Pure.
@@ -68,9 +68,8 @@ pub mod scene;
 // instruments read, a sweep. Pure.
 pub mod lab;
 
-// Chip lookups need the TOML parser, so unlike `model` they are backend-only.
-// The frontend gets the catalogue over IPC instead — which is correct anyway,
-// since only the backend can see the user's and the project's overlay files.
+// Chip lookups read the catalogue's TOML, the user's and the project's
+// overlay files included, so unlike `model` they do IO.
 pub mod chip;
 
 pub use model::*;
@@ -129,8 +128,8 @@ mod union_find;
 /// rusty updating itself: the release feed and the signature check.
 pub mod update;
 // The lines that put a rendered signal on the emulator and its account of
-// playing it. Wasm-safe with the protocol: the frontend reads the account
-// to line the signal it drew up with the conversions the emulator reports.
+// playing it. Pure, with the protocol: the window reads the account to
+// line the signal it drew up with the conversions the emulator reports.
 pub mod wave;
 pub mod wizard;
 

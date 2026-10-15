@@ -277,8 +277,8 @@ mod tests {
     }
 
     /// A lead's name is beside its part, not a part's width away from it.
-    /// The LED's symbol is the built-in library's, which only the backend
-    /// reads.
+    /// The LED's symbol is the built-in library's, read as `schematic`
+    /// reads it.
     #[test]
     fn a_leads_name_is_beside_its_part() {
         let rows = kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));

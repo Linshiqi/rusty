@@ -23,7 +23,7 @@ use std::str::FromStr;
 use super::{Component, Signal};
 
 /// Every kind the text form knows, in the order a message lists them —
-/// and the words the frontend offers and translates, so a kind added here
+/// and the words the window offers and translates, so a kind added here
 /// is a kind it can name.
 pub const KINDS: [&str; 10] = [
     "dc", "sine", "square", "triangle", "sawtooth", "chirp", "white", "pink", "spikes", "step",
@@ -93,7 +93,7 @@ impl Rule {
 /// rendered.
 ///
 /// A kind and its key are named rather than put into a sentence, so the
-/// frontend can say it in the user's language; `Display` is the English.
+/// window can say it in the user's language; `Display` is the English.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SignalError {
     /// A component whose first word is no kind of signal.
@@ -742,7 +742,7 @@ mod tests {
         assert!(Signal::parse("chirp from=0 to=100 t=1 a=1").is_ok());
     }
 
-    /// The vocabulary the frontend names is the reader's own: every kind in
+    /// The vocabulary the window names is the reader's own: every kind in
     /// `KINDS`, given every key `keys` lists for it, reads as a component of
     /// that kind, and a word that is no kind has no keys.
     #[test]
@@ -812,15 +812,15 @@ mod tests {
         assert!(said("sin f=1 a=1").starts_with("\"sin\" is not a kind of signal"));
     }
 
-    /// The wire form is the same words: a component is tagged with the kind
-    /// the text calls it by, so a stored design and a typed one agree.
+    /// The serialised form is the same words: a component is tagged with the
+    /// kind the text calls it by, so a stored design and a typed one agree.
     #[test]
-    fn the_wire_form_is_tagged_with_the_text_forms_kind() {
+    fn the_json_form_is_tagged_with_the_text_forms_kind() {
         let signal = Signal::parse("sawtooth f=2 a=1; white rms=0.5").expect("reads");
-        let wire = serde_json::to_value(&signal).expect("serialises");
-        assert_eq!(wire["components"][0]["kind"], "sawtooth");
-        assert_eq!(wire["components"][1]["kind"], "white");
-        let back: Signal = serde_json::from_value(wire).expect("deserialises");
+        let json = serde_json::to_value(&signal).expect("serialises");
+        assert_eq!(json["components"][0]["kind"], "sawtooth");
+        assert_eq!(json["components"][1]["kind"], "white");
+        let back: Signal = serde_json::from_value(json).expect("deserialises");
         assert_eq!(back, signal);
     }
 }

@@ -9,9 +9,6 @@
 //! away. The client follows the diagnostics it holds (`diagnostics`, below)
 //! and the editor its inlay hints, so the two cannot disagree about where a
 //! line went.
-//!
-//! Compiled unconditionally, as [`crate::positions`] is: no IO, and both
-//! sides of the wire need it.
 
 use crate::model::{FileDiagnostic, InlayHint, SemanticSpan};
 

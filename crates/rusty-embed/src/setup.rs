@@ -242,10 +242,9 @@ fn missing_tool<'a>(
         .find(|t| t.name == name && t.path.is_none())
 }
 
-/// Where a tool's install lands, by name. The backend's recipe table is the
+/// Where a tool's install lands, by name. `toolchain`'s recipe table is the
 /// authority on what each install runs; a test there checks this rule agrees
-/// with it, since the two live on opposite sides of the wasm split and cannot
-/// share code.
+/// with it.
 pub(crate) fn destination_of(tool: &str) -> Destination {
     if tool.starts_with("qemu-system-") || tool.ends_with("-gdb") || tool.ends_with("-gcc") {
         Destination::DataDirectory
@@ -284,7 +283,7 @@ pub fn section_of(tool: &str) -> Section {
 /// order they install: the required tools, the Xtensa toolchain and the
 /// chip's target — read off the report's own fields, the way the setup plan
 /// reads them, so this page and the rows under it cannot disagree — and
-/// then what the backend's blocking problems name: a project with a chip
+/// then what the report's blocking problems name: a project with a chip
 /// and no flasher cannot reach its board. Targets are `target:<triple>`,
 /// as the setup plan spells them.
 pub fn needed(report: &ToolchainReport) -> Vec<String> {
@@ -669,7 +668,7 @@ mod tests {
         /// Needed is what stops *this project*: the target it cannot build for,
         /// read off the report itself — the first version counted it only when
         /// a problem named it, and a page said "one thing missing" above two
-        /// rows marked missing — and the flasher the backend's blocking problem
+        /// rows marked missing — and the flasher the report's blocking problem
         /// names, since a project with a chip cannot reach its board without
         /// one. An optional tool that is absent is not needed.
         #[test]

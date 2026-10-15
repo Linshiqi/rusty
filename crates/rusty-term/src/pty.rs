@@ -7,8 +7,7 @@
 //! program on the other end.
 //!
 //! `portable-pty` supplies that, driving ConPTY on Windows, and `vt100` turns
-//! the escape sequences that come back into a screen. Doing the emulation in
-//! Rust rather than shipping xterm.js is what keeps this repository free of npm.
+//! the escape sequences that come back into a screen.
 
 use std::{
     io::{Read, Write},
@@ -72,7 +71,7 @@ impl Updates {
     ///
     /// The coalescing is the point: a build scrolling at full speed produces
     /// thousands of writes a second, and rendering each one would spend the
-    /// whole frame budget serialising screens nobody sees.
+    /// whole frame budget building screens nobody sees.
     pub fn wait(&self) -> bool {
         if self.rx.recv().is_err() {
             return false;
@@ -151,7 +150,7 @@ impl Terminal {
     /// Send keystrokes to the program.
     ///
     /// Bytes, not key names. Terminals are a byte protocol — `Ctrl C` is `0x03`
-    /// and Up is `ESC [ A` — and translating in the frontend keeps the backend
+    /// and Up is `ESC [ A` — and translating in the window keeps this crate
     /// from having to model every keyboard layout in the world.
     ///
     /// Any input scrolls back to the live screen, which is what every terminal
@@ -290,12 +289,12 @@ fn pump(
 /// Polled rather than blocking, so the mutex is never held across a wait — the
 /// same lock is what `kill` needs to end the session.
 ///
-/// The renderer is woken exactly once, when the child is gone. An earlier
-/// version sent a wake on every poll as a way of noticing the consumer had
-/// left — and every one of those wakes was rendered and pushed over IPC as a
-/// frame, four unchanged screens a second from an idle terminal. Whether the
-/// session is still alive is read off the `Arc` instead: when this thread
-/// holds the last reference, the `Terminal` that shared it has been dropped.
+/// The renderer is woken exactly once, when the child is gone. A wake on
+/// every poll, as a way of noticing the consumer had left, would be rendered
+/// as a frame each time — four unchanged screens a second from an idle
+/// terminal. Whether the session is still alive is read off the `Arc`
+/// instead: when this thread holds the last reference, the `Terminal` that
+/// shared it has been dropped.
 fn watch(
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     exited: Arc<Mutex<Option<i32>>>,
@@ -516,7 +515,7 @@ fn which(program: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// A screen with nothing on it should not serialise 40 rows of spaces.
+    /// A screen with nothing on it should not carry 40 rows of spaces.
     #[test]
     fn blank_rows_carry_no_spans() {
         let parser = vt100::Parser::new(4, 20, 0);

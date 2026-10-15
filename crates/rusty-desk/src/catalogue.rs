@@ -1,9 +1,15 @@
-//! Two rules about the window's source, held by reading it.
+//! Three rules about the window's source, held by reading it.
 //!
 //! The window's words are keys of `rusty-i18n`'s catalogue — `t!("…")` in
 //! the Rust, `@tr("…")` in the `.slint` files — and a key missing from the
 //! catalogue would show as the key itself. This holds every key the window
-//! names to the catalogue, as `rusty-ui`'s test did for the WebView.
+//! names to the catalogue.
+//!
+//! Every diagnostic `rusty-embed` can raise has its words there too. The
+//! window translates a `Problem` by its `kind` (`problem.<kind>-title` and
+//! `-detail`) and falls back to the English it carries — correct for a kind
+//! nobody has translated, and exactly how a gap in rusty's own survives a
+//! release unnoticed.
 //!
 //! And the window names no part: everything that differs between two
 //! chips is a key of the chip catalogue (CLAUDE.md, rule 6), and a chip
@@ -92,6 +98,54 @@ mod tests {
             .map(|(path, key)| format!("{key} ({})", path.display()))
             .collect();
         assert!(missing.is_empty(), "not in the catalogue: {missing:#?}");
+    }
+
+    /// Every `Problem::new` in `rusty-embed` names a kind with both halves
+    /// in the catalogue. The kind is the first string literal of the call,
+    /// read up to the first builder call, or `.arg("crates", …)` would
+    /// answer for it.
+    #[test]
+    fn every_diagnostic_kind_is_in_the_catalogue() {
+        let embed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rusty-embed/src");
+        let known = rusty_i18n::keys(rusty_i18n::Locale::English);
+        let mut sources = Vec::new();
+        files(&embed, "rs", &mut sources);
+        let mut kinds = Vec::new();
+        for path in sources {
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (at, _) in text.match_indices("Problem::new(") {
+                let rest = &text[at..];
+                let end = [".arg(", ".fix("]
+                    .iter()
+                    .filter_map(|call| rest.find(call))
+                    .min()
+                    .unwrap_or(rest.len());
+                let args = &rest[..end];
+                let Some(open) = args.find('"') else { continue };
+                let Some(close) = args[open + 1..].find('"') else {
+                    continue;
+                };
+                kinds.push(args[open + 1..open + 1 + close].to_string());
+            }
+        }
+        assert!(
+            kinds.len() > 10,
+            "found almost no `Problem::new` — the scan is broken, not the catalogue"
+        );
+        let missing: Vec<String> = kinds
+            .iter()
+            .flat_map(|kind| {
+                [
+                    format!("problem.{kind}-title"),
+                    format!("problem.{kind}-detail"),
+                ]
+            })
+            .filter(|key| !known.contains(key))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "diagnostics with no words: {missing:#?}"
+        );
     }
 
     /// A chip's family, as its id starts: `esp32` of `esp32c3`, `stm32` of

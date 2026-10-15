@@ -30,7 +30,7 @@ pub fn read(root: &Path) -> Result<Vec<Entry>> {
             continue;
         }
         // Forward slashes on every platform: this string is an identity the
-        // frontend sends back, and two spellings of one path would look like
+        // window hands back, and two spellings of one path would look like
         // two files — so search names a file through the same function.
         let Some(relative) = relative_slashed(root, path) else {
             continue;

@@ -17,14 +17,16 @@
 //!    espflash and friends. Usually on PATH too — but not in a window opened
 //!    before rustup ran, which is exactly the first-run machine.
 //! 3. PATH.
-//! 4. The tools the installer shipped beside the app — `bundled/` in Tauri's
-//!    resource directory, the same `<family>/bin/` shape — which is what makes
-//!    a fresh install able to simulate, debug and flash with no download at
-//!    all. **Here, and not earlier**: everything in it is a program the user
-//!    may have installed themselves, and a copy they chose on purpose is the
-//!    one they meant. The bundle is a floor under a machine with nothing, not
-//!    a preference. Only when its `PLATFORM` file names this machine, since a
-//!    universal macOS bundle carries one architecture's binaries.
+//! 4. The tools the installer shipped beside the app — `bundled/` beside the
+//!    window's executable (or in its bundle's resources; `target/bundled` in
+//!    a checkout, which `scripts/bundle-tools.sh` fills), the same
+//!    `<family>/bin/` shape — which is what makes a fresh install able to
+//!    simulate, debug and flash with no download at all. **Here, and not
+//!    earlier**: everything in it is a program the user may have installed
+//!    themselves, and a copy they chose on purpose is the one they meant.
+//!    The bundle is a floor under a machine with nothing, not a preference.
+//!    Only when its `PLATFORM` file names this machine, since a universal
+//!    macOS bundle carries one architecture's binaries.
 //!    - The exception is rusty's own QEMU ([`bundle_wins`]), which is searched
 //!      at step 1: a stock `qemu-system-riscv32` wears the same name and has
 //!      none of the peripherals, so one on PATH winning would quietly take the
@@ -51,17 +53,18 @@ use std::sync::OnceLock;
 
 use crate::config;
 
-/// Where the installer put the tools it ships — set once by the app from
-/// Tauri's resource directory. The CLI and the tests never set it and the
+/// Where the installer put the tools it ships — set once by the window,
+/// from the `bundled/` it finds beside its executable (`bundled_dir` in
+/// rusty-desk's `main.rs`). The CLI and the tests never set it and the
 /// ladder simply has one root fewer.
 static BUNDLED: OnceLock<PathBuf> = OnceLock::new();
 
-/// Name the directory the installer shipped tools in (`<resources>/bundled`).
+/// Name the directory the installer shipped tools in (`bundled/`).
 /// Idempotent; the first caller wins.
 ///
-/// Spelled plainly first: Tauri's resource directory arrives as a Windows
-/// verbatim path (`\\?\E:\…`) under `cargo tauri dev`, and QEMU joins its
-/// `-L` directory to `esp32c3-rom.bin` with a forward slash, which the
+/// Spelled plainly first: a canonicalised directory is a Windows verbatim
+/// path (`\\?\E:\…`), as Tauri's resource directory once was, and QEMU joins
+/// its `-L` directory to `esp32c3-rom.bin` with a forward slash, which the
 /// verbatim prefix forbids — so it answered "ROM code binary not found" for
 /// a file sitting exactly where the bundle had put it.
 pub fn set_bundled_dir(dir: PathBuf) {

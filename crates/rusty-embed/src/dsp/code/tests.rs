@@ -173,7 +173,7 @@ fn the_checked_in_code_computes_what_apply_computes() {
     }
 }
 
-/// A name the struct cannot have is refused, by the rule the frontend can
+/// A name the struct cannot have is refused, by the rule the window can
 /// ask while it is being typed.
 #[test]
 fn a_name_that_is_not_a_type_is_refused() {

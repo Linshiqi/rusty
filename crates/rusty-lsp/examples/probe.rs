@@ -6,7 +6,7 @@
 //! is not touched — and waits for diagnostics. This is how "no squiggles in
 //! the window" gets split into "the pipeline is broken" versus "the file
 //! simply has no errors": if the injected error comes back with the right
-//! line number, everything up to the frontend is working.
+//! line number, everything up to the window is working.
 
 use std::time::{Duration, Instant};
 

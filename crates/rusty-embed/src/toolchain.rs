@@ -10,8 +10,8 @@
 //! **rustup is asked from the project's directory, for the project's
 //! toolchain.** `rustup target list --installed` answers for the *active*
 //! toolchain, and which one is active depends on where rustup is asked from —
-//! a `rust-toolchain.toml` pin — and on `RUSTUP_TOOLCHAIN`, which `cargo tauri
-//! dev` leaks into this process. Asked from rusty's own directory with no
+//! a `rust-toolchain.toml` pin — and on `RUSTUP_TOOLCHAIN`, which `cargo run`
+//! leaks into this process. Asked from rusty's own directory with no
 //! project in mind, it answered for whatever the machine's default was: a
 //! project pinned to a nightly with the target added only there was reported
 //! "Target not installed", and the offered `rustup target add` run from the
@@ -1216,8 +1216,9 @@ mod tests {
     }
 
     /// The setup screen says where each step lands before running it, from
-    /// a rule of its own on the wasm side. That rule and this table have to
-    /// agree, or the screen claims a directory the recipe never writes to.
+    /// a rule of its own (`setup::destination_of`). That rule and this table
+    /// have to agree, or the screen claims a directory the recipe never
+    /// writes to.
     #[test]
     fn every_recipe_lands_where_the_setup_screen_says_it_does() {
         use crate::setup::{Destination, destination_of};

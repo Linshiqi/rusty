@@ -1077,10 +1077,9 @@ mod tests {
         assert_eq!(strip_count("300"), 64, "and a sheet is still a drawing");
     }
 
-    /// The library's own symbols cannot be loaded here — `schematic` is
-    /// backend-only and this crate compiles to wasm — so the fixtures are
-    /// the shapes of them the drawing actually reads: the library, the
-    /// name, the reference prefix and the pin names.
+    /// The fixtures are not the library's own symbols but the shapes of
+    /// them the drawing actually reads: the library, the name, the
+    /// reference prefix and the pin names.
     fn sym(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
         Symbol {
             library: library.into(),

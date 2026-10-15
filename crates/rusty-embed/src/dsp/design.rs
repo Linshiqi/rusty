@@ -18,9 +18,9 @@ use super::filter::{Coefficients, Filter, Section};
 use super::refusal::{self, Refusal};
 use super::spectrum::Window;
 
-/// A filter as a person specifies it. Stored by the frontend, so it is
-/// serialisable and says nothing about any one sample rate: [`realize`]
-/// turns it into coefficients at one.
+/// A filter as a person specifies it: serialisable, and saying nothing
+/// about any one sample rate — [`realize`] turns it into coefficients at
+/// one.
 ///
 /// [`realize`]: Design::realize
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 //! The math toolbox's view, composed: the turns a row plays, which
 //! attitude the aircraft is drawn at, which step's working is drawn, and
 //! every item of space or of the plane with how strongly to draw it. Pure,
-//! so both windows draw the same picture of a sheet and the tests say which.
+//! so the tests say which picture of a sheet the window draws.
 
 use super::{Ink, Item, model, sketch::PALETTE};
 use crate::spatial::sheet::{Row, Shape, Step, Value};

@@ -92,8 +92,8 @@ cannot make one up.
   needs.
 - **Git** — history graph, changes, branches, remotes and stashes, the way
   Fork lays them out.
-- **Assistant** — bring your own model. Keys live in the OS credential store
-  and never reach the WebView.
+- **Assistant** — bring your own model. Keys live in the OS credential store,
+  never in a settings file.
 
 ## Bring your own model
 
@@ -153,7 +153,7 @@ Rust calling each other, and vectors drawn from code.
 ## Building
 
 Rust 1.89+. The window is [Slint](https://slint.dev), so the whole app is
-one Cargo build — no Node, no WebView.
+one Cargo build.
 
 ```bash
 cargo test --workspace

@@ -10,7 +10,7 @@
 //!
 //! **`target/` is not watched.** One `cargo build` writes tens of thousands of
 //! files, and a watcher that reported them would spend the build storming the
-//! frontend with refreshes of a directory nobody is looking at. The rule is
+//! window with refreshes of a directory nobody is looking at. The rule is
 //! the one the file tree and search already apply — dot entries through
 //! [`hidden_entry`], `target/` by name, and whatever the root `.gitignore`
 //! names. The last matters for the project whose `.cargo/config.toml` says
@@ -20,13 +20,13 @@
 //! **Events are batched, not forwarded.** Saving a file in another editor is
 //! frequently a write, a rename and a second write; on Windows a single save
 //! can produce four notifications. A quiet window closes the batch, so the
-//! frontend gets one message per human action rather than one per syscall.
+//! window gets one message per human action rather than one per syscall.
 //! Only *reported* events hold the window open — a build writing into
 //! `target/` for a minute must not delay the one real save made as it began.
 //!
 //! **Content changes and structural changes are told apart.** Re-reading one
 //! open file is free; walking a project is not. A modify says "this file";
-//! a create, remove or rename says "the tree", and the frontend can then do
+//! a create, remove or rename says "the tree", and the window can then do
 //! the cheap thing in the common case.
 
 use std::collections::BTreeSet;
@@ -56,7 +56,7 @@ pub struct Watch {
 ///
 /// The receiver ends when the [`Watch`] is dropped. Errors from the platform
 /// watcher end the stream rather than being reported per-event: a watcher that
-/// has failed reports nothing, and a frontend told about each individual
+/// has failed reports nothing, and a window told about each individual
 /// failure would show a banner per file.
 pub fn watch(root: &Path) -> crate::Result<(Watch, mpsc::Receiver<FileChanges>)> {
     let rules = Rules::load(root);
@@ -225,7 +225,7 @@ fn absorb(
     true
 }
 
-/// Project-relative with `/` separators — the identity the frontend uses.
+/// Project-relative with `/` separators — the identity the file tree uses.
 fn relative(root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(root).ok()?;
     let text = relative

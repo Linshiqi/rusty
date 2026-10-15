@@ -1,6 +1,6 @@
 //! What a debug session looks like from the outside.
 //!
-//! Plain data, no IO — the frontend `use`s these directly, so what the
+//! Plain data, no IO — the window `use`s these directly, so what the
 //! debugger reports and what the panel draws cannot drift.
 
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,7 @@ pub struct MemoryRead {
     pub data: Vec<u8>,
 }
 
-/// Where a session is, as one value the frontend can render.
+/// Where a session is, as one value the window can render.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugState {
@@ -122,7 +122,7 @@ pub struct DebugState {
     pub memory: Vec<MemoryRead>,
     /// What the session printed since the last state: the build that
     /// produced a host test binary, then the program's own stdout under
-    /// gdb. Lines, not an accumulation — the frontend appends them to the
+    /// gdb. Lines, not an accumulation — the window appends them to the
     /// dock and the next state starts empty. Empty on a remote target,
     /// whose console is the simulator's serial line and not gdb's.
     #[serde(default)]

@@ -1,6 +1,6 @@
 //! What the server says unasked. Its requests to this client are answered —
 //! every one, since a request left unanswered stalls the session — and its
-//! notifications become the session's state and the frontend's events:
+//! notifications become the session's state and the window's events:
 //! diagnostics, progress, the server's health, and asks to ask again.
 
 use std::sync::atomic::Ordering;
@@ -150,7 +150,7 @@ pub(super) struct Progress {
 
 impl Shared {
     /// Fold one `$/progress` notification into the table of work in flight
-    /// and tell the frontend what that table now says. A `begin` opens an
+    /// and tell the window what that table now says. A `begin` opens an
     /// entry, `report` updates it, `end` closes it; a report for a token
     /// never begun is ignored rather than invented.
     fn progress(&self, params: &Value) {

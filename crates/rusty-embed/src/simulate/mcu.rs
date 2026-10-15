@@ -507,7 +507,7 @@ mod tests {
 
     /// The real firmware, end to end through the host's half: launched as a
     /// session, its pin channel connected over TCP the way `connect` does,
-    /// and PWM reports arriving on it in the protocol `absorb` reads.
+    /// and PWM reports arriving on it in the protocol `protocol` reads.
     #[test]
     fn a_launched_run_reports_pwm_on_its_pin_channel_and_prints_on_its_console() {
         let (session, mut channel) = launched("ch32v003j4m6", "ch32v003-pwm");

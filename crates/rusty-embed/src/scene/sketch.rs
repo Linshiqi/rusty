@@ -1,7 +1,7 @@
 //! What a program drew with `rusty-draw` (`crate::draw`), as a scene the
 //! view projects: the floor and the axes, every mark in its colour, the
 //! little square where the numbers make a right angle, and the framing
-//! that holds it all — the Draw tab's arithmetic, shared by both windows.
+//! that holds it all — the Draw tab's arithmetic.
 
 use crate::draw::{self, Angle, Flaw, Mark, Shape, Sketch};
 use crate::spatial::{TINY, Vec3};

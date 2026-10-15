@@ -92,10 +92,11 @@ pub fn options() -> Vec<crate::model::WizardOption> {
             id: id.to_string(),
             label: label.to_string(),
             detail: detail.to_string(),
-            // Already closed over, so the frontend ticks one list and is done.
-            // Sending the direct requirements instead would mean walking the
-            // graph again over there — a second implementation of this function
-            // that can disagree with the one the generator is checked against.
+            // Already closed over, so the window ticks one list and is done.
+            // Handing over the direct requirements instead would mean walking
+            // the graph again over there — a second implementation of this
+            // function that can disagree with the one the generator is
+            // checked against.
             requires: requirements(id),
         })
         .collect()
@@ -734,7 +735,7 @@ fn unnest_repository(firmware: &Path) {
 /// sees.
 fn valid_name(name: &str) -> Result<&str> {
     // One rule, in the model, so the field can say this while it is being
-    // typed instead of the backend saying it afterwards in a banner.
+    // typed instead of the plan refusing it afterwards in a banner.
     if crate::model::crate_name_problem(name).is_none() {
         Ok(name)
     } else {
@@ -1227,7 +1228,7 @@ mod tests {
         assert!(plan.display.contains("-o wifi"), "{}", plan.display);
     }
 
-    /// The frontend ticks `requires` and nothing else, so it has to be the
+    /// The window ticks `requires` and nothing else, so it has to be the
     /// whole set — not just the first level.
     #[test]
     fn the_advertised_requirements_are_already_closed_over() {

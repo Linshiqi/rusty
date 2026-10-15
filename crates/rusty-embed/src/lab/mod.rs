@@ -1,7 +1,7 @@
 //! The signal lab's arithmetic, apart from anything it draws: what a source
 //! on the sheet plays, the records every instrument reads, a sweep's
-//! frequencies and what each step measured — shared by both windows, which
-//! draw the instruments and run the sweep on it, and word what it refuses
+//! frequencies and what each step measured — for the window, which draws
+//! the instruments and runs the sweep on it, and words what it refuses
 //! (`docs/signals.md`).
 
 use std::collections::BTreeMap;
@@ -110,8 +110,8 @@ fn is_reading(key: &str) -> bool {
     key.starts_with(SIGNAL_OF) && key != SIGNAL_RATE && key.len() > SIGNAL_OF.len()
 }
 
-/// One loop of what a source plays, rendered exactly as the backend renders
-/// the table: the same rate, the same loop and the same seed.
+/// One loop of what a source plays, rendered exactly as a run renders the
+/// table: the same rate, the same loop and the same seed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Played {
     pub source: Source,
@@ -128,8 +128,8 @@ pub struct Played {
 /// own where the lab changed one in this run.
 ///
 /// A generator's loop is the one every generator on the sheet shares, at
-/// the fastest rate any of them asks for, because that is how the backend
-/// plays them; a sensor's is the one its own readings share.
+/// the fastest rate any of them asks for, because that is how a run plays
+/// them; a sensor's is the one its own readings share.
 pub fn played(
     sheet: &Sheet,
     source: &Source,
@@ -296,12 +296,12 @@ mod tests {
         );
     }
 
-    /// What the lab renders is what the backend plays: the generators'
+    /// What the lab renders is what a run plays: the generators'
     /// shared loop at their rate, and a sensor's at its own, with the
     /// sensor's device as the target — and a text the lab changed stands
     /// in for the sheet's.
     #[test]
-    fn a_source_plays_what_the_backend_would() {
+    fn a_source_plays_what_a_run_plays() {
         let sheet = sheet();
         let v1 = Source {
             part: "V1".into(),
@@ -310,12 +310,12 @@ mod tests {
         let played_v1 = played(&sheet, &v1, &BTreeMap::new()).unwrap();
         assert_eq!(played_v1.rate, GENERATOR_RATE);
         assert_eq!(played_v1.samples.len(), GENERATOR_RATE as usize);
-        let backend = Signal::parse("sine f=50 a=1").unwrap().render(
+        let rendered = Signal::parse("sine f=50 a=1").unwrap().render(
             f64::from(GENERATOR_RATE),
             GENERATOR_RATE as usize,
             generator::seed_of(&sheet.parts[0], SIGNAL),
         );
-        assert_eq!(played_v1.samples, backend);
+        assert_eq!(played_v1.samples, rendered);
 
         let gz = Source {
             part: "U2".into(),

@@ -2,9 +2,9 @@
 //! the board, so the arithmetic a flight controller was checked against is
 //! diffed and reviewed with the flight controller.
 //!
-//! The file's own shape, apart from the wire's (`MathSheet`): somebody may
-//! write it by hand, and a rename on the frontend must not become a key
-//! missing from everybody's file.
+//! The file's own shape, apart from the model's (`MathSheet`): somebody may
+//! write it by hand, and a rename for the window's sake must not become a
+//! key missing from everybody's file.
 
 use std::path::Path;
 

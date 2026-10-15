@@ -1,12 +1,13 @@
 //! The documents the server has been shown: opening, changing, saving and
-//! closing them, the text each was last sent as, and what the frontend is
+//! closing them, the text each was last sent as, and what the window is
 //! told about each one's diagnostics. A position in a request is converted
 //! here too, against that text.
 //!
 //! **What this client records about a document and what it writes to the
-//! server go in one order** (`Shared::order`). Every call runs on its own
-//! thread of the blocking pool, and each of these used to record first and
-//! write afterwards with nothing held between: two changes could reach the
+//! server go in one order** (`Shared::order`). Calls come from more than
+//! one thread — a question runs on its own, beside the queue the changes
+//! come through — and each of these used to record first and write
+//! afterwards with nothing held between: two changes could reach the
 //! server in the other order — a delta worked out against a text the server
 //! had not been sent yet, and its copy of the file wrong from then on — a
 //! close could land after the open that followed it, and a question asked
@@ -234,7 +235,7 @@ impl LspClient {
         Ok(())
     }
 
-    /// A frontend scalar column as a protocol position.
+    /// The editor's scalar column as a protocol position.
     pub(super) fn protocol_position(&self, path: &str, line: u32, col: u32) -> Value {
         let encoding = self.shared.encoding();
         let docs = self.shared.docs.lock().expect("lsp docs");
@@ -261,7 +262,7 @@ impl Shared {
         path_to_uri(&self.root.join(path))
     }
 
-    /// Tell the frontend what is wrong in `path`, from both sources at once.
+    /// Tell the window what is wrong in `path`, from both sources at once.
     pub(crate) fn emit_diagnostics(&self, path: &str) {
         let pulled = self
             .pulled

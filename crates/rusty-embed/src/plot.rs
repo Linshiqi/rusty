@@ -1,6 +1,6 @@
 //! Named numeric channels over time, as the firmware prints them on its
 //! `[rusty:tel]` line, and the range each is drawn against — the Plot
-//! panel's arithmetic, shared by both windows.
+//! panel's arithmetic.
 
 use crate::protocol::Telemetry;
 

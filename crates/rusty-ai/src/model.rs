@@ -67,10 +67,10 @@ pub enum Role {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Content {
     /// A named field, not a newtype. With `tag = "type"` serde has nowhere to
-    /// put the discriminant inside a bare string and refuses at *runtime* —
-    /// which for this type means every assistant answer failing to cross the
-    /// IPC boundary, long after the code that looked wrong. It also matches
-    /// what both providers already put on the wire: `{"type":"text","text":…}`.
+    /// put the discriminant inside a bare string and refuses at *runtime*,
+    /// the first time a transcript is serialized — long after the code that
+    /// looked wrong. It also matches what both providers already put on the
+    /// wire: `{"type":"text","text":…}`.
     Text { text: String },
     #[serde(rename_all = "camelCase")]
     ToolUse {
@@ -237,7 +237,7 @@ fn window(text: &str, focus: Option<(usize, usize)>) -> (String, Option<Attached
 
 /// Normalized stream events.
 ///
-/// This enum is the contract the frontend renders against. Adding a provider
+/// This enum is the contract the assistant drawer reads. Adding a provider
 /// must never add a variant here — if it would, the abstraction is wrong.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -400,7 +400,7 @@ fn builtin_source() -> ToolSource {
 /// "Reachable" on a path that had made no network request at all: the model
 /// list was `unwrap_or_default()`ed, so a 401, a DNS failure and a timeout all
 /// read as an empty list, and an empty list read as success. Facts cannot be
-/// defaulted into a verdict — a failed request is an error, and the frontend
+/// defaulted into a verdict — a failed request is an error, and the window
 /// words what did happen, in the user's language.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "verdict", rename_all = "camelCase")]
@@ -427,7 +427,7 @@ pub enum ProviderCheck {
 }
 
 /// Why a provider check stopped short. One variant today; a tagged enum so the
-/// next reason is an addition the frontend matches on, not a sentence it has
+/// next reason is an addition the window matches on, not a sentence it has
 /// to parse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "camelCase")]
@@ -505,7 +505,7 @@ pub struct Preset {
 
 /// Endpoints worth offering out of the box.
 ///
-/// Pure data, so the settings screen can render before any backend call.
+/// Pure data, which the settings page lists without building a client.
 /// Deliberately includes domestic Chinese providers and local runtimes, because
 /// "bring your own LLM" is useless if the list assumes everyone can reach
 /// api.openai.com.
@@ -542,10 +542,10 @@ pub fn presets() -> Vec<Preset> {
 mod tests {
     use super::*;
 
-    /// Everything the assistant sends the frontend crosses the IPC boundary as
-    /// JSON, and the transcript comes straight back on the next turn. A variant
-    /// that cannot round-trip breaks the conversation on the second question,
-    /// which is a long way from where the mistake was made.
+    /// Every kind of content serializes and reads back as itself. A variant
+    /// serde refuses — see [`Content::Text`] — fails only at runtime, the
+    /// first time a transcript is serialized (`token_budget` measures one
+    /// that way), which is a long way from where the mistake was made.
     #[test]
     fn conversation_content_survives_the_wire() {
         let message = Message {
@@ -619,12 +619,12 @@ mod tests {
         assert!(!whole.prose().unwrap().contains("lines"));
         assert!(
             !serde_json::to_string(&whole).unwrap().contains("lines"),
-            "a whole file carries no range on the wire"
+            "a whole file carries no range"
         );
     }
 
-    /// The verdict is matched on by the frontend, so its tags are a contract:
-    /// `verdict` on the outside, `reason` on the inside, camelCase throughout.
+    /// The verdict serializes tagged — `verdict` on the outside, `reason` on
+    /// the inside, camelCase throughout — and reads back as itself.
     #[test]
     fn a_provider_check_survives_the_wire_with_its_tags() {
         let reachable = ProviderCheck::Reachable {

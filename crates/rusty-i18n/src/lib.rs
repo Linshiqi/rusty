@@ -1,7 +1,7 @@
 //! The message catalogue.
 //!
-//! One crate, no IO, compiles to wasm — so the frontend looks a string up the
-//! same way the backend will when the diagnostics move over.
+//! One crate, no IO. The window is its only caller: a library gives a stable
+//! name beside its own English, and the window translates the name.
 //!
 //! ## What is here and what is deliberately not
 //!
@@ -62,7 +62,7 @@ impl Locale {
 
     /// Parse a BCP-47-ish tag, as loosely as the sources it comes from.
     ///
-    /// `navigator.language` says `zh-CN`, a Windows locale says `zh_CN`, and
+    /// A system locale says `zh-CN`, or `zh_CN` on some systems, and
     /// somebody editing `workbench.toml` by hand says `zh`. All three mean
     /// the same thing, and a settings file that silently reverts to English
     /// because of a hyphen is a bug nobody can see.
@@ -98,14 +98,14 @@ const CATALOGUES: &[(Locale, &str)] = &[
 
 /// The active locale, as a discriminant.
 ///
-/// A plain atomic rather than a signal: changing the display language
-/// reloads the window, exactly as VS Code restarts for it. The alternative —
-/// making every one of several hundred call sites reactive — buys a live
-/// swap nobody asked for and risks a half-translated screen.
+/// A plain atomic: every lookup reads the language at the moment it is
+/// made, so a change takes effect for whatever is worded after it, and a
+/// caller that changes the language words what it already shows again.
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
-/// Set the language. Takes effect for text rendered after this point, which
-/// in practice means: call it before the first paint.
+/// Set the language. Takes effect for text looked up after this point: call
+/// it before the first paint, and word what is on screen again after a
+/// change.
 pub fn set_locale(locale: Locale) {
     CURRENT.store(
         match locale {
@@ -168,11 +168,11 @@ fn walk(table: &toml::Table, prefix: String, out: &mut HashMap<String, String>) 
 
 /// Look one key up, answering `None` when the catalogue does not have it.
 ///
-/// For text that arrives from the *backend* carrying its own English. The
-/// backend sends a stable name — a tool's, a chip's — and the frontend
-/// translates it if it can; a name added later, or one from somebody's own
-/// TOML, has no entry here and must fall back to what the backend said rather
-/// than to a missing-key placeholder. That is refuse-rather-than-guess applied
+/// For text a *library* produces carrying its own English. The library gives
+/// a stable name beside it — a tool's, a chip's — and the window translates
+/// the name if it can; a name added later, or one from somebody's own TOML,
+/// has no entry here and must fall back to the library's English rather than
+/// to a missing-key placeholder. That is refuse-rather-than-guess applied
 /// to translation: no entry means no claim, not an invented one.
 ///
 /// Distinct from [`lookup`] on purpose — [`lookup`]'s missing key is a bug and

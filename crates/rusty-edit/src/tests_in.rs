@@ -1,19 +1,17 @@
 //! Finding the tests in a Rust file, so the editor can offer to run them.
 //!
-//! Model-side and IO-free, like [`crate::lexical`]: the gutter is drawn by the
-//! frontend, so the frontend has to be able to ask this question about the
-//! text it is holding rather than about the copy the backend last read. A
-//! round trip per keystroke would be the alternative, and the answer would
-//! always be one edit behind the line numbers it is decorating.
+//! IO-free, like [`crate::lexical`]: the editor asks this question about the
+//! text it is holding rather than about the copy on disk, so the answer is
+//! never an edit behind the lines it decorates.
 //!
 //! Lexical rather than syntactic, and the trade is deliberate. `syn` would be
-//! exact and would drag a parser into the wasm bundle for a decoration; a
-//! file mid-edit does not parse anyway, and a run arrow that disappears while
-//! you are typing inside the function it belongs to is worse than one that is
-//! occasionally offered for something that will not compile. What it must not
-//! do is *invent* a name — `cargo test` with a filter that matches nothing
-//! exits successfully having run nothing, which reads exactly like a passing
-//! test.
+//! exact, and is a whole parser to carry for a decoration; a file mid-edit
+//! does not parse anyway, and a run arrow that disappears while you are
+//! typing inside the function it belongs to is worse than one that is
+//! occasionally offered for something that will not compile. What it must
+//! not do is *invent* a name — `cargo test` with a filter that matches
+//! nothing exits successfully having run nothing, which reads exactly like a
+//! passing test.
 
 use serde::{Deserialize, Serialize};
 

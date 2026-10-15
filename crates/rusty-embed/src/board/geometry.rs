@@ -297,20 +297,6 @@ pub enum Drag {
     },
 }
 
-/// What a right-click landed on. The menu is about this and nothing else —
-/// that is the entire point of a context menu.
-#[derive(Clone, Copy, PartialEq)]
-pub enum MenuTarget {
-    Wire(usize),
-    Part(usize),
-    /// One pin of one part, by the part's index and the pin's place in its
-    /// symbol — the only place a no-connect can go, since a no-connect is
-    /// about a pin and nothing else. Indices rather than a name because
-    /// this type is `Copy` and lives in a signal.
-    Pin(usize, usize),
-    Sheet,
-}
-
 /// The same rounding on a user-chosen grid — the sheet's corner control
 /// offers 1/4/8/16px, because "the grid is too coarse to align" deserved a
 /// dial, even after the real cause (off-grid anchors) was fixed.
@@ -382,7 +368,7 @@ pub fn kit_symbol(chip: &str, rows: &[Row]) -> Symbol {
     }
 }
 
-/// The editor's parts from the wire model: the devkit first, always, then
+/// The editor's parts from the model's sheet: the devkit first, always, then
 /// every placed symbol with its symbol found among the resolved ones.
 pub fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
     let mut out = Vec::with_capacity(sheet.parts.len() + 1);
@@ -412,8 +398,9 @@ pub fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
     out
 }
 
-/// Back to the wire model, for saving. The symbols are not sent: the
-/// backend resolves them on load, and the file never carries them.
+/// Back to the model, for saving. The symbols are left out:
+/// `simulate::resolve_symbols` puts them back on load, and the file never
+/// carries them.
 pub fn sheet_of(chip: &str, parts: &[EditPart], wires: &[Wire], no_connect: &[PinRef]) -> Sheet {
     let mut sheet = Sheet::empty(chip);
     for part in parts {
@@ -1539,7 +1526,7 @@ mod tests {
         assert_eq!((again.kit_rot, again.kit_mirror), (0, false));
         assert_eq!(again.parts, sheet.parts);
         assert_eq!(again.wires, sheet.wires);
-        assert!(again.symbols.is_empty(), "the backend resolves them");
+        assert!(again.symbols.is_empty(), "resolved on load, never saved");
 
         let mut orphan = sheet.clone();
         orphan.symbols.clear();

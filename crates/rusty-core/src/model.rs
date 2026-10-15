@@ -200,9 +200,7 @@ pub struct FeatureImpact {
     pub baseline_crates: usize,
     /// `resolved_crates - baseline_crates`.
     ///
-    /// `i32`, not `i64`: a dependency-count delta cannot overflow it, and a
-    /// 64-bit integer would generate a TypeScript `bigint` that never matches
-    /// the plain JSON number actually sent over the wire.
+    /// `i32`, which a dependency-count delta cannot overflow.
     pub delta_crates: i32,
     /// Crates this selection pulls in that the baseline does not.
     pub added: Vec<String>,
@@ -243,8 +241,9 @@ pub struct FeatureRow {
 ///
 /// Sizes are bytes; every path is absolute and a plain string. What is
 /// *stale* is decided by [`crate::disk`]'s rules and summarised here per
-/// group; the paths themselves stay on the backend, which recomputes them
-/// when asked to sweep rather than trusting a list sent back over the wire.
+/// group; the paths themselves are not in it, because a sweep scans again
+/// and removes what that scan finds rather than trusting a list handed
+/// back by its caller.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskReport {
@@ -374,7 +373,7 @@ pub enum StaleReason {
 #[serde(rename_all = "camelCase")]
 pub struct StaleSummary {
     /// `version-gone`, `package-gone`, `idle` or `superseded` — the kind of
-    /// the [`StaleReason`], so the frontend translates it by name.
+    /// the [`StaleReason`], so the window translates it by name.
     pub reason: String,
     pub bytes: u64,
     pub files: u64,
@@ -385,7 +384,7 @@ pub struct StaleSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskItem {
-    /// A stable name the frontend translates: `docs`, `sim-images`,
+    /// A stable name the window translates: `docs`, `sim-images`,
     /// `registry-src`, … — or the directory's own name for one the scan does
     /// not know, which it then also refuses to remove.
     pub label: String,

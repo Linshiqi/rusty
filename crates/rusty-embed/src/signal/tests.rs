@@ -183,7 +183,7 @@ fn a_seed_decides_the_noise_and_nothing_else() {
 }
 
 /// A render's first samples do not depend on how many follow: the preview
-/// the frontend draws of the first second is the first second of the
+/// the window draws of the first second is the first second of the
 /// minute the emulator plays.
 #[test]
 fn a_short_render_is_the_start_of_a_long_one() {
@@ -313,7 +313,7 @@ fn a_rate_that_is_not_one_renders_nothing() {
 }
 
 /// Every preset reads, reads back as written, and has a name of its own
-/// for the frontend to translate.
+/// for the window to translate.
 #[test]
 fn every_preset_reads_back_as_written() {
     let presets = presets();

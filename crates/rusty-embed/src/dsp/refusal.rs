@@ -4,7 +4,7 @@
 use std::fmt;
 
 /// A refusal from `dsp`, naming what was wrong rather than guessing past
-/// it. The fields are the numbers the frontend needs to say it in the
+/// it. The fields are the numbers the window needs to say it in the
 /// user's language; `Display` is the English.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Refusal {

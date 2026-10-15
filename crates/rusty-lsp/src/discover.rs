@@ -400,9 +400,9 @@ mod tests {
         assert!(linked_projects(Path::new("/nowhere-at-all")).is_empty());
     }
 
-    /// `cargo tauri dev` runs under the rustup shim, which exports the
-    /// toolchain it picked for *rusty's* build. Passed on, rust-analyzer's
-    /// own `cargo metadata` would read an esp-pinned project with stable.
+    /// `cargo run` runs under the rustup shim, which exports the toolchain
+    /// it picked for *rusty's* build. Passed on, rust-analyzer's own
+    /// `cargo metadata` would read an esp-pinned project with stable.
     #[test]
     fn the_shims_toolchain_does_not_leak_into_the_server() {
         let command = command_for(Path::new("rust-analyzer"), Path::new("."));

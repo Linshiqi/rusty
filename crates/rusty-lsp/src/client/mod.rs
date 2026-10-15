@@ -114,19 +114,17 @@ pub(crate) struct Shared {
     /// thread that reads the server.
     order: Mutex<()>,
     /// The latest completion answers, raw, each with the path it answered
-    /// for and its number: the items the frontend sees are converted copies,
+    /// for and its number: the items the editor sees are converted copies,
     /// and `completionItem/resolve` needs the server's own item — its `data`
     /// in particular — so the accepted one is looked up here by answer and
     /// index.
     completions: Kept,
-    /// Numbers the kept answers, completions and code actions alike, from 1
-    /// — far short of 2^53 in any session, so it crosses the wire as a plain
-    /// JSON number.
+    /// Numbers the kept answers, completions and code actions alike, from 1.
     replies: AtomicU64,
     /// The latest code-action answers' WorkspaceEdits, one per fix the
-    /// frontend was shown, each with the path and the number it answered
+    /// editor was shown, each with the path and the number it answered
     /// under. An accepted fix that edits other files is applied from here
-    /// the way a rename is, since the frontend only ever splices its own
+    /// the way a rename is, since the editor only ever splices its own
     /// buffer. Kept like the completions and for the same reason: the caret
     /// and a hover both ask, so the newest answer is often not the one the
     /// fix being applied came from.
@@ -146,7 +144,7 @@ pub(crate) struct Shared {
     /// What each source last said about each file. `pulled` is
     /// rust-analyzer's own analysis, asked for per open document; `pushed`
     /// is what it publishes unasked — with pull negotiated, only the `cargo
-    /// check` run. The frontend is always sent the two together
+    /// check` run. The window is always sent the two together
     /// ([`Shared::emit_diagnostics`]): sent as they arrived, each one replaced
     /// the other, and a rustc error showed for three seconds and then an
     /// empty pull took it away.

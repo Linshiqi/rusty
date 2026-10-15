@@ -7,7 +7,7 @@
 //! millimetres, y *up*, the origin at the symbol's anchor. The renderer flips
 //! y once, at the edge, rather than every importer remembering to.
 //!
-//! Wire model, not file format: `docs/schematic.md` has the file.
+//! The model, not the file format: `docs/schematic.md` has the file.
 
 use serde::{Deserialize, Serialize};
 
@@ -84,10 +84,9 @@ pub enum Fill {
 /// one scale between them, and it is `ROW_PITCH / 2.54` — a devkit header's
 /// row pitch is KiCad's 100 mil pin pitch — so a symbol's pins land on the
 /// same grid as the devkit's, which is what lets a snapped wire meet both
-/// ends. It sits here, beside the coordinates it is about and on the wasm
-/// side, because both the canvas and the KiCad writer convert with it and a
-/// second copy is how an imported part comes in at a different size from
-/// the one beside it.
+/// ends. It sits here, beside the coordinates it is about, because both the
+/// canvas and the KiCad writer convert with it and a second copy is how an
+/// imported part comes in at a different size from the one beside it.
 pub const MM_PX: f64 = 16.0 / 2.54;
 
 /// One drawing primitive of a symbol's body.

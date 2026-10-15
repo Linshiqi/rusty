@@ -7,7 +7,7 @@
 //! anode and a cathode, a resistor is a part, and which pin drives what is
 //! read off the wires (`crate::nets`). `docs/schematic.md` is the design.
 //!
-//! Wire model, not file format: `simulate::board_file` owns the TOML.
+//! The model, not the file format: `simulate::board_file` owns the TOML.
 
 use std::collections::BTreeMap;
 
@@ -142,8 +142,9 @@ pub struct Sheet {
     /// reaches nothing is a question, and a marked one is an answer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub no_connect: Vec<PinRef>,
-    /// The symbols the parts use, resolved by the backend from the library
-    /// so the frontend can draw without a second lookup. Never in the file.
+    /// The symbols the parts use, resolved from the library on load
+    /// (`simulate::resolve_symbols`) so the window can draw without a second
+    /// lookup. Never in the file.
     #[serde(default)]
     pub symbols: Vec<Symbol>,
     /// What loading wanted read: a migration from the first format, a part

@@ -2,9 +2,9 @@
 //! own clock (`docs/signals.md`, "The emulator").
 //!
 //! The lines that put one on a pin or on a sensor's register block, and the
-//! emulator's account of playing it. Compiled unconditionally, like the
-//! rest of the protocol: the frontend reads `[rusty:wave@…]` as it passes,
-//! to line the signal it drew up with the conversions the emulator reports.
+//! emulator's account of playing it. Pure, like the rest of the protocol:
+//! the window reads `[rusty:wave@…]` as it passes, to line the signal it
+//! drew up with the conversions the emulator reports.
 
 use crate::protocol::hex_string;
 

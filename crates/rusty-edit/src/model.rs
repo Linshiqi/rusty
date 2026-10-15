@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct Entry {
     pub name: String,
     /// Path relative to the project root, with `/` separators on every
-    /// platform. Relative because it is an identity the frontend echoes back,
+    /// platform. Relative because it is an identity the window hands back,
     /// and an absolute Windows path in a URL-ish position invites someone to
     /// concatenate it with something.
     pub path: String,
@@ -21,7 +21,7 @@ pub struct Entry {
 ///
 /// Semantic, not RGB. syntect's own themes are fixed palettes, and shipping one
 /// would paint a light-theme window with dark-theme colours — so the kind
-/// travels and the stylesheet decides, exactly as the terminal's indexed colours
+/// travels and the theme decides, exactly as the terminal's indexed colours
 /// do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,16 +96,15 @@ pub struct Document {
     pub path: String,
     /// Highlighted lines, for display.
     pub lines: Vec<Line>,
-    /// The same content unstyled, for the editor to put in a text box.
+    /// The same content unstyled: the text the editor edits.
     ///
-    /// Both are sent because the editor overlays a plain text area on the
-    /// highlighted view; deriving one from the other in the frontend would mean
+    /// Both are here because deriving the text from the lines would mean
     /// re-joining spans and getting trailing whitespace subtly wrong.
     pub text: String,
     /// Which grammar was used, if one matched.
     pub language: Option<String>,
     /// Set when the file cannot be shown as text — because it is not text, or
-    /// because it is too large to send (`too_large` says which). There are no
+    /// because it is too large to show (`too_large` says which). There are no
     /// lines in that case — a viewer that renders a firmware image as
     /// mojibake helps nobody.
     pub binary: bool,
@@ -114,7 +113,7 @@ pub struct Document {
     /// reader looking for a corrupt file.
     #[serde(default)]
     pub too_large: bool,
-    /// The painting `lines` came from, by the number the backend keeps it
+    /// The painting `lines` came from, by the number `Files` keeps it
     /// under: what the editor names when it asks for a repaint, so that an
     /// edit costs the lines it changed rather than the file. `None` for a
     /// document nothing is kept for — refused, or a library's source opened
@@ -134,7 +133,7 @@ pub struct Document {
 /// `lines` are the painted lines of the text that was sent, from line `from`
 /// on. Every other line paints as it did in the painting the request named —
 /// below these, moved by however many lines the edit added or removed. A
-/// request naming a painting the backend no longer keeps is answered whole:
+/// request naming a painting `Files` no longer keeps is answered whole:
 /// `from` is 0 and `lines` is every line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,7 +160,7 @@ pub struct Formatted {
 pub struct SearchHit {
     /// Project-relative, `/`-separated — the file tree's identity for it.
     pub path: String,
-    /// 0-based, like every line number on this wire.
+    /// 0-based, like every line number here.
     pub line: u32,
     /// Unicode-scalar column of the match, for the editor to reveal.
     pub col: u32,
@@ -169,7 +168,7 @@ pub struct SearchHit {
     /// files) so one line cannot flood the panel.
     pub text: String,
     /// Byte range of the match inside `text`, for highlighting. Bytes, not
-    /// scalars: the frontend slices, it does not count.
+    /// scalars: the panel slices, it does not count.
     pub span_start: u32,
     pub span_end: u32,
 }
@@ -218,7 +217,7 @@ pub struct ReplaceOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct Skipped {
     pub path: String,
-    /// `unsaved` or `write-failed` — a stable name the frontend translates,
+    /// `unsaved` or `write-failed` — a stable name the window translates,
     /// never a sentence. Same reasoning as a diagnostic's `kind`.
     pub reason: String,
 }
@@ -232,7 +231,7 @@ pub struct Skipped {
 #[serde(rename_all = "camelCase")]
 pub struct FileChanges {
     /// Files whose *contents* changed. Project-relative, `/`-separated, like
-    /// every other path on this wire.
+    /// every other path here.
     pub changed: Vec<String>,
     /// True when something appeared, vanished or was renamed, so the tree
     /// itself is stale rather than just a file's text.

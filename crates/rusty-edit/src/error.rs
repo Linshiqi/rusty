@@ -29,7 +29,7 @@ pub enum Error {
 
     /// A path that climbs out of the project.
     ///
-    /// The frontend sends relative paths back, and `../../..` in one of them
+    /// Callers hand relative paths back, and `../../..` in one of them
     /// would let a panel read or overwrite anything on the machine. Refused
     /// rather than normalised, because a caller asking for it is either
     /// confused or hostile and neither deserves the file.

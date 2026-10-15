@@ -2,7 +2,7 @@
 //! refusal, note and verdict the arithmetic reports by name, the reference's
 //! groups, and a value on one line or as Rust — said in the reader's
 //! language. The arithmetic (`rusty_embed::spatial`) says what happened;
-//! this says it in words. Carried over from the old window as it was.
+//! this says it in words.
 
 use rusty_embed::spatial::check::Relation;
 use rusty_embed::spatial::sheet::steps::{deg, mat3, num, quat, vec2, vec3};

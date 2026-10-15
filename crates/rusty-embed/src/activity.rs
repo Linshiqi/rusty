@@ -8,12 +8,11 @@
 //! for all of it, and a build's whole result was a scrollback somebody had
 //! to open and read from the bottom up.
 //!
-//! Everything here is pure and tested: `controller::session` hands every
-//! line a session prints to [`Activity::observe`] and the exit code to
-//! [`Activity::finish`], and the status bar draws what comes back.
+//! Everything here is pure and tested: the window hands every line a
+//! session prints to [`Activity::observe`] and the exit code to
+//! [`Activity::finish`], and the title bar draws what comes back.
 
-/// What kind of work a session is — decided by the output channel it
-/// streams under (`state.dock.source`), which every runner already names.
+/// What kind of work a session is — what the window says it began.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Build,
@@ -31,19 +30,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn of_channel(channel: &str) -> Kind {
-        match channel {
-            "build" => Kind::Build,
-            "test" => Kind::Test,
-            "flash" => Kind::Flash,
-            "monitor" => Kind::Monitor,
-            "simulate" => Kind::Simulate,
-            "tools" => Kind::Install,
-            "link" => Kind::Link,
-            _ => Kind::Command,
-        }
-    }
-
     /// Runs until somebody stops it rather than until it is done. Its end is
     /// not a verdict — a monitor that was closed did not fail — so only a
     /// non-zero exit it reached by itself is worth reporting.
@@ -466,11 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn channels_name_their_kind() {
-        assert_eq!(Kind::of_channel("build"), Kind::Build);
-        assert_eq!(Kind::of_channel("flash"), Kind::Flash);
-        assert_eq!(Kind::of_channel("tools"), Kind::Install);
-        assert_eq!(Kind::of_channel("commands"), Kind::Command);
+    fn only_what_somebody_stops_is_open_ended() {
         assert!(Kind::Monitor.open_ended());
         assert!(!Kind::Build.open_ended());
     }

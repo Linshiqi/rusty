@@ -36,7 +36,7 @@ use crate::{
 /// the window; every `rustup` that ran with `RUSTUP_TOOLCHAIN` still set
 /// answered for rusty's own toolchain instead of the project's.
 ///
-/// - **`RUSTUP_TOOLCHAIN` is removed.** Launched from `cargo tauri dev`, this
+/// - **`RUSTUP_TOOLCHAIN` is removed.** Launched from `cargo run`, this
 ///   process inherits the variable the rustup shim set for *rusty's own* build,
 ///   and rustup lets it outrank the project's `rust-toolchain.toml`. A spawned
 ///   `cargo build` then compiles an esp-pinned Xtensa project with stable,

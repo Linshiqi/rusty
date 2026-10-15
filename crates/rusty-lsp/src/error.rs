@@ -36,8 +36,8 @@ pub enum Error {
     Server { method: String, message: String },
 
     /// A call hierarchy item handed back that is not the JSON the server
-    /// sent. It crosses to the frontend and back untouched, so this is
-    /// damage on the way, not anything the server said.
+    /// sent. The window holds it as text and hands it back untouched, so
+    /// this is damage on the way, not anything the server said.
     #[error("the call hierarchy item is not the server's JSON: {0}")]
     Item(#[source] serde_json::Error),
 

@@ -2,9 +2,8 @@
 //! own library format and from EasyEDA's answer for an LCSC part number.
 //!
 //! `docs/schematic.md` is the design. The model (`Symbol`, `Pin`,
-//! `Graphic`) lives in `model::symbol` so the frontend can draw one; this
-//! module is the reading, which is backend-only because it touches files
-//! and the network.
+//! `Graphic`) lives in `model::symbol`, plain data the window draws; this
+//! module is the reading, which touches files and the network.
 //!
 //! Three layers, later ones winning by id: the built-in library
 //! (`data/symbols/*.kicad_sym`, compiled in), the data directory's

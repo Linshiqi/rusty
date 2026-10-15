@@ -2,10 +2,10 @@
 //!
 //! The lens is the `Run Test | Debug` pair beside a `#[test]` or a test
 //! module. VS Code draws it on a row of its own directly above the item; this
-//! editor cannot insert a row (see `folding`: the textarea and the echo must
-//! stay glyph for glyph), so the lens takes the nearest thing — the attribute
-//! line above the item, after its text — and the item's own line when there is
-//! no attribute above it.
+//! editor cannot insert a row (every row is a line of the file, less what is
+//! folded — see [`crate::fold`]), so the lens takes the nearest thing — the
+//! attribute line above the item, after its text — and the item's own line
+//! when there is no attribute above it.
 
 /// The document line the lens is drawn on, after everything drawn there —
 /// the text and any inlay hint in it — for the

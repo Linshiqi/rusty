@@ -1,8 +1,7 @@
 //! What the server offers while typing: the completion popup under the
 //! word being typed, and the signature of the call the caret is in above
 //! it. When to ask, what to show and what a snippet inserts are
-//! `rusty_lsp::complete`'s rules, shared with the old window; this is
-//! asking, showing and accepting.
+//! `rusty_lsp::complete`'s rules; this is asking, showing and accepting.
 //!
 //! Every ask is numbered and anchored to the line and the word it was
 //! about, and an answer is shown only while that is still the word being

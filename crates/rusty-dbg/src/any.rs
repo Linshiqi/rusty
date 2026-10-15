@@ -1,7 +1,7 @@
 //! One handle over two debuggers.
 //!
 //! The panel asks the same eight questions however the session was started —
-//! step, resume, place a breakpoint, read the frame — so the backend holds
+//! step, resume, place a breakpoint, read the frame — so the window holds
 //! one type and the choice of protocol stops at this file. gdb's machine
 //! interface serves every chip target and every host whose debug information
 //! is DWARF; the Debug Adapter Protocol serves the rest, which today means

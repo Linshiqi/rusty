@@ -5,9 +5,8 @@
 //! gdbstub, and probe-rs serves gdb for real hardware. One protocol, both
 //! targets, no adapter to install.
 //!
-//! Compiled unconditionally — no IO here, only text — so the frontend can
-//! share the types and a test can reach the arithmetic. The parser is the
-//! part worth testing: MI's grammar is small but its escaping is not, and a
+//! No IO here, only text, so a test can reach the arithmetic. The parser is
+//! the part worth testing: MI's grammar is small but its escaping is not, and a
 //! debugger that mis-parses a frame line puts the caret on the wrong
 //! function while looking like it worked.
 

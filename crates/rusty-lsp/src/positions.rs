@@ -6,20 +6,17 @@
 //! - LSP positions count in the **negotiated encoding** — UTF-16 code units by
 //!   default, UTF-8 bytes when the server accepts our offer. rust-analyzer
 //!   accepts, but the conversion still has to exist for the day it does not.
-//! - The frontend wants **Unicode scalars**, so it can slice a line with
+//! - The editor wants **Unicode scalars**, so it can slice a line with
 //!   `chars()` and be right.
 //!
 //! A `// 中文注释` before the error line is enough to shift every diagnostic on
 //! it by a third under the wrong system, which is why the tests here are mostly
 //! non-ASCII.
 //!
-//! **Two boundaries, one set of arithmetic.** The client converts here, and so
-//! does the editor — a textarea's `selectionStart` is a UTF-16 index, which is
-//! the same conversion under a different name. The editor had its own copy of
-//! four of these functions; two copies of encoding arithmetic is two chances to
-//! get a surrogate pair wrong, and only one of them had tests. Compiled
-//! unconditionally for that reason: there is no IO in this module, and the
-//! frontend needs it as much as the client does.
+//! **One set of arithmetic.** Document positions convert here, and so do
+//! the offsets into a signature's label, which are UTF-16 whatever was
+//! negotiated. Two copies of encoding arithmetic is two chances to get a
+//! surrogate pair wrong, and only one of them would have the tests.
 
 /// The unit the server counts `character` in, from the `initialize` handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,9 +79,9 @@ pub fn scalar_to_character(line: &str, scalar: u32, encoding: Encoding) -> u32 {
 
 /// A `character` count as a byte offset into `text`.
 ///
-/// What the editor needs at the DOM boundary: a textarea reports its selection
-/// in UTF-16 units, and slicing a Rust string with one panics on the first CJK
-/// comment. Clamped to the end, like every other conversion here.
+/// What a signature's parameter offsets need: they count UTF-16 units into
+/// the label, and slicing a Rust string with one panics on the first CJK
+/// character. Clamped to the end, like every other conversion here.
 pub fn byte_of_character(text: &str, character: usize, encoding: Encoding) -> usize {
     let mut budget = character;
     for (offset, ch) in text.char_indices() {
@@ -98,22 +95,6 @@ pub fn byte_of_character(text: &str, character: usize, encoding: Encoding) -> us
         budget -= cost;
     }
     text.len()
-}
-
-/// An LSP `(line, scalar column)` as a `character` offset into the whole text.
-///
-/// The inverse of [`offset_to_position`] in the unit a textarea's
-/// `selectionStart` counts: lines cost their own length plus one for the
-/// newline, and the newline is one unit in every encoding here.
-pub fn position_to_character(text: &str, line: u32, col: u32, encoding: Encoding) -> u32 {
-    let mut offset = 0u32;
-    for (index, content) in text.split('\n').enumerate() {
-        if index as u32 == line {
-            return offset + scalar_to_character(content, col, encoding);
-        }
-        offset += scalar_to_character(content, content.chars().count() as u32, encoding) + 1;
-    }
-    offset
 }
 
 /// The smallest single-range edit that turns `old` into `new`, as LSP wants it:
@@ -200,22 +181,11 @@ mod tests {
         assert_eq!(byte_of_character("ab", 99, Encoding::Utf16), 2);
     }
 
-    /// The editor's half of the same arithmetic: a textarea index is a UTF-16
-    /// index, and slicing a Rust string with one is a panic waiting for the
+    /// A UTF-16 index back to a byte offset, which is what slicing needs: a
+    /// UTF-16 offset used to slice a Rust string is a panic waiting for the
     /// first CJK comment.
     #[test]
-    fn the_dom_boundary_converts_the_same_way() {
-        let text = "// 中文\nfn main() {}\n";
-
-        // "// 中文" is 5 UTF-16 units, +1 for the newline; then three scalars
-        // into line 1 costs three more.
-        assert_eq!(position_to_character(text, 1, 3, Encoding::Utf16), 6 + 3);
-        // Line 0 in bytes instead. `// 中文` is five scalars; the first three
-        // are one byte each and the two CJK ones are three.
-        assert_eq!(position_to_character(text, 0, 5, Encoding::Utf8), 3 + 3 + 3);
-        assert_eq!(position_to_character(text, 0, 5, Encoding::Utf16), 3 + 2);
-
-        // A UTF-16 index back to a byte offset, which is what slicing needs.
+    fn a_utf16_index_finds_its_byte() {
         assert_eq!(byte_of_character("a🦀b", 3, Encoding::Utf16), 5);
         assert_eq!(
             byte_of_character("a🦀b", 2, Encoding::Utf16),

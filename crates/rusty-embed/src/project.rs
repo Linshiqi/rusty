@@ -402,9 +402,9 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
     }
 
     if project.uses_defmt {
-        // Through the constructor, like every other kind: the frontend's
-        // coverage test reads `Problem::new(` off this file, and a literal
-        // struct was the one diagnostic it could not see.
+        // Through the constructor, like every other kind: the kinds are read
+        // off this file by `Problem::new(`, and a literal struct was the one
+        // diagnostic that reading could not see.
         problems.push(Problem::new(
             Severity::Info,
             "defmt",

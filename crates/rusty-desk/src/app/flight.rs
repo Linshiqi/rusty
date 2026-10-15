@@ -221,7 +221,7 @@ impl App {
         let yaw = axis(t!("dock.flight.yaw"), &YAW);
         let value_of =
             |wanted: &[&str]| preferred(plot, wanted).and_then(|channel| latest(plot, &channel));
-        // The horizon: rates scaled to read, as the old window drew it.
+        // The horizon: rates scaled to read.
         let horizon_roll = value_of(&ROLL);
         let horizon_pitch = value_of(&PITCH).unwrap_or(0.0);
         let mut motors: Vec<FlightMotor> = state

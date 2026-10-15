@@ -1,9 +1,8 @@
 //! The built-in shell.
 //!
-//! Compiled into rusty itself and started as `rusty --builtin-shell` inside
-//! the pty, so the terminal works the moment the app is installed — no
-//! download, no PowerShell profile spending two seconds before the prompt,
-//! and the same language on every OS.
+//! Run inside the pty as `rusty-shell` (`src/bin/rusty-shell.rs`), so a
+//! terminal needs no download and no PowerShell profile spending two seconds
+//! before the prompt, and speaks the same language on every OS.
 //!
 //! The language is bash. Execution is `brush-core`, a POSIX/bash-compatible
 //! shell written in Rust — the released 0.5, which carries the Windows PATH

@@ -5,12 +5,12 @@
 //! and `geometry`, pure and tested; this is the bookkeeping around them —
 //! what is selected, what is in hand, the undo history — and the save.
 //!
-//! The rules the old window taught are kept: bends belong to the sheet, so
-//! moving a part stretches only the leg from its pin to the first bend; a
-//! wire lands on the pin under the pointer or on nothing, never on the
-//! nearest pin forty pixels away; a press on a pin that does not travel is
-//! the start of a wire drawn click by click; and the file is written a
-//! moment after the last change, in the format a person writes by hand.
+//! Four rules hold: bends belong to the sheet, so moving a part stretches
+//! only the leg from its pin to the first bend; a wire lands on the pin
+//! under the pointer or on nothing, never on the nearest pin forty pixels
+//! away; a press on a pin that does not travel is the start of a wire drawn
+//! click by click; and the file is written a moment after the last change,
+//! in the format a person writes by hand.
 
 use std::{rc::Rc, time::Duration};
 

@@ -296,7 +296,7 @@ fn a_fix_for_another_file_is_offered_and_written_there() {
 /// exactly like one that answers everything: the file still gets its
 /// syntax errors, and every completion is empty for ever.
 #[test]
-fn the_servers_own_health_reaches_the_frontend() {
+fn the_servers_own_health_reaches_the_window() {
     let root = tempfile::tempdir().unwrap();
     let (reader, writer, _seen) = fake_server(|message, writer| {
         if method(message) == "initialized" {
@@ -1196,12 +1196,13 @@ pub(super) fn server_copy(seen: &Seen, asked: &str) -> (String, HashMap<String, 
     (text, when_asked)
 }
 
-/// Changes made from several threads at once, as the blocking pool makes
-/// them. Each is a delta against the text before it, so they have to reach
-/// the server in the order this client recorded them: recorded under the
-/// lock and written after it was let go, two could swap on the wire, and
-/// the server's copy of the file was wrong from then on with nothing to say
-/// so — every hint, colour and diagnostic after it a little out of place.
+/// Changes made from several threads at once, as a question's thread and
+/// the window's queue can make them. Each is a delta against the text
+/// before it, so they have to reach the server in the order this client
+/// recorded them: recorded under the lock and written after it was let go,
+/// two could swap on the wire, and the server's copy of the file was wrong
+/// from then on with nothing to say so — every hint, colour and diagnostic
+/// after it a little out of place.
 #[test]
 fn changes_made_at_once_reach_the_server_in_the_order_they_were_recorded() {
     let first = "fn main() {\n}\n";
@@ -1261,9 +1262,9 @@ fn saw_change_to(seen: &Seen, wanted: &str) -> bool {
 
 /// A draft is the editor's text when it was taken, and the client keeps the
 /// newest it has been given: an older one arriving after it — two flows'
-/// commands on two threads of the blocking pool — is skipped, where it used
-/// to be written over the newer and leave the server a step behind the
-/// editor until the next edit.
+/// drafts sent from two threads — is skipped, where it used to be written
+/// over the newer and leave the server a step behind the editor until the
+/// next edit.
 #[test]
 fn an_older_draft_never_replaces_a_newer_one() {
     let first = "fn main() {}\n";
@@ -1311,7 +1312,7 @@ fn an_older_draft_never_replaces_a_newer_one() {
 }
 
 /// Drafts taken one after another, as the editor's one thread takes them,
-/// and each sent on a thread of its own, as each command is: one taken
+/// and each sent on a thread of its own, as a question's is: one taken
 /// earlier can arrive later. Whichever arrives last, the server ends with
 /// the newest.
 #[test]

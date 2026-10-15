@@ -37,8 +37,7 @@
 //! instead of damping, an integral that winds up and never comes back, a
 //! filter that trusts gravity so hard the aircraft chases its own throttle.
 //!
-//! Compiled unconditionally and free of IO, like `protocol` beside it: the
-//! frontend runs this on a timer.
+//! Free of IO, like `protocol` beside it: the window runs this on a timer.
 
 /// What the simulated aircraft is like.
 ///
@@ -491,7 +490,7 @@ mod tests {
     }
 
     /// A step that is zero, negative or not a number must change nothing. The
-    /// frontend's timer can hand over any of the three across a tab switch or
+    /// window's timer can hand over any of the three across a tab switch or
     /// a clock adjustment, and one NaN would poison every later sample.
     #[test]
     fn a_nonsense_step_changes_nothing() {

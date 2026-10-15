@@ -6,9 +6,9 @@
 //! four instruments: the time view, the spectrum, a response swept or read
 //! off a recording, and a filter designed against the signal with its code.
 //!
-//! The arithmetic is `rusty_embed::lab`, shared with the old window; this is
-//! what the panel holds, the sweep that steps a source across a band, and
-//! the drawing of each instrument as paths in its chart's own units.
+//! The arithmetic is `rusty_embed::lab`; this is what the panel holds, the
+//! sweep that steps a source across a band, and the drawing of each
+//! instrument as paths in its chart's own units.
 
 use std::{collections::BTreeMap, rc::Rc, time::Duration, time::Instant};
 

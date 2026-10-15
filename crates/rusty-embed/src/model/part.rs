@@ -1,4 +1,4 @@
-//! Chips and boards, as the frontend renders them.
+//! Chips and boards, as the window and the tools see them.
 //!
 //! The catalogue *files* are a different set of types in `catalog.rs`; these
 //! are what comes out of it.
@@ -342,8 +342,8 @@ pub struct Chip {
     pub name: String,
     /// The vendor's id, as its `[[vendor]]` table names it.
     pub vendor: String,
-    /// The vendor's name, `Espressif`, carried here so nothing on the wire
-    /// has to look a second table up to say who makes a part.
+    /// The vendor's name, `Espressif`, carried here so nothing that shows a
+    /// part has to look a second table up to say who makes it.
     #[serde(default)]
     pub vendor_name: String,
     /// The HAL a bare-metal project for this part is written against, from
@@ -580,10 +580,8 @@ impl CatalogSource {
 
 /// A catalogue file that would not load, and why.
 ///
-/// A wire type rather than a backend one: the app has to be able to say "your
-/// board file did not parse" in the window, not only in the CLI. It was a
-/// duplicate DTO in `rusty-app` until this housekeeping — exactly the
-/// generated-binding drift rule 1 exists to prevent.
+/// A model type, because the window has to be able to say "your board file
+/// did not parse", not only the CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogProblem {

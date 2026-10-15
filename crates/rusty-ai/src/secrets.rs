@@ -5,8 +5,9 @@
 //!
 //! 1. Keys are never written to a config file, so a user can share their rusty
 //!    settings without leaking credentials.
-//! 2. Keys are never sent to the WebView. Every LLM request is issued from the
-//!    Rust side, so a compromised or misbehaving frontend cannot read them.
+//! 2. A key is read only where a request is built. The window asks whether
+//!    one is stored ([`is_configured`]), never for the key, so nothing it
+//!    draws or keeps can show one.
 //!
 //! The store is behind a trait for one reason: a machine with no store. CI's
 //! Linux runner has no Secret Service, and a test that could only talk to the

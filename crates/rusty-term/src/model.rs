@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 /// A colour as the terminal expresses it.
 ///
 /// Indexed colours stay indexed rather than being resolved to RGB here: 0–15
-/// are the palette the *theme* defines, so resolving them in the backend would
-/// paint a light-theme terminal with dark-theme colours.
+/// are the palette the *theme* defines, so resolving them here would paint a
+/// light-theme terminal with dark-theme colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Colour {
@@ -78,29 +78,4 @@ pub struct Screen {
     /// Set once the child has exited, with its status. The view stops taking
     /// keystrokes and says so rather than swallowing them.
     pub exited: Option<i32>,
-}
-
-/// What shell the terminal will start, and what choices exist.
-///
-/// Here rather than in `rusty-embed`, where it sat for a while beside the chip
-/// catalogue: which shell a terminal runs is a terminal concern, and the two
-/// crates that read it — the Tauri backend and the frontend — both already
-/// depend on this one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShellChoice {
-    /// Human name for the picker: "PowerShell 7", "rusty bash (built-in)".
-    pub label: String,
-    /// What set_terminal_shell stores: "auto", "system", or a program.
-    pub value: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShellInfo {
-    /// The program the next shell start will actually run.
-    pub active: String,
-    /// The stored preference: absent = auto (the built-in shell),
-    /// "system" = the OS shell, anything else = a custom program.
-    pub preference: Option<String>,
 }

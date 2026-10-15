@@ -1,6 +1,6 @@
 //! The decisions a write makes before it is a `git` line: which remote a
-//! push goes to and how a branch is checked out. Pure, so both windows ask
-//! the same function and the tests pin what each answers.
+//! push goes to and how a branch is checked out. Pure, so the tests pin what
+//! each answers.
 
 fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|arg| (*arg).to_string()).collect()

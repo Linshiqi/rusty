@@ -10,8 +10,7 @@
 //! the numbers the program printed, and the view marks a right angle only
 //! where the arithmetic found one.
 //!
-//! Wasm-safe and unconditional, like `protocol`: the frontend reads the
-//! stream as it passes.
+//! Free of IO, like `protocol`: the window reads the stream as it passes.
 
 use crate::spatial::{Quat, TINY, Vec3};
 

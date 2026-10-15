@@ -13,12 +13,6 @@ pub enum Error {
 
     #[error("could not send input to the terminal")]
     Write(#[source] std::io::Error),
-
-    /// Asked to act on a terminal that is not open. Worth naming rather than
-    /// silently ignoring: it means the frontend and backend disagree about
-    /// whether a tab exists.
-    #[error("no terminal is open")]
-    NotOpen,
 }
 
 impl Error {

@@ -14,7 +14,7 @@
 //! The session owns *interpretation* as well as transport: what the panel
 //! receives is a [`DebugState`], not a pile of records. Somebody has to turn
 //! `*stopped,reason="breakpoint-hit",frame={…}` into "line 68 of main.rs",
-//! and doing it here means the frontend cannot get it subtly wrong in its
+//! and doing it here means the window cannot get it subtly wrong in its
 //! own way.
 
 use std::collections::HashMap;
@@ -257,7 +257,7 @@ impl Debugger {
                 // Nothing to connect to: gdb has the binary from its command
                 // line and starts it on the first resume. So the session is
                 // attached from the start, and says so now rather than after
-                // the first record, because the frontend places its
+                // the first record, because the window places its
                 // breakpoints on that word and then asks for the run — and
                 // a breakpoint placed after `-exec-run` is one the program
                 // may already have run past.
@@ -559,8 +559,8 @@ fn apply(state: &mut DebugState, record: &Record, root: &Path) -> bool {
         Record::Notify { class, fields } => {
             // `-break-delete` answers a bare `^done`; the deletion itself
             // arrives as this notification. Without handling it the list kept
-            // every breakpoint ever placed, and the panel only survived
-            // because the frontend keeps its own copy.
+            // every breakpoint ever placed, which only the margin's own copy
+            // of them hid.
             if class == "breakpoint-deleted" {
                 let value = Value::Tuple(fields.clone());
                 if let Some(id) = value.field("id").and_then(|id| id.parse::<u32>().ok()) {

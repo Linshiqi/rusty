@@ -1,7 +1,7 @@
 //! The board sheet drawn: the parts as the components on the desk, where
 //! every lead ends, the wires routed between them, and what editing does to
-//! both. Pure and wasm-safe — the old window's sheet editor and the Slint
-//! window draw the same board from the same arithmetic.
+//! both. Pure arithmetic, with no IO: the window draws the board from it,
+//! and the tests hold it without one.
 //!
 //! `art` is a part's drawing and where its leads end; `geometry` places
 //! parts and pins on the sheet and hit-tests them; `edit` is what placing,

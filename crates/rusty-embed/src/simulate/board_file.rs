@@ -1,6 +1,6 @@
 //! `.rusty/sim.toml`, as it is written on disk.
 //!
-//! Its own types, converted to and from the wire model — the file/wire split
+//! Its own types, converted to and from the model — the file/model split
 //! every user-authored TOML here gets, so a panel refactor cannot silently
 //! break the files people wrote (rule 2).
 //!
@@ -17,7 +17,7 @@
 //!
 //! **One definition per part, used in both directions.** Reading and writing
 //! were two parallel sets of structs once, and parallel sets drift: `flip`
-//! was added to the wire model and to *neither* of them, so mirroring a part
+//! was added to the model and to *neither* of them, so mirroring a part
 //! was dropped on save and read back as `false`. Sharing the definition
 //! makes that omission a compile error instead of a silent loss.
 
@@ -576,9 +576,9 @@ fn migrate(file: &FileV1, chip: &str) -> Sheet {
 
 /// Write the sheet back to `.rusty/sim.toml`, in version 2.
 ///
-/// Serialised through this module's structs, not the wire ones — the file
+/// Serialised through this module's structs, not the model's — the file
 /// format is a contract with people who write it by hand, and it stays
-/// stable when the wire model grows. Positions are rounded on the way out:
+/// stable when the model grows. Positions are rounded on the way out:
 /// the canvas works in fractional pixels and a file full of
 /// `128.00000000000003` is a file nobody wants to read or diff.
 pub fn save(root: &Path, sheet: &Sheet) -> Result<()> {

@@ -197,7 +197,7 @@ mod root_is_firmware_tests {
 /// prints it, and so does a window whose language has no entry for this
 /// diagnostic. But prose with values baked into it cannot be looked up, so the
 /// stable name travels beside it and the values travel apart from it. Same
-/// shape as a tool's purpose, for the same reason: the frontend keys on the
+/// shape as a tool's purpose, for the same reason: the window keys on the
 /// name, never on the sentence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -224,10 +224,10 @@ pub struct Problem {
 impl Problem {
     /// A named diagnostic with no arguments.
     ///
-    /// **Every diagnostic goes through here, with its kind as a literal.** The
-    /// frontend's coverage test reads the kinds off this crate's source to
-    /// check each has a translation; a `Problem { .. }` literal or a computed
-    /// kind is invisible to it and silently untranslated.
+    /// **Every diagnostic goes through here, with its kind as a literal**, so
+    /// the kinds can be read off this crate's source and each checked for a
+    /// translation; a `Problem { .. }` literal or a computed kind is
+    /// invisible to such a check and silently untranslated.
     pub fn new(
         severity: Severity,
         kind: &str,
@@ -298,7 +298,7 @@ impl CInterop {
     }
 }
 
-/// What a scaffolding run wrote, on the wire.
+/// What a scaffolding run wrote.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScaffoldReport {
@@ -358,7 +358,7 @@ pub struct PinClaim {
     pub gpio: u32,
     /// Project-relative, `/`-separated.
     pub file: String,
-    /// Zero-based, like every line number that crosses this boundary.
+    /// Zero-based, as the editor and the language server count lines.
     pub line: u32,
     /// The line itself, trimmed — enough to recognise the site without
     /// opening it.
@@ -367,7 +367,7 @@ pub struct PinClaim {
 
 /// What switching a project from one chip to another would change.
 ///
-/// The plan crosses the wire and comes back to be applied, so what runs is
+/// The plan is shown and then handed back to be applied, so what runs is
 /// exactly what the user was shown — the same contract the flash plans have.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

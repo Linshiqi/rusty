@@ -7,8 +7,8 @@
 //! identifier feeding `(` is a call, an identifier feeding `!` is a macro,
 //! digits are numbers, and a keyword is a keyword wherever it appears.
 //!
-//! Model-side and IO-free deliberately: the frontend runs the same pass over
-//! fenced code in hover markdown, so the tooltip and the editor cannot
+//! IO-free, and run on every highlighted line: a file's and the fenced code
+//! in a hover card's markdown alike, so the tooltip and the editor cannot
 //! disagree about what a type looks like.
 
 use crate::model::{Span, Token};
@@ -155,8 +155,8 @@ mod tests {
     #[test]
     fn a_path_expression_gets_types_and_calls() {
         // Unclassified words merge into their neighbouring plain runs — the
-        // exact shape is part of the contract, because every span is a DOM
-        // node in the editor.
+        // exact shape is part of the contract, because every span is a run
+        // the editor lays out and draws.
         let spans = spans_of("esp_hal::interrupt::SoftwareInterruptControl::new(x)");
         assert_eq!(
             spans,

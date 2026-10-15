@@ -1,9 +1,9 @@
 //! What the wires mean: the nets of a sheet, and the DC rules that turn a
 //! GPIO level into a lit lamp or a pressed button into a pin level.
 //!
-//! Pure and compiled unconditionally, because both sides read it: the
-//! frontend lights the LEDs from the levels the firmware reports, and the
-//! backend learns which GPIO a button reaches and what level a press puts
+//! Pure, and the one reading of the wires both halves of a run use: the
+//! board lights the LEDs from the levels the firmware reports, and the
+//! simulator learns which GPIO a button reaches and what level a press puts
 //! there. Two computations of "what does this wire connect" would be two
 //! opinions, and a lamp that lit on screen for a pin the emulator was never
 //! driven to is the bug that split would produce.

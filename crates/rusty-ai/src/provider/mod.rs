@@ -4,9 +4,9 @@
 //! agent loop are written once. Switching a user from GPT to a local Ollama
 //! model must not change a single line above this layer.
 //!
-//! The types live in `model` rather than here because the frontend renders them
-//! and has to compile to wasm; only the trait and the wire adapters are
-//! backend-only.
+//! The types live in `model` rather than here because the window reads them
+//! too; this module is the trait and the adapters to each provider's wire
+//! format.
 
 pub mod anthropic;
 pub mod openai;

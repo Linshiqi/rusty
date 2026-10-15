@@ -1,15 +1,16 @@
-//! Modal editing, as a state machine with no DOM in it.
+//! Modal editing, as a state machine with no window in it.
 //!
 //! Everything here is a pure function of `(keys, text, cursor)`. The editor
-//! reads [`Step`] and does the three things a browser makes it do — set
-//! `value`, set the selection, call `preventDefault` — and nothing else. That
-//! split is the whole reason this is testable: the board canvas got its
-//! arithmetic wrong three times while none of it was reachable from a test,
-//! and modal editing is far more arithmetic than the canvas ever was.
+//! reads [`Step`] and does what it says — puts in the new text, sets the
+//! cursor and the selection, keeps a key Vim took from going any further —
+//! and nothing else. That split is the whole reason this is testable: the
+//! board canvas got its arithmetic wrong three times while none of it was
+//! reachable from a test, and modal editing is far more arithmetic than the
+//! canvas ever was.
 //!
-//! **Indices are Unicode scalars, not UTF-16 code units.** The textarea counts
-//! selections in UTF-16 and the conversion happens at the boundary, exactly as
-//! the LSP client converts there — a `中` in a buffer must not shift every
+//! **Indices are Unicode scalars, not bytes.** The editor counts its cursor
+//! in bytes and the conversion happens at the boundary, exactly as the LSP
+//! client converts at its own — a `中` in a buffer must not shift every
 //! motion after it.
 //!
 //! What is deliberately absent: windows (`Ctrl+W`), the Ex language beyond a
@@ -58,11 +59,12 @@ impl Mode {
     }
 }
 
-/// One key, as the browser reports it.
+/// One key, by the names a browser's `KeyboardEvent.key` uses, which the
+/// editor maps its own keys onto.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Key {
-    /// `KeyboardEvent.key`: a character like `a`, or a name like `Escape`.
-    /// Shift is already baked in — the browser sends `A`, not shift+`a`.
+    /// A character like `a`, or a name like `Escape` or `ArrowUp`. Shift is
+    /// already baked in — the editor sends `A`, not shift+`a`.
     pub key: String,
     pub ctrl: bool,
     pub alt: bool,
@@ -99,9 +101,9 @@ impl Key {
 /// What the editor should do with the key.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Step {
-    /// True when Vim took the key: the editor calls `preventDefault` *and*
-    /// `stopPropagation`, so the global shortcuts never see it. False is the
-    /// path that keeps Ctrl+S, the palette and the clipboard working.
+    /// True when Vim took the key: the editor passes it no further, so the
+    /// window's shortcuts never see it. False is the path that keeps Ctrl+S,
+    /// the palette and the clipboard working.
     pub handled: bool,
     /// The new buffer, when this step changed it.
     pub text: Option<String>,

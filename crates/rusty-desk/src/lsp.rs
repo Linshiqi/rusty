@@ -5,7 +5,7 @@
 //! (`language.rs` says which reads what).
 //!
 //! The client blocks on a pipe, so nothing here waits on the UI thread.
-//! Three rules carried over from the old window, each the answer to a bug:
+//! Three rules, each the answer to a bug:
 //!
 //! - **What a document says to a server goes in the order it was said.**
 //!   Open, change, close and save are written by one thread from one queue

@@ -261,7 +261,7 @@ fn rust_analyzer_end_to_end() {
         .expect("filtered above");
     assert!(!import.edits.is_empty(), "{import:?}");
 
-    // Apply to a copy the way the frontend does: bottom-up splices.
+    // Apply to a copy the way the editor does: bottom-up splices.
     let mut patched = text.clone();
     let mut edits = import.edits.clone();
     edits.sort_by_key(|edit| std::cmp::Reverse((edit.range.start_line, edit.range.start_col)));
