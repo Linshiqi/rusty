@@ -10,6 +10,8 @@ new-project = "New project…"
 open-project = "Open project…"
 clone = "Clone repository…"
 open-recent = "Open Recent"
+new-window = "New Window"
+open-project-new-window = "Open project in new window…"
 
 [menu.edit]
 rename = "Rename symbol…"
@@ -39,6 +41,38 @@ monitor = "Monitor"
 
 [menu.help]
 check-updates = "Check for updates…"
+
+[shortcuts]
+# Keyboard Shortcuts: the page that lists every action's key and rebinds it.
+title = "Keyboard Shortcuts"
+settings-group = "Keyboard"
+open = "Open"
+search = "Search by command or key"
+search-keys = "Search by pressing keys"
+search-keys-hint = "Press the keys to search for"
+reset-all = "Reset all"
+reset = "Reset to the default"
+column-command = "Command"
+column-key = "Keybinding"
+column-source = "Source"
+source-default = "Default"
+source-user = "User"
+edit = "Click, then press the new keys"
+press = "Press the keys, then Enter"
+recording-hint = "Enter keeps it · Escape cancels"
+shared = "Also bound to {names}"
+code-takes = "The editor takes {key} for itself while you type in it"
+refused-types = "A key without Ctrl types text, so it cannot be a shortcut — only F1 to F12 stand alone"
+refused-altgr = "Alt with a character types it on keyboards with AltGr, so it cannot be a shortcut"
+waiting = "({keys}) was pressed. Waiting for the second key of the chord…"
+not-a-command = "The key combination ({keys}) is not a command."
+
+[windows]
+# More than one rusty: a window per project.
+open-new = "Open in new window"
+open-here = "{name} is already open in this window."
+open-elsewhere = "{name} is open in another rusty window."
+new-failed = "Could not open a new window: {reason}"
 
 [context]
 # Right-click menus. Every surface answers a right-click with its own menu
@@ -969,6 +1003,8 @@ restart = "Restart now"
 releases = "Open the releases page"
 restart-while-running = "{what} is still running. Restarting now stops it halfway — and an install cut off in the middle can leave a toolchain that builds nothing."
 restart-anyway = "Restart anyway?"
+restart-question = "Restart now?"
+others-stay = "{count} other rusty window(s) stay open, still running rusty {current}, until you close them."
 running-something = "A command"
 
 [activity]
@@ -1334,7 +1370,7 @@ board = "Board"
 project = "Project"
 welcome = "Welcome"
 tagline = "An embedded Rust workbench"
-keys-hint = "Ctrl+Shift+P runs any command · Ctrl+P opens any file"
+keys-hint = "{palette} runs any command · {finder} opens any file"
 settings = "Settings"
 theme = "Theme"
 theme-system = "System"

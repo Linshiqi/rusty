@@ -15,6 +15,8 @@ new-project = "新建项目…"
 open-project = "打开项目…"
 clone = "克隆仓库…"
 open-recent = "最近打开"
+new-window = "新建窗口"
+open-project-new-window = "在新窗口中打开项目…"
 
 [menu.edit]
 rename = "重命名符号…"
@@ -44,6 +46,36 @@ monitor = "串口监视"
 
 [menu.help]
 check-updates = "检查更新…"
+
+[shortcuts]
+title = "键盘快捷方式"
+settings-group = "键盘"
+open = "打开"
+search = "按命令或按键搜索"
+search-keys = "按下按键来搜索"
+search-keys-hint = "按下要搜索的按键"
+reset-all = "全部重置"
+reset = "重置为默认值"
+column-command = "命令"
+column-key = "键绑定"
+column-source = "来源"
+source-default = "默认值"
+source-user = "用户"
+edit = "单击，然后按下新的按键"
+press = "按下按键，然后按 Enter"
+recording-hint = "Enter 确认 · Esc 取消"
+shared = "也绑定到：{names}"
+code-takes = "在编辑器里打字时，{key} 由编辑器自己使用"
+refused-types = "不带 Ctrl 的按键会输入文字，不能用作快捷键——只有 F1 到 F12 可以单独使用"
+refused-altgr = "在有 AltGr 的键盘布局上，Alt 加字符会输入这个字符，不能用作快捷键"
+waiting = "已按下({keys})。正在等待按下第二个键…"
+not-a-command = "组合键({keys})不是命令。"
+
+[windows]
+open-new = "在新窗口中打开"
+open-here = "{name} 已在当前窗口中打开。"
+open-elsewhere = "{name} 已在另一个 rusty 窗口中打开。"
+new-failed = "无法打开新窗口：{reason}"
 
 [context]
 editor-definition = "转到定义"
@@ -919,6 +951,8 @@ restart = "立即重启"
 releases = "打开发布页"
 restart-while-running = "{what}还在运行。现在重启会把它中途打断——安装被打断可能让工具链坏掉、什么都编译不了。"
 restart-anyway = "仍要重启吗？"
+restart-question = "现在重启吗？"
+others-stay = "另外 {count} 个 rusty 窗口会保持打开，继续运行 rusty {current}，直到你关闭它们。"
 running-something = "一条命令"
 
 [activity]
@@ -1283,7 +1317,7 @@ board = "电路板"
 project = "项目"
 welcome = "欢迎"
 tagline = "嵌入式 Rust 工作台"
-keys-hint = "Ctrl+Shift+P 执行任意命令 · Ctrl+P 打开任意文件"
+keys-hint = "{palette} 执行任意命令 · {finder} 打开任意文件"
 settings = "设置"
 theme = "主题"
 theme-system = "跟随系统"

@@ -4,7 +4,7 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
 import { Splitter, Tip } from "widgets.slint";
-import { Shell, PanelTab, DocTab, TreeRow, PickRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam } from "shell.slint";
+import { Shell, PanelTab, DocTab, TreeRow, PickRow, KeyRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam } from "shell.slint";
 import { Code, Find, Shade, Row, Piece, HoverProblem, HoverFix, CompletionRow } from "editor.slint";
 import { TitleBar } from "titlebar.slint";
 import { LeftDock, BottomDock, RightDock } from "docks.slint";
@@ -15,7 +15,7 @@ import { GitPrompt, ClonePrompt } from "git.slint";
 // A tab moved into a window of its own (`src/app/torn.rs`).
 export { TornWindow } from "torn.slint";
 
-export { Theme, Icons, Shell, Code, Find, Shade, Tip, Row, Piece, HoverProblem, HoverFix, CompletionRow, PanelTab, DocTab, TreeRow, PickRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam }
+export { Theme, Icons, Shell, Code, Find, Shade, Tip, Row, Piece, HoverProblem, HoverFix, CompletionRow, PanelTab, DocTab, TreeRow, PickRow, KeyRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam }
 
 export component AppWindow inherits Window {
     // What the task bar calls the window: the file, the project, rusty.
@@ -60,6 +60,12 @@ export component AppWindow inherits Window {
             if (Shell.key(event)) {
                 return accept;
             }
+            reject
+        }
+        // Ctrl let go wherever the keys are: a name drawn as a link under a
+        // pointer that has not moved is put away with it.
+        key-released(event) => {
+            Code.key-released(event);
             reject
         }
 

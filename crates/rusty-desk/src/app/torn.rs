@@ -24,7 +24,7 @@ use rusty_i18n::t;
 use slint::{CloseRequestResponse, ComponentHandle, PhysicalPosition, Timer, TimerMode};
 
 use super::{App, Tab, ask_to_save, saving::After, strip};
-use crate::{AppWindow, Shell, TornWindow, actions, editor::Surface, keys};
+use crate::{AppWindow, Shell, TornWindow, actions, editor::Surface};
 
 /// A window a tab was moved into.
 pub(super) struct Torn {
@@ -240,21 +240,27 @@ impl App {
 
     fn wire_torn(self: &Rc<Self>, window: &TornWindow, surface: &Rc<Surface>) {
         let id = surface.id();
+        // The main window's keymap, rebound keys and two-stroke chords
+        // included: a key left by the code here, and the code's question
+        // before every key while a chord is half pressed.
         let weak = Rc::downgrade(self);
         window.on_key(move |event| {
-            let Some(app) = weak.upgrade() else {
-                return false;
-            };
             let m = event.modifiers;
-            let Some(chord) = keys::chord(&event.text, m.control, m.alt, m.shift, m.meta) else {
-                return false;
-            };
-            match actions::bound_to(&chord) {
-                Some(action) => {
-                    app.torn_act(id, action.id);
-                    true
-                }
-                None => false,
+            weak.upgrade().is_some_and(|app| {
+                app.key_in(Some(id), &event.text, (m.control, m.alt, m.shift, m.meta))
+            })
+        });
+        let weak = Rc::downgrade(self);
+        surface.on_chord(move |text, ctrl, alt, shift, meta| {
+            weak.upgrade()
+                .is_some_and(|app| app.chord_key_in(Some(id), text, (ctrl, alt, shift, meta)))
+        });
+        // An edit here moves the places Alt+Left goes back to, as one in
+        // the main window does.
+        let weak = Rc::downgrade(self);
+        surface.on_lines(move |path, first, removed, added| {
+            if let Some(app) = weak.upgrade() {
+                app.lines_moved(path, first, removed, added);
             }
         });
         let weak = Rc::downgrade(self);
@@ -361,7 +367,7 @@ impl App {
     }
 
     /// Something said in a window of its own's status line, for a moment.
-    fn torn_say(&self, id: usize, text: String) {
+    pub(super) fn torn_say(&self, id: usize, text: String) {
         let torn = self.torn.borrow();
         let Some(torn) = torn.iter().find(|torn| torn.id() == id) else {
             return;

@@ -4,7 +4,8 @@ members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/r
 # Test fixtures are real, standalone workspaces that rusty-core analyzes at test
 # time. They must not join this workspace or their deps would unify with ours
 # and the numbers under test would drift with our own dependency changes.
-exclude = ["crates/rusty-core/tests/fixtures"]
+# `vendor/` is somebody else's crate patched in below: built, not ours to lint.
+exclude = ["crates/rusty-core/tests/fixtures", "vendor"]
 
 [workspace.package]
 # The released version, bumped in every release commit, and what a
@@ -31,6 +32,18 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[patch.crates-io]
+# Slint's OpenGL renderer, 1.18.1 as published (upstream 372cf0e) with one
+# change in `visit_clip`, marked `rusty:` there: the texture a rounded clip
+# draws its children into is put on the pixel grid, as Slint's other layers
+# are. Unpatched, a code block or a text field scrolled half a pixel was a
+# blurred copy of itself, which is every frame of a wheel's animation. The
+# version must stay the one slint pins (`=1.18.1`) or cargo drops the patch
+# with only a warning (`crates/rusty-desk/tests/renderer.rs` fails then); when
+# slint moves, check whether upstream's `visit_clip` aligns the layer before
+# copying it again.
+i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg" }
 
 [profile.dev]
 # rusty-core spends its time inside guppy/petgraph; unoptimized deps make

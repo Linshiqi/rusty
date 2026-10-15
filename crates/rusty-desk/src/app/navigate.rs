@@ -1,43 +1,46 @@
 //! Moving around the code by what it means: the definition of a name, its
 //! references and implementations, where its type is defined, back and
-//! forward through the jumps;
+//! forward through where the editor has been;
 //! and changing it by what it means: a fix the server offers, a rename
 //! across every file that uses it.
 //!
 //! The picker is the list a choice is made from and the field a new name
 //! is typed in — one overlay with one set of keys, as for files and
 //! commands.
+//!
+//! **Back and forward are VS Code's**, not a list of jumps: every place the
+//! caret settles is told to the trail (`crate::trail`, where the rules are
+//! and their tests) — a tab picked, a file opened from the tree, the
+//! finder, a search or a problem, a jump, and a move of ten lines or more —
+//! once the event that moved it is over, so a file opened at a line is one
+//! place and not two. Its places follow the edits, and a place in a file
+//! closed since opens it again.
 
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use rusty_edit::text_file::{self, TextFile};
 use rusty_i18n::t;
 use rusty_lsp::{CodeActions, Location, Place};
+use slint::{Timer, TimerMode};
 
 use super::{App, Tab};
 use crate::{
     editor::{Document, Surface},
     picker::{Mode, Pick},
+    trail::{Spot, Trail, Why},
     work,
 };
 
-/// Where the caret was or is: a file, a line and a column, from zero.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Spot {
-    path: String,
-    line: usize,
-    col: usize,
-}
-
-/// The jumps made, to walk back through, and those walked back from.
+/// Where the editor has been, and the asking to record where it is now.
 #[derive(Default)]
 pub(super) struct Jumps {
-    back: Vec<Spot>,
-    forward: Vec<Spot>,
+    trail: Trail,
+    /// Started by every caret move; when it fires the event is over and
+    /// the caret has settled.
+    settle: Timer,
+    /// The place the caret settles at next was jumped to.
+    jumped: bool,
 }
-
-/// How many jumps are remembered.
-const JUMPS: usize = 50;
 
 /// What a list of places the server names is a list of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,17 +61,58 @@ impl App {
         })
     }
 
-    /// Go to a place, remembering where the caret was for Alt+Left.
+    /// The caret moved: where it rests is recorded once this event is over.
+    pub(super) fn caret_moved(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.state
+            .borrow()
+            .jumps
+            .settle
+            .start(TimerMode::SingleShot, Duration::ZERO, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.caret_settled();
+                }
+            });
+    }
+
+    fn caret_settled(&self) {
+        let Some(here) = self.here() else { return };
+        let mut state = self.state.borrow_mut();
+        let why = if std::mem::take(&mut state.jumps.jumped) {
+            Why::Jumped
+        } else {
+            Why::Moved
+        };
+        state.jumps.trail.record(here, why);
+    }
+
+    /// Lines `first..first + removed` of `path` are `first..first + added`
+    /// now: the places in it move with their lines.
+    pub(super) fn lines_moved(&self, path: &str, first: usize, removed: usize, added: usize) {
+        self.state
+            .borrow_mut()
+            .jumps
+            .trail
+            .follow(path, first, removed, added);
+    }
+
+    /// Go to a place, the place left kept for Alt+Left.
     pub(super) fn jump(self: &Rc<Self>, location: &Location) {
         if let Some(here) = self.here() {
             let mut state = self.state.borrow_mut();
-            state.jumps.back.push(here);
-            if state.jumps.back.len() > JUMPS {
-                state.jumps.back.remove(0);
-            }
-            state.jumps.forward.clear();
+            state.jumps.trail.record(here, Why::Moved);
+            state.jumps.jumped = true;
         }
         self.arrive(location);
+        // Settled whether the caret moved or not, so the jump is said of
+        // this arrival and not of the next move.
+        self.caret_moved();
+    }
+
+    /// Ctrl+click on a name drawn as a link in the surface `asker`: where
+    /// the server said it leads, as a definition found from there goes.
+    pub fn follow_link(self: &Rc<Self>, asker: usize, location: Location) {
+        self.definition_found(asker, &location);
     }
 
     fn arrive(self: &Rc<Self>, location: &Location) {
@@ -90,15 +134,29 @@ impl App {
         }
     }
 
-    /// Alt+Left and Alt+Right: back to where a jump left from, and on again.
+    /// Alt+Left and Alt+Right, the mouse's side buttons and Vim's Ctrl+O and
+    /// Ctrl+I: back to where the editor was, and on again.
     pub(super) fn walk(self: &Rc<Self>, back: bool) {
+        let here = self.here();
+        // From a page — the settings, the history — Back goes to the file
+        // that was in front before it: the trail's current place.
+        let current = here.is_none() && back;
         let target = {
             let mut state = self.state.borrow_mut();
-            let jumps = &mut state.jumps;
-            if back {
-                jumps.back.pop()
+            let trail = &mut state.jumps.trail;
+            if current {
+                trail.current().cloned()
             } else {
-                jumps.forward.pop()
+                // A macro's expansion closed since has nothing to go back
+                // to: it is passed over and forgotten.
+                let reachable = |spot: &Spot| {
+                    !rusty_edit::is_expansion(&spot.path) || self.editor.holds(&spot.path)
+                };
+                if back {
+                    trail.back(here, reachable)
+                } else {
+                    trail.forward(here, reachable)
+                }
             }
         };
         let Some(target) = target else {
@@ -110,14 +168,6 @@ impl App {
             self.note_transient(0, rusty_i18n::lookup(key));
             return;
         };
-        if let Some(here) = self.here() {
-            let mut state = self.state.borrow_mut();
-            if back {
-                state.jumps.forward.push(here);
-            } else {
-                state.jumps.back.push(here);
-            }
-        }
         let external = target.path.contains(':') || target.path.starts_with('/');
         self.arrive(&Location {
             path: target.path,
