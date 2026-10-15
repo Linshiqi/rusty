@@ -280,14 +280,25 @@ impl App {
         );
     }
 
-    /// The fix picked: its edits to this file, then — when it changes others
-    /// — the server writes those, and the open ones are read again. A file
-    /// it changes with an unsaved draft refuses it whole: the draft's next
-    /// save would put its stale bytes back over the fix.
+    /// The fix picked from the list.
     pub(super) fn apply_fix(self: &Rc<Self>, index: usize) {
         let Some((version, actions)) = self.state.borrow_mut().fixes.take() else {
             return;
         };
+        self.apply_fix_from(version, actions, index);
+    }
+
+    /// A fix the server offered — in Ctrl+.'s list or on the hover card —
+    /// applied: its edits to this file, then, when it changes others, the
+    /// server writes those and the open ones are read again. A file it
+    /// changes with an unsaved draft refuses it whole: the draft's next save
+    /// would put its stale bytes back over the fix.
+    pub(super) fn apply_fix_from(
+        self: &Rc<Self>,
+        version: u64,
+        actions: CodeActions,
+        index: usize,
+    ) {
         let Some(fix) = actions.fixes.get(index).cloned() else {
             return;
         };
