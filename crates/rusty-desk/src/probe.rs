@@ -32,7 +32,12 @@
 //! deletes the LED — and prints the sheet file after each save. With
 //! `RUSTY_PROBE_STRIP` and no project named it waits for the last project
 //! to come back, prints its tabs as the strips show them, and opens its
-//! README before leaving.
+//! README before leaving. With `RUSTY_PROBE_MARKS` it puts the caret beside
+//! a brace and photographs the pair outlined, waits for the language server
+//! and photographs a name's occurrences washed, then writes a struct
+//! literal missing two fields, opens the hover card on it, photographs the
+//! fixes the card lists, applies one by its click and prints the lines it
+//! wrote — on a copy, since it ends by keeping the draft.
 
 use std::{
     cell::{Cell, RefCell},
@@ -101,6 +106,9 @@ pub fn start(window: &AppWindow) {
     let modal = std::env::var_os("RUSTY_PROBE_VIM").is_some();
     let splitting = std::env::var_os("RUSTY_PROBE_SPLIT").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
+    let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
+    // The line the marks probe is looking at.
+    let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
     let strip = std::env::var_os("RUSTY_PROBE_STRIP").is_some();
     let waited = Rc::new(Cell::new(0u32));
@@ -257,6 +265,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if strip {
                     step.set(2900);
+                }
+                if marking {
+                    step.set(3000);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -1107,6 +1118,194 @@ pub fn start(window: &AppWindow) {
                 app.open_file("README.md".into());
             }
             2910 if strip => app.act("app.exit"),
+            // Where the caret rests: the brace beside it and its partner
+            // outlined; the name under it washed where else it occurs, and
+            // the washes gone at the next key; a problem's fixes listed on
+            // the hover card, and one applied by its click.
+            3000 if marking => {
+                let text = draft().unwrap_or_default();
+                let brace = text.lines().enumerate().find_map(|(i, l)| {
+                    let at = l.find("impl ")?;
+                    let open = l[at..].find('{')? + at;
+                    Some((i, l[..open].chars().count()))
+                });
+                if let Some((line, col)) = brace {
+                    app.editor().go_to(line + 1, Some(col + 1));
+                }
+            }
+            3002 if marking => {
+                eprintln!(
+                    "marks: the caret before a brace at {:?}: outlined {:?}",
+                    app.editor().status().map(|s| (s.0, s.1)),
+                    drawn(&code, 9)
+                );
+                snapshot(&window, &dir.join("marks-brackets.png"));
+                key(Key::End.into());
+            }
+            3003 if marking => {
+                eprintln!(
+                    "marks: the caret after it, at {:?}: outlined {:?}",
+                    app.editor().status().map(|s| (s.0, s.1)),
+                    drawn(&code, 9)
+                );
+                waited.set(0);
+            }
+            3004 if marking => {
+                // The server, once its colours say it is answering.
+                let ready = app.editor().told().is_some_and(|(colours, ..)| colours > 0);
+                if !ready && waited.get() < 2400 {
+                    waited.set(waited.get() + 1);
+                    step.set(3004);
+                    return;
+                }
+                eprintln!("marks: the server answered after {} ticks", waited.get());
+                waited.set(0);
+                let text = draft().unwrap_or_default();
+                let name = text
+                    .lines()
+                    .enumerate()
+                    .find_map(|(i, l)| l.find("other: ").map(|at| (i, l[..at].chars().count())));
+                if let Some((line, col)) = name {
+                    app.editor().go_to(line + 1, Some(col + 3));
+                }
+            }
+            3005 if marking => {
+                let (_, washed) = app.editor().resting_marks();
+                if washed == 0 && waited.get() < 750 {
+                    waited.set(waited.get() + 1);
+                    // A server still loading answers with nothing: a step
+                    // off and back asks again.
+                    if waited.get().is_multiple_of(50) {
+                        key(Key::RightArrow.into());
+                        key(Key::LeftArrow.into());
+                    }
+                    step.set(3005);
+                    return;
+                }
+                eprintln!(
+                    "marks: `other` washed in {washed} places after {} ticks: {:?}",
+                    waited.get(),
+                    drawn(&code, 10)
+                );
+                snapshot(&window, &dir.join("marks-occurrences.png"));
+                key(" ".into());
+            }
+            3006 if marking => {
+                eprintln!(
+                    "marks: after a key, {:?} washes drawn",
+                    drawn(&code, 10).len()
+                );
+                chord(&[Key::Control], "z".into());
+            }
+            3007 if marking => {
+                // A struct built without two of its fields, which the server
+                // offers to fill.
+                let Some(path) = app.editor().current_path() else {
+                    step.set(3030);
+                    return;
+                };
+                let text = draft().unwrap_or_default();
+                let version = app.editor().version_of(&path).unwrap_or(0);
+                let with = format!(
+                    "{}\n\npub fn probe_point() -> Vector {{\n    Vector {{ x: 1.0 }}\n}}\n",
+                    text.trim_end()
+                );
+                // The errors before it, to wait for one more.
+                spot.set(shell.get_errors().max(0) as usize);
+                app.editor().replace(&path, version, with);
+                waited.set(0);
+            }
+            3008 if marking => {
+                let text = draft().unwrap_or_default();
+                let line = text.lines().position(|l| l.trim() == "Vector { x: 1.0 }");
+                if shell.get_errors().max(0) as usize <= spot.get() && waited.get() < 1500 {
+                    waited.set(waited.get() + 1);
+                    step.set(3008);
+                    return;
+                }
+                eprintln!(
+                    "marks: {} errors after {} ticks, the literal on line {:?}",
+                    shell.get_errors(),
+                    waited.get(),
+                    line.map(|l| l + 1)
+                );
+                if let Some(line) = line {
+                    spot.set(line);
+                    app.editor().go_to(line + 1, Some(7));
+                }
+            }
+            3009 if marking => {
+                app.act("editor.show-hover");
+                waited.set(0);
+            }
+            3010 if marking => {
+                let fixes = app.editor().card_fixes();
+                if fixes.is_empty() && waited.get() < 750 {
+                    waited.set(waited.get() + 1);
+                    // A server that had not settled offers nothing yet:
+                    // the card is asked for again.
+                    if waited.get().is_multiple_of(100) {
+                        app.act("editor.show-hover");
+                    }
+                    step.set(3010);
+                    return;
+                }
+                let problems: Vec<String> = code
+                    .get_hover_problems()
+                    .iter()
+                    .map(|p| p.text.to_string())
+                    .collect();
+                eprintln!(
+                    "marks: the card on line {} says {problems:?} and offers {fixes:?} after {} ticks",
+                    spot.get() + 1,
+                    waited.get()
+                );
+                snapshot(&window, &dir.join("marks-fixes.png"));
+                let pick = fixes.iter().position(|f| f.contains("Fill")).unwrap_or(0);
+                if !fixes.is_empty() {
+                    code.invoke_hover_fix(pick as i32);
+                }
+            }
+            3012 if marking => {
+                let text = draft().unwrap_or_default();
+                let wrote: Vec<&str> = text.lines().skip(spot.get()).take(3).collect();
+                eprintln!(
+                    "marks: the fix wrote {wrote:?}; the card {}",
+                    if code.get_hover_open() { "is still up" } else { "went" }
+                );
+                snapshot(&window, &dir.join("marks-fixed.png"));
+                // Both at once: the caret between a call's name and its
+                // parenthesis, in each theme.
+                let call = text
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, l)| l.trim_start().starts_with("Vector::new("))
+                    .find_map(|(i, l)| l.find("::new(").map(|at| (i, l[..at].chars().count() + 5)));
+                if let Some((line, col)) = call {
+                    app.editor().go_to(line + 1, Some(col + 1));
+                }
+                waited.set(0);
+            }
+            3013 if marking => {
+                let (_, washed) = app.editor().resting_marks();
+                if washed == 0 && waited.get() < 250 {
+                    waited.set(waited.get() + 1);
+                    step.set(3013);
+                    return;
+                }
+                eprintln!(
+                    "marks: beside `new(`, outlined {:?}, washed {:?}",
+                    drawn(&code, 9),
+                    drawn(&code, 10)
+                );
+                shell.set_theme_choice("light".into());
+            }
+            3015 if marking => {
+                snapshot(&window, &dir.join("marks-light.png"));
+                shell.set_theme_choice("dark".into());
+            }
+            3017 if marking => snapshot(&window, &dir.join("marks-dark.png")),
+            3018 if marking => app.act("app.exit"),
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -1695,7 +1894,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || updating) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || updating || marking) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
@@ -1826,6 +2025,23 @@ pub fn start(window: &AppWindow) {
         }
     });
     std::mem::forget(timer);
+}
+
+/// The marks of `kind` on the code view's rows: each row's line number and
+/// where each of its marks starts.
+fn drawn(code: &Code, kind: i32) -> Vec<(i32, Vec<f32>)> {
+    code.get_rows()
+        .iter()
+        .filter_map(|row| {
+            let xs: Vec<f32> = row
+                .marks
+                .iter()
+                .filter(|m| m.kind == kind)
+                .map(|m| m.x)
+                .collect();
+            (!xs.is_empty()).then_some((row.number, xs))
+        })
+        .collect()
 }
 
 fn report(what: &str, samples: &[Duration]) {

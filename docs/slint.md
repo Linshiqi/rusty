@@ -210,7 +210,10 @@ tests green, and CLAUDE.md saying how it works.
    the call being typed; F12 and Ctrl+click to a definition — a
    dependency's or a toolchain header's opened read-only — references and
    implementations in the picker, Alt+Left and Alt+Right through the jumps,
-   Ctrl+. for the server's fixes, F2 to rename across the project;
+   Ctrl+. for the server's fixes and the same fixes on the hover card under
+   the problem, a click away; the bracket beside the caret boxed with its
+   partner, and the name under it washed where else it occurs; F2 to
+   rename across the project;
    clang-format on save — proven on a Cargo project with rust-analyzer and
    a CMake one with clangd. Inlay hints and semantic colours moved to the
    editor's depth (8): the painter already colours all three languages, and

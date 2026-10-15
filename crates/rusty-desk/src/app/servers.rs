@@ -162,8 +162,11 @@ impl App {
                 );
             }
             // The server's analysis changed: its colours and hints are
-            // asked for again.
-            LspEvent::Ready {} | LspEvent::Refresh {} => self.editor.analyse_soon(),
+            // asked for again, and the caret's occurrences if it had none.
+            LspEvent::Ready {} | LspEvent::Refresh {} => {
+                self.editor.analyse_soon();
+                self.editor.occurrences_again();
+            }
             LspEvent::Companion { .. } => {}
         }
         self.sync_server();

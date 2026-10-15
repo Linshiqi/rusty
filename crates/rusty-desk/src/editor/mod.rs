@@ -11,7 +11,9 @@
 //! [`Document`] and tells the view, the painter and the app what changed.
 
 mod analysis;
+mod asks;
 pub mod backup;
+mod brackets;
 mod clip;
 mod completion;
 mod cursors;
@@ -32,6 +34,7 @@ mod pairs;
 mod problems;
 
 pub use problems::is_problem;
+mod resting;
 mod rows;
 mod shade;
 pub(crate) use rows::kind as token_kind;
@@ -73,6 +76,9 @@ type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
 type OnCaret = RefCell<Option<Box<dyn Fn()>>>;
 type OnBreakpoint = RefCell<Option<Box<dyn Fn(String, u32)>>>;
 type OnLens = RefCell<Option<Box<dyn Fn(rusty_edit::Runnable, String)>>>;
+/// Who applies a fix the hover card offered: the text's version, the
+/// server's answer, and which of its actions.
+type OnFix = RefCell<Option<Box<dyn Fn(u64, rusty_lsp::CodeActions, usize)>>>;
 
 /// A press being dragged: what the press itself selected — a point, a word
 /// or a line — which every move extends from.
@@ -119,6 +125,8 @@ pub struct Surface {
     on_breakpoint: OnBreakpoint,
     /// Told what a lens's verb asked to run.
     on_lens: OnLens,
+    /// Told which fix the hover card's click picked.
+    on_fix: OnFix,
     window: slint::Weak<AppWindow>,
     on_edit: OnEdit,
     on_caret: OnCaret,
@@ -141,6 +149,10 @@ pub struct Surface {
     /// The lines squiggles are drawn on in the document on screen.
     squiggled: RefCell<Vec<usize>>,
     hovering: hover::Hovering,
+    /// Where the caret rests: the bracket pair outlined and the name's
+    /// occurrences washed, shared with the rows that draw them.
+    resting: Rc<RefCell<resting::Resting>>,
+    occurring: resting::Occurring,
     completing: completion::Completing,
     /// Sticky scroll and the minimap.
     overview: overview::Overview,
@@ -163,10 +175,12 @@ impl Surface {
         let metrics = Rc::new(RefCell::new(Metrics::measure(window)));
         let found: Rc<RefCell<find::Marks>> = Rc::default();
         let gutter: Rc<RefCell<Gutter>> = Rc::default();
+        let resting: Rc<RefCell<resting::Resting>> = Rc::default();
         let rows = Rc::new(Rows::new(
             current.clone(),
             metrics.clone(),
             found.clone(),
+            resting.clone(),
             problems.clone(),
             gutter.clone(),
         ));
@@ -177,6 +191,7 @@ impl Surface {
         let shade_rows = Rc::new(Rows::new(
             shade_doc.clone(),
             metrics.clone(),
+            Rc::default(),
             Rc::default(),
             problems.clone(),
             gutter.clone(),
@@ -194,6 +209,7 @@ impl Surface {
             gutter,
             on_breakpoint: RefCell::default(),
             on_lens: RefCell::default(),
+            on_fix: RefCell::default(),
             window: window.as_weak(),
             on_edit: RefCell::default(),
             on_caret: RefCell::default(),
@@ -209,6 +225,8 @@ impl Surface {
             problems,
             squiggled: RefCell::default(),
             hovering: hover::Hovering::default(),
+            resting,
+            occurring: resting::Occurring::default(),
             completing: completion::Completing::default(),
             overview: overview::Overview::default(),
             analysis: analysis::Analysis::default(),
@@ -248,6 +266,11 @@ impl Surface {
         let mut gutter = self.gutter.borrow_mut();
         gutter.runs_examples = runs;
         gutter.firmware = firmware;
+    }
+
+    /// Who applies the fix a click on the hover card picked.
+    pub fn on_fix(&self, tell: impl Fn(u64, rusty_lsp::CodeActions, usize) + 'static) {
+        *self.on_fix.borrow_mut() = Some(Box::new(tell));
     }
 
     pub fn on_breakpoint(&self, tell: impl Fn(String, u32) + 'static) {
@@ -417,6 +440,8 @@ impl Surface {
         self.finding.borrow_mut().scope = None;
         self.research(None);
         self.rows.reset();
+        self.rest_nowhere();
+        self.caret_rested();
         if let Some(window) = self.window.upgrade() {
             let code = window.global::<Code>();
             code.set_has_document(true);
@@ -432,6 +457,7 @@ impl Surface {
 
     pub fn show_nothing(&self) {
         *self.current.borrow_mut() = None;
+        self.rest_nowhere();
         self.rows.reset();
         if let Some(window) = self.window.upgrade() {
             window.global::<Code>().set_has_document(false);
@@ -1208,6 +1234,7 @@ impl Surface {
         self.servers.changed(&path, &doc.borrow().text);
         self.tell_edit(&path);
         self.research(Some(change));
+        self.rest_edited(change);
         self.cursors_moved();
         self.view_changed();
         self.analyse_soon();
@@ -1258,6 +1285,7 @@ impl Surface {
         }
         self.find_follow_selection();
         self.show_caret();
+        self.caret_rested();
     }
 
     /// Scroll so `at` is on screen.
@@ -1466,6 +1494,9 @@ impl Surface {
         let showing = self.doc().is_some_and(|current| Rc::ptr_eq(&current, &doc));
         if showing {
             self.rows.changed(from, from + count);
+            // What is a string or a comment may have changed under the
+            // brackets the caret is beside.
+            self.match_brackets();
             self.overview
                 .paintings
                 .set(self.overview.paintings.get() + 1);

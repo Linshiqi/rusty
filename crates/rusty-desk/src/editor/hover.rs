@@ -7,14 +7,29 @@
 //! within the same word or onto the card, put away a moment after it
 //! leaves — and at once by any key, since the card is about the text as it
 //! was. An answer that lands after the pointer moved on is dropped.
+//!
+//! **A problem's fixes are on the card, under it**, as VS Code's hover has
+//! them: the card is where the pointer already is, and Ctrl+. needs
+//! somebody to know a fix exists before going looking for it. They are
+//! asked for only when the card shows a problem, and only after the card is
+//! up — a `codeAction` resolves every offer it did not come with, and a
+//! card that waited for that would be a card that did not appear — and an
+//! answer lands only on the card it was asked for, over the text it was
+//! asked about. A click applies one as Ctrl+.'s list does, another file's
+//! edits included.
 
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
-use rusty_lsp::{FileDiagnostic, HoverInfo};
-use slint::{ComponentHandle, ModelRc, StyledText, Timer, TimerMode, VecModel};
+use rusty_i18n::t;
+use rusty_lsp::{CodeActionFix, CodeActions, FileDiagnostic, HoverInfo};
+use slint::{ComponentHandle, Model, ModelRc, StyledText, Timer, TimerMode, VecModel};
 
-use super::{Surface, is_problem, rows};
-use crate::{Code, HoverProblem, Row, language};
+use super::{Surface, asks::Asks, is_problem, rows};
+use crate::{Code, HoverFix, HoverProblem, Row, language};
 
 const SHOW_AFTER: Duration = Duration::from_millis(350);
 const HIDE_AFTER: Duration = Duration::from_millis(300);
@@ -24,14 +39,43 @@ const HIDE_AFTER: Duration = Duration::from_millis(300);
 pub struct Hovering {
     show: Timer,
     hide: Timer,
-    /// Numbers every ask; an answer to an older one is dropped.
-    asked: Cell<u64>,
+    /// Numbers every ask, and every putting away; an answer to an older one
+    /// is dropped — the server's account of the name and the fixes alike.
+    asked: Asks,
     /// The line and the byte span the card is about, shown or pending.
     over: Cell<Option<(usize, usize, usize)>>,
     /// Asked for from the keyboard: kept until a key or a press, whatever
     /// the pointer is over — Slint reports a pointer that never moved when
     /// the content under it changes, and the card is such a change.
     from_keys: Cell<bool>,
+    /// The fixes the card lists.
+    fixes: RefCell<Option<Offered>>,
+}
+
+/// The fixes on the card: the text they are for, the server's answer, and
+/// which of its actions the rows are, in order.
+struct Offered {
+    path: String,
+    version: u64,
+    actions: CodeActions,
+    shown: Vec<usize>,
+}
+
+/// Which of a server's actions the card offers, by index: the quick fixes —
+/// what VS Code's hover asks for — and an action whose server names no
+/// kind. A refactoring is not a fix for the problem under the pointer, and
+/// stays in Ctrl+.'s list.
+pub fn fixes_for_card(fixes: &[CodeActionFix]) -> Vec<usize> {
+    fixes
+        .iter()
+        .enumerate()
+        .filter(|(_, fix)| {
+            fix.kind
+                .as_deref()
+                .is_none_or(|kind| kind == "quickfix" || kind.starts_with("quickfix."))
+        })
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// The problems whose squiggles cover column `col` of line `line`, whose
@@ -103,6 +147,12 @@ impl Surface {
         code.on_hovered(move |row, x, y| {
             if let Some(this) = weak.upgrade() {
                 this.hovered(row, x, y);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        code.on_hover_fix(move |row| {
+            if let Some(this) = weak.upgrade() {
+                this.hover_fix_picked(row.max(0) as usize);
             }
         });
     }
@@ -214,16 +264,25 @@ impl Surface {
                 d.text.clone(),
             )
         };
-        let asked = self.hovering.asked.get() + 1;
-        self.hovering.asked.set(asked);
+        let asked = self.hovering.asked.ask();
         let (from, to) = word.unwrap_or((at, at));
         self.hovering.over.set(Some((line, from, to)));
         self.hovering.hide.stop();
-        // The problems now; the server's account joins them when it comes.
+        self.drop_fixes();
+        // The problems now; the server's account joins them when it comes,
+        // and so do their fixes, asked for once the card is up.
         if problems.is_empty() {
             self.close_card();
         } else {
             self.show_card(line, from, &problems, None);
+            let draft = self.servers.draft(&draft_text);
+            let about = path.clone();
+            self.servers.ask(
+                &path,
+                Some(draft),
+                move |client, path| client.code_actions(path, line as u32, col as u32),
+                move |app, actions| app.editor().hover_fixes(asked, &about, version, actions),
+            );
         }
         if word.is_some() {
             let draft = self.servers.draft(&draft_text);
@@ -242,7 +301,7 @@ impl Surface {
     /// for, over the same text.
     pub fn hover_answer(&self, asked: u64, version: u64, line: usize, info: Option<HoverInfo>) {
         let Some(doc) = self.doc() else { return };
-        if asked != self.hovering.asked.get() || doc.borrow().version != version {
+        if !self.hovering.asked.answers(asked) || doc.borrow().version != version {
             return;
         }
         let Some((_, from, _)) = self.hovering.over.get() else {
@@ -368,13 +427,116 @@ impl Surface {
             });
     }
 
+    /// The fixes the server offers for the problems on the card: listed
+    /// under them while the card is still the one they were asked for,
+    /// over the same text.
+    pub fn hover_fixes(&self, asked: u64, path: &str, version: u64, actions: CodeActions) {
+        if !self.hovering.asked.answers(asked) {
+            return;
+        }
+        let Some(doc) = self.doc() else { return };
+        {
+            let d = doc.borrow();
+            if d.path != path || d.version != version {
+                return;
+            }
+        }
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let code = window.global::<Code>();
+        if !code.get_hover_open() {
+            return;
+        }
+        let shown = fixes_for_card(&actions.fixes);
+        if shown.is_empty() {
+            return;
+        }
+        let rows: Vec<HoverFix> = shown
+            .iter()
+            .map(|&index| {
+                let fix = &actions.fixes[index];
+                let detail = if fix.elsewhere.is_empty() {
+                    String::new()
+                } else {
+                    t!(
+                        "desk.hover-fix-elsewhere",
+                        count = fix.elsewhere.len().to_string()
+                    )
+                };
+                HoverFix {
+                    title: fix.title.as_str().into(),
+                    detail: detail.into(),
+                }
+            })
+            .collect();
+        code.set_hover_fixes(ModelRc::new(VecModel::from(rows)));
+        *self.hovering.fixes.borrow_mut() = Some(Offered {
+            path: path.to_string(),
+            version,
+            actions,
+            shown,
+        });
+    }
+
+    /// A fix on the card clicked: the card goes, and the fix is applied the
+    /// way Ctrl+.'s list applies one — while the text is still the one it
+    /// was offered for.
+    fn hover_fix_picked(&self, row: usize) {
+        let offered = self.hovering.fixes.borrow_mut().take();
+        self.hide_hover();
+        let Some(offered) = offered else { return };
+        let Some(&index) = offered.shown.get(row) else {
+            return;
+        };
+        let now = self.doc().map(|doc| {
+            let d = doc.borrow();
+            (d.path.clone(), d.version)
+        });
+        if now != Some((offered.path.clone(), offered.version)) {
+            return;
+        }
+        if let Some(tell) = self.on_fix.borrow().as_ref() {
+            tell(offered.version, offered.actions, index);
+        }
+    }
+
+    /// For the probe: the titles of the fixes the card lists.
+    pub fn card_fixes(&self) -> Vec<String> {
+        self.hovering
+            .fixes
+            .borrow()
+            .as_ref()
+            .map(|offered| {
+                offered
+                    .shown
+                    .iter()
+                    .map(|&index| offered.actions.fixes[index].title.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// No fixes on the card — the rows touched only when there are some,
+    /// since every key comes through here.
+    fn drop_fixes(&self) {
+        *self.hovering.fixes.borrow_mut() = None;
+        if let Some(window) = self.window.upgrade() {
+            let code = window.global::<Code>();
+            if code.get_hover_fixes().row_count() > 0 {
+                code.set_hover_fixes(ModelRc::default());
+            }
+        }
+    }
+
     /// The card away, and whatever it was waiting for forgotten.
     pub fn hide_hover(&self) {
         self.hovering.show.stop();
         self.hovering.hide.stop();
-        self.hovering.asked.set(self.hovering.asked.get() + 1);
+        self.hovering.asked.forget();
         self.hovering.over.set(None);
         self.hovering.from_keys.set(false);
+        self.drop_fixes();
         self.close_card();
     }
 
@@ -427,6 +589,29 @@ mod tests {
         assert_eq!(at(13), ["13..13"]);
         assert!(at(2).is_empty());
         assert!(problems_at(&items, 4, text, 8).is_empty());
+    }
+
+    /// The card offers what fixes the problem, by the server's own index,
+    /// so a click applies the action the server numbered.
+    #[test]
+    fn the_card_offers_the_quick_fixes() {
+        let action = |title: &str, kind: Option<&str>| CodeActionFix {
+            title: title.into(),
+            kind: kind.map(str::to_string),
+            edits: Vec::new(),
+            elsewhere: Vec::new(),
+        };
+        let fixes = [
+            action("Add explicit type", Some("refactor.rewrite")),
+            action("Fill struct fields", Some("quickfix")),
+            action("Extract into function", Some("refactor.extract")),
+            action("Import `std::collections::HashMap`", Some("quickfix")),
+            action("Apply fix", None),
+            action("Remove unused", Some("quickfix.remove")),
+            action("Organize imports", Some("source.organizeImports")),
+        ];
+        assert_eq!(fixes_for_card(&fixes), [1, 3, 4, 5]);
+        assert!(fixes_for_card(&[]).is_empty());
     }
 
     #[test]

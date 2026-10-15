@@ -4,8 +4,9 @@
 //! ListView asks only for the rows on screen, so opening a 24,000-line file
 //! builds forty rows, and an edit tells the view which rows to ask for again.
 //! A row is its text as pieces of one token each at the x they start at, and
-//! the marks behind it — the selections crossing it and the carets on it
-//! other than the primary one, which the view draws on its own.
+//! the marks behind it — the selections crossing it, the carets on it other
+//! than the primary one (which the view draws on its own), and where the
+//! caret rests: the bracket pair outlined, the name's occurrences washed.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -13,7 +14,7 @@ use rusty_edit::{Line, Token};
 use rusty_lsp::DiagSeverity;
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
-use super::{Document, Metrics, Shared, find, inlays};
+use super::{Document, Metrics, Shared, find, inlays, resting::Resting};
 use crate::lsp::Problems;
 use crate::{Hint, Mark, Piece, Row};
 
@@ -21,6 +22,7 @@ pub struct Rows {
     doc: Shared,
     metrics: Rc<RefCell<Metrics>>,
     found: Rc<RefCell<find::Marks>>,
+    resting: Rc<RefCell<Resting>>,
     problems: Problems,
     gutter: Rc<RefCell<Gutter>>,
     notify: ModelNotify,
@@ -76,6 +78,7 @@ impl Rows {
         doc: Shared,
         metrics: Rc<RefCell<Metrics>>,
         found: Rc<RefCell<find::Marks>>,
+        resting: Rc<RefCell<Resting>>,
         problems: Problems,
         gutter: Rc<RefCell<Gutter>>,
     ) -> Rows {
@@ -83,6 +86,7 @@ impl Rows {
             doc,
             metrics,
             found,
+            resting,
             problems,
             gutter,
             notify: ModelNotify::default(),
@@ -314,6 +318,7 @@ impl Model for Rows {
                     &metrics,
                     hints,
                     &self.found.borrow(),
+                    &self.resting.borrow(),
                     self.problems
                         .borrow()
                         .get(&doc.path)
@@ -330,16 +335,18 @@ impl Model for Rows {
     }
 }
 
-/// What is drawn on `row` besides its text, back to front: find's scope
-/// and its matches, the selections crossing it, the squiggles of what the
-/// servers found, and the carets on it but the primary one. A span that
-/// carries on past the line's end takes a space's width there, as every
-/// editor shows the line break it holds.
+/// What is drawn on `row` besides its text, back to front: find's scope,
+/// the name under the caret where else it occurs, find's matches, the
+/// selections crossing it, the bracket pair beside the caret, the squiggles
+/// of what the servers found, and the carets on it but the primary one. A
+/// span that carries on past the line's end takes a space's width there, as
+/// every editor shows the line break it holds.
 fn marks(
     doc: &Document,
     metrics: &Metrics,
     hints: &[rusty_lsp::InlayHint],
     found: &find::Marks,
+    resting: &Resting,
     problems: &[rusty_lsp::FileDiagnostic],
     row: usize,
 ) -> Vec<Mark> {
@@ -348,29 +355,43 @@ fn marks(
     let x_at =
         |at: usize| inlays::caret_x(metrics, text, hints, text[..at - start].chars().count());
     let mut marks = Vec::new();
-    let mut span = |from: usize, to: usize, kind: i32| {
+    let span = |from: usize, to: usize, kind: i32| {
         let (a, b) = (from.max(start), to.min(end));
         if from > end || to < start || a > b {
-            return;
+            return None;
         }
         let x = x_at(a);
         let past = to > end;
         let width = x_at(b) - x + if past { metrics.ascii() } else { 0.0 };
-        if kind > 1 || width > 0.0 {
-            marks.push(mark(x, width, kind));
-        }
+        (kind > 1 || width > 0.0).then(|| mark(x, width, kind))
+    };
+    // Over the characters themselves, by column, the hints at their edges
+    // left out: a washed name and an outlined bracket are about the code.
+    let ink = |from: usize, to: usize, kind: i32| {
+        let (x, right) = inlays::ink(metrics, text, hints, from, to);
+        (right > x).then(|| mark(x, right - x, kind))
     };
     if let Some((from, to)) = found.scope {
-        span(from, to, 4);
+        marks.extend(span(from, to, 4));
+    }
+    for (from, to) in resting.washes_on(&doc.path, doc.version, row) {
+        marks.extend(ink(from, to, 10));
     }
     for at in found.on(start, end) {
         let (from, to) = found.matches[at];
-        span(from, to, if found.current == Some(at) { 3 } else { 2 });
+        marks.extend(span(
+            from,
+            to,
+            if found.current == Some(at) { 3 } else { 2 },
+        ));
     }
     for cursor in &doc.cursors {
         if !cursor.is_caret() && cursor.start() <= end && cursor.end() > start {
-            span(cursor.start(), cursor.end(), 0);
+            marks.extend(span(cursor.start(), cursor.end(), 0));
         }
+    }
+    for col in resting.brackets_on(&doc.path, doc.version, row) {
+        marks.extend(ink(col, col + 1, 9));
     }
     // Worst last, so an error is drawn over the warning it shares a word
     // with; hints are not problems, and are not drawn.
