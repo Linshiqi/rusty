@@ -16,6 +16,17 @@ and navigation.
 That is a deliberate reversal of the original positioning, not drift. Anything
 in this file that still reads as "we do not edit code" is stale.
 
+**The window is `rusty-desk`, drawn with Slint**, one process with the
+libraries in it; `docs/slint.md` is its design and the record of the move.
+It replaced a Leptos frontend in a WebView (`rusty-ui`) talking to a Tauri
+backend (`rusty-app`) through `rusty-ipc`, deleted in v0.7.0. Much of this
+file was written about that window — paths under `view/`, `controller/`
+and `state/`, Leptos and `mock.js`, the transparent `<textarea>`, WebView2,
+`tauri.conf.json`. Those paths no longer exist; the rules they record —
+what the editor must do, what a refusal says, what was measured — are why
+the Slint window does what it does, and are kept for that. Where the two
+differ, the desk's code and `docs/slint.md` are right.
+
 ## Commands
 
 ```bash
@@ -32,110 +43,38 @@ cargo clippy --workspace --all-targets -- -D warnings
 # a minute rather than in a release.
 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null cargo test --workspace
 
-# The frontend links only the model layers, so these must stay green
+# The model layers without the `backend` feature, which the WebView
+# frontend took them by. The split outlived that frontend and goes in time;
+# until then, CI still holds it.
 cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
   -p rusty-edit -p rusty-lsp -p rusty-dbg -p rusty-git --no-default-features \
   --target wasm32-unknown-unknown
 
-# Frontend alone, on http://localhost:17425 — much faster to iterate on than a
-# full `tauri dev` rebuild. Anything needing the backend reports that it cannot
-# run; the layout, styling and every click that needs no backend are real.
-# (They were not, for a while: one boot-time IPC call ran unguarded, the shim
-# threw a synchronous TypeError instead of rejecting, and the page rendered
-# and then answered nothing. `ipc::backend_available` guards every call that
-# runs at mount.) To exercise backend flows here anyway,
-# crates/rusty-ui/mock.js stubs the IPC surface: add
-#   <link data-trunk rel="copy-file" href="mock.js" /><script src="/mock.js"></script>
-# to index.html while debugging and REMOVE IT BEFORE COMMITTING — a test in
-# rusty-ui reads index.html and fails while the line is there, because it
-# reached four commits before that test existed. It is inert in
-# the real app. Three contracts it enforces: responses must carry every
-# non-defaulted field (serde rejects, and the error names only the field);
-# streaming commands like lsp_start must return a never-resolving promise —
-# a resolved stream reads as "server exited" and flips LSP Ready back off;
-# and save/open must be stateful like the disk is, or every save-then-reread
-# flow (format-on-save) looks broken in the mock while correct in the app —
-# the sheet included: Run saves it and plans again, and a plan that answered
-# with the example put a resistor changed to 1k straight back to 220.
-# A fourth, learned late: **a stub that has not kept up with the model is a
-# panel nobody can drive.** `plan_simulation` answered with the *first*
-# board's `leds`/`buttons` for two format changes; serde ignored every key
-# of it and the sim panel opened on a bare devkit, so nothing in it could be
-# exercised here at all — and the chips carried no `gpio`, which draws a
-# devkit with rails and no header and makes every wire to a pin a finding.
-# It is a divider on a C3 now: two resistors, both rails, a tap on GPIO4,
-# and 1.10 V at the middle for anyone to check. The chip catalogue in it is
-# `rusty-cli catalog --json` pasted whole, never typed: a hand-kept copy of
-# three ESP parts fell behind the catalogue, and once the wizard listed only
-# parts with a generator, it listed none here. A fifth: **a Rust map
-# crosses as a JS `Map`, not an object** — serde_wasm_bindgen writes one — so
-# a stub reading a part's `props.signal` reads nothing and plays its own
-# default while the frontend is right; read props with `.get()`. The
-# switches: set `mock.norecents` in localStorage to start on the welcome
-# screen (a launch that reopens the last project never shows it), or
-# `mock.fresh` to boot as a window New Window opened (the welcome screen,
-# the recents still listed; `__mock.newWindows` counts the asks, and
-# `__mock.otherWindows` is how many windows an update would close),
-# `__mock.pickFolder` to answer the folder picker instead of cancelling it,
-# `__mock.breathe` before Run to have the playground breathe its LED through
-# `[rusty:pwm]` reports instead of blinking it, and `__mock.signal` before
-# opening the Simulate panel for a board with a signal generator on GPIO3: a
-# run then streams its conversions at 500 Hz on the firmware's clock, a
-# firmware printing `raw` and an exponential average `y` of it, declares a
-# console `gyro`, and answers `sim_signal_set` — every instrument in the
-# Signals tab, the sweep included, can be driven here. And `__mock.attitude`
-# before Run: the firmware prints an attitude on its telemetry the way
-# cf-drone-rs names it (`roll`, `pitch`, `yaw` in radians, `gx` `gy` `gz`)
-# at 50 Hz, for the math toolbox's live rows. The assistant answers too,
-# once a model is chosen in Settings (the mock keeps the choice as the file
-# would): a tool call and then the reply, each round reporting its usage and
-# the second mostly cached, so the drawer's meter and the attachment chip
-# can be read here. So does the Git panel: a repository with nothing
-# committed, its Changes one file of every kind — an untracked file is
-# `unstaged: "added"` with `untracked`, as `parse::status` reads git's `?`,
-# and a stub without the first lists nothing. And `mock.workspace` in
-# localStorage makes the project the standard layout, a `firmware/` beside
-# the host crates, so `examples/cross.rs` in its tree gets ▶ Run — which
-# answers with a cross product's scene for the Draw tab. Without the switch
-# the project is its own firmware, and the lens is rightly withheld. And
-# Run Test in `src/main.rs` answers as `cargo test -- --show-output` prints,
-# one of its two tests failing at a line of the file — its mark, its note,
-# the lens's cross, the dock's colours; `__mock.testsPass` has both pass,
-# which is how a mark is seen to go. The mock keeps a server's copy of each
-# file too (`__mock.serverText`), and answers inlay hints about it — a type
-# after every `let name =` — marked with the text they are about;
-# `__mock.hintsLate` answers one ask about the text before the last change,
-# which the editor must refuse to draw and ask for again.
-cd crates/rusty-ui && trunk serve
-
-# The whole app
-cd crates/rusty-app && cargo tauri dev
-
-# The tools the installer ships beside the app, into crates/rusty-app/bundled/:
-# rusty's QEMU (the peripherals), both esp-gdbs, espflash, the LLDB adapter.
-# The release workflow runs this before every build; run it once here and
-# `cargo tauri dev` uses them too. Not committed — three hundred megabytes of
-# binaries belong in a release asset. Rust itself is deliberately not in it;
-# the script says why in its header.
+# The tools the installers ship beside the app, into target/bundled/: rusty's
+# QEMU (the peripherals), both esp-gdbs, espflash, the LLDB adapter. The
+# release workflow runs this before every build; run it once here and the
+# window finds them (`bundled_dir` in rusty-desk's main.rs). Not committed —
+# three hundred megabytes of binaries belong in a release asset. Rust itself
+# is deliberately not in it; the script says why in its header.
 scripts/bundle-tools.sh
 
-# Release: bump the version in Cargo.toml's [workspace.package] and in
-# crates/rusty-app/tauri.conf.json, add the `## v<version>` section to
-# CHANGELOG.md (rusty-app's tests/version_sync.rs holds the three to one
-# number), commit, then push a tag (`git tag v0.2.0 && git push origin
-# v0.2.0`) and .github/workflows/release.yml builds installers on Windows
-# (NSIS), macOS (universal DMG) and Ubuntu (deb + AppImage), plus rusty-cli
-# for each, and publishes a GitHub Release. The workflow also stamps the tag
-# into tauri.conf.json *and* the workspace manifest as a safety net — the
-# repository said 0.6.12 for twelve releases while the installers were
-# right, and every development build called itself 0.6.12 and was offered
-# its own release as an update. The Tauri updater keypair is in the repo secrets
-# (`cargo tauri signer generate`, then TAURI_SIGNING_PRIVATE_KEY and
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD; the public half is `plugins.updater`
-# in tauri.conf.json), so every build emits signed updater artifacts and the
-# publish job merges them into latest.json — the feed the running app polls
-# a moment after launch, with the tag's CHANGELOG section as its `notes`.
-# See "Updating itself" below.
+# Release: bump the version in Cargo.toml's [workspace.package], add the
+# `## v<version>` section to CHANGELOG.md, commit, then push a tag
+# (`git tag v0.7.0 && git push origin v0.7.0`). .github/workflows/release.yml
+# builds the window and rusty-cli on three runners and packages them with no
+# Tauri: Windows `rusty-<v>-windows-x86_64-setup.exe` (crates/rusty-setup,
+# the payload appended by `rusty-release pack`), macOS a universal
+# `rusty.app` in a DMG and as `.app.tar.gz`, Linux an AppImage and a .deb.
+# The workflow stamps the tag into the workspace manifest as a safety net —
+# the repository said 0.6.12 for twelve releases while the installers were
+# right. The updater key is in the repo secrets under the Tauri CLI's names
+# (TAURI_SIGNING_PRIVATE_KEY, …_PASSWORD; the public half is
+# `rusty_embed::update::PUBLIC_KEY`): `rusty-release sign` signs each
+# updater artifact, `rusty-release verify` checks it with the app's own
+# check, and the publish job merges them into latest.json with the tag's
+# CHANGELOG section as its `notes`. See "Updating itself" below.
+rusty-release sign <file> --version <v> [--key <file>]
+rusty-release verify <file> --version <v>
 
 # The simulation pipeline, proven end to end on a real project without the
 # window: detect, plan, build, image, boot in Espressif QEMU, count serial
@@ -280,14 +219,13 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
 | `rusty-git` | The repository's history, Fork-shaped: `graph.rs` lays the log out into lanes and edges (pure, tested — the frontend only turns a lane into an x), `log.rs` is what drawing it needs (which rows, the shape of each line, what a search matches) and `plan.rs` what a write decides first (where a push goes, how a branch is checked out, what a name field refuses), both shared by the two windows, `parse/` reads `git`'s machine formats (the log, a commit's diff, the refs, the status), `repo/` runs the user's own `git` in the opened project (`run.rs` the one way a `git` is run, `stamp.rs` what moved without asking git). No libgit2: one binary on PATH is one implementation of the repository format to agree with |
 | `rusty-lsp` | The language-server client — rust-analyzer for a Cargo project, clangd for a PlatformIO or CMake one (`ServerKind`): stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens, and navigation — references, implementations, type definitions, outlines, workspace symbols, the occurrences of a name, call hierarchies and macro expansion (`client/navigate.rs`, every answer a place with its line). `client/mod.rs` is the session; `documents`, `edits`, `query`, `navigate` and `hints` are the requests, and `transport`, `handshake` and `dispatch` the plumbing under them; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
-| `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
-| `rusty-app` | Tauri backend — thin, no analysis lives here. The request/response commands are `commands/`, one module per concern and glob re-exported (`#[tauri::command]` puts a hidden macro beside each command, and `generate_handler!` finds it by the command's own path); the long-running, streaming ones have modules of their own (`ai`, `flash`, `simulate`, `lsp`, `terminal`, `debug`). A command that needs the project asks `AppState::require_root`; blocking work goes through `state::blocking` |
-| `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope. The signal lab is split the same way: `lab` is its arithmetic — what a source plays, the records every instrument reads, a sweep's steps — pure and tested beside `activity` and `calls`, and `view/lab/` draws it. So is the math toolbox: `scene` is its 3-D view — a camera, a projection, shapes turned into SVG paths sorted back to front, the quadcopter — pure and tested, and `view/panels/math/` is the page |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
 | `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — WCH's CH32V003 and CH32X035, which nobody's QEMU models. Pure: `cpu` is a QingKe hart, the V2A's RV32EC or the V4C's RV32IMAC (`Core`), with Zicsr, the address vector table and the hardware stack; `elf` loads a flasher's view of an image; `ch32/` is one machine for both parts — the clock tree, GPIO with AFIO's remaps and EXTI, the timers, SysTick, the PFIC, the USARTs and the debug registers SDI print writes through — with what differs between them as data in `ch32/part.rs`; its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *WCH's parts* |
 | `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
-| `rusty-desk` | **The window in Slint, on the `slint` branch** — replacing `rusty-ui`, `rusty-app` and `rusty-ipc`; `docs/slint.md` is the design and the order of the work. One process, no IPC: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width |
+| `rusty-desk` | **The window, in Slint** — what replaced `rusty-ui`, `rusty-app` and `rusty-ipc`; `docs/slint.md` is the design and the order of the work. One process, no IPC: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width |
+| `rusty-setup` | The Windows installer: one executable carrying the app and its tools (`payload`: a zip appended, found by a footer), installing per user where the Tauri installer did and taking over its uninstall entry and shortcuts (`shell`), answering that installer's command line (`/P /S /R /UPDATE /ARGS`) because an older rusty runs whatever its updater downloaded that way, and — cut down to its own part — the uninstaller. `files` stages the payload beside the install and moves it into place, and writes down what it put there (`install.txt`), so an update removes what it no longer carries and the uninstaller removes exactly that |
+| `rusty-release` | What the release workflow runs between the build and the upload: `pack` appends the install directory to the installer, `sign` writes a Tauri-format `.sig` with the updater key, `verify` checks it with `rusty_embed::update::verify` before anything is published |
 
 ## The rules that are load-bearing
 
@@ -2489,6 +2427,9 @@ per chip into `<data dir>/playground/<chip>/`; the window's half is
 
 ## More than one rusty
 
+*(The Tauri window's. The Slint window does not open a second one yet; when
+it does, the two instances share `workbench.toml` the same way.)*
+
 File ▸ New window (Ctrl+Shift+N, VS Code's chord) opens another rusty on
 the welcome screen, beside the one it was asked from.
 
@@ -2538,60 +2479,57 @@ the welcome screen, beside the one it was asked from.
 
 ## Updating itself
 
-The running app asks the release feed a moment after launch, and when a
-newer version exists a sheet shows the release's own notes with *Download
-and install*, *Later* and *Skip this version*. `crates/rusty-app/src/update.rs`
-drives `tauri-plugin-updater`; nothing in the WebView calls the plugin, so
-it needs no capability.
+The running app asks the release feed a moment after launch and, when a
+newer version exists, says so in a note with *Download and install*;
+Settings ▸ Updates shows the release's notes, the download's progress and
+*Restart now*. `rusty_embed::update` is the feed, the comparison and the
+check; `rusty-desk`'s `app/updating.rs` is when to ask and how the verified
+download is put in place.
 
-- **Four commands, not one, because the shape is a hundred-megabyte download
-  that ends by restarting the app.** `check_update` answers with an
-  `UpdateStatus` and parks the plugin's `Update` in `AppState`;
-  `download_update` streams progress on a channel and verifies the signature
-  before a byte is kept; `apply_update` installs and restarts; `skip_update`
-  writes `skipped_update` to `workbench.toml`. Download and restart are two
-  gestures on purpose — an update that restarted the workbench the moment
-  its download happened to finish would take an unsaved edit with it — and
-  the verified bytes wait in `AppState` (`UpdateStage::Ready`), so the
-  restart is still on offer from Settings ▸ Updates after the sheet is put
-  away. A Tauri command cannot be cancelled from the WebView, so the fetch
-  runs as a task whose abort handle the state holds: the slot rule again.
-- **The launch check fails silently; the manual one says what it found either
-  way.** No network is the normal state of a bench, and a red banner at every
-  launch teaches people to dismiss banners; but Help ▸ *Check for updates…*
-  opens the sheet whatever the answer, because a menu item that sometimes
-  does nothing is one people stop trusting. The manual check also ignores a
-  skipped version — skipping is about not being *interrupted*.
-- **On Windows `install` never returns.** The plugin hands the NSIS installer
-  to the shell with `/P /R` (passive, restart the app) and calls
-  `std::process::exit(0)` itself, after `cleanup_before_exit`. On macOS and
-  Linux it replaces the bundle and returns, and `app.restart()` is what picks
-  the new one up. So `apply_update`'s answer never arrives on Windows, and
-  the frontend treats that as normal.
-- **Restart asks first while something runs that would not stop by itself**
-  (`controller::apply_update`, `running_work`): an install, a build, the
-  tests, a flash or a dock command, named in the question. The restart ends
-  the process and what it started goes with it, and an install cut off
-  halfway is how a toolchain loses its compiler — a restart during an espup
-  run left a user's `stable` with every component removed and their `esp`
-  with no `rustc.exe` (the next file, `rustc_driver.dll`, was loaded by
-  something and could not be deleted, which is where the removal stopped),
-  so every cargo command failed until both were reinstalled. A monitor or a
-  simulation is only stopped, as its own Stop would. **And it asks while
-  another rusty window is open, on Windows** — the installer closes that one
-  too (*More than one rusty*, above) — in one question with the rest, since
-  a second dialog after the first reads as the first not having taken.
-- **The whole flow is testable without a release.** Debug builds honour
-  `RUSTY_UPDATE_FEED=<url>` as the endpoint (the plugin allows plain http in
-  debug builds only, with a warning), and a fake installer signed with the
-  real private key verifies against the pubkey in the config — the
-  scratchpad's `feed/serve_feed.py` serves both. Never take that test as far
-  as *Restart now* against a fake artifact: see the previous point.
-- **The feed's `notes` are the release body**, written to `release-notes.md`
-  by the publish job and read by both the feed merge and the release step,
-  so the sheet and the release page cannot say two different things. The
-  sheet draws them with the Markdown page, so they are written for the
-  person reading it and for nobody else.
+- **The feed and the key are the Tauri updater's, on purpose.**
+  `latest.json` on the newest release, in Tauri's format (`version`,
+  `notes`, `pub_date`, per platform `url` and `signature`), signed with the
+  key the Tauri updater checked (`PUBLIC_KEY`, the old
+  `plugins.updater.pubkey`). So every copy of rusty installed before the
+  window moved to Slint finds this release, verifies it and installs it:
+  on Windows it runs the downloaded `setup.exe` as `/P /UPDATE /R /ARGS …`,
+  which `rusty-setup` answers; on macOS it replaces the bundle with the one
+  in `.app.tar.gz`; on Linux the AppImage with the new AppImage. The key
+  carrying over was checked before the first release: the secret the
+  repository holds signs, and the key in the code verifies.
+- **A signature names the version it was made for, and the feed's must
+  match.** The feed is not signed, so its version number proves nothing
+  about the file its `url` names; `rusty-release sign` puts
+  `version:<v>` in the trusted comment, which the signature covers, and
+  `verify` refuses a mismatch or a signature naming none.
+- **The launch check fails silently; the manual one says what it found
+  either way.** No network is the normal state of a bench, and a note at
+  every launch teaches people to dismiss notes. Check for updates opens
+  Settings ▸ Updates whatever the answer. A skipped version
+  (`skipped_update` in `workbench.toml`) is quiet at launch and shown when
+  asked for.
+- **Download and restart are two gestures.** The download runs in the
+  background — `install::download_counted`, the resuming download with byte
+  counts — its progress in the status bar, and is verified before it is
+  offered; the restart that installs it asks first while something runs,
+  since a restart stops it, and an install cut off halfway is how a
+  toolchain loses its compiler. Drafts are kept as at any exit.
+- **How the verified file goes in place is the system's.** Windows: the
+  installer, run passively with this process's id to wait for, then rusty
+  opened again. macOS: the `.app.tar.gz` unpacked beside the running bundle,
+  swapped for it, opened with `open -n`. Linux: `$APPIMAGE` replaced. A
+  `.deb` install has no `$APPIMAGE`, and the update says to get the new
+  package rather than touching `/usr`.
+- **The whole flow is testable without a release.** A debug build honours
+  `RUSTY_UPDATE_FEED=<url>`; serve a `latest.json` and an installer signed
+  with `rusty-release sign --key ~/.tauri/rusty.key` over
+  `python -m http.server`, and probe it with `RUSTY_PROBE_UPDATE=1`. The
+  installer honours `RUSTY_SETUP_DIR`, `RUSTY_SETUP_KEY` and
+  `RUSTY_SETUP_LINKS` (the install directory, the registry key under HKCU,
+  the shortcuts' folder) so it can be installed and uninstalled in a
+  sandbox. **Run it from PowerShell, never Git Bash**: MSYS rewrites `/S`
+  into a path, and the installer then runs interactively, its questions on
+  the screen and the app opened at the end.
 
 ## The gutter, and one line height
 

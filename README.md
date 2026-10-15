@@ -152,14 +152,19 @@ Rust calling each other, and vectors drawn from code.
 
 ## Building
 
-Rust 1.89+, and [Trunk](https://trunkrs.dev) for the frontend. There is no Node
-in this repository — Trunk drives the wasm build and fetches the standalone
-Tailwind binary itself.
+Rust 1.89+. The window is [Slint](https://slint.dev), so the whole app is
+one Cargo build — no Node, no WebView.
 
 ```bash
 cargo test --workspace
-cd crates/rusty-app && cargo tauri dev
+cargo run -p rusty-desk --release            # the window
+cargo run -p rusty-cli -- check .            # the workbench without it
 ```
+
+On Linux the window needs `libfontconfig1-dev libxkbcommon-dev libudev-dev
+libdbus-1-dev libgtk-3-dev`. `scripts/bundle-tools.sh` fetches the tools an
+installer ships beside the app — rusty's QEMU, the debuggers, espflash — into
+`target/bundled`, where a checkout's window finds them.
 
 ## Contributing
 

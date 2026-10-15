@@ -358,8 +358,15 @@ jobs:
               }
               json.dump(feed, open("assets/latest.json", "w"), indent=2)
 
+      # A tag with a suffix — `v0.7.0-rc.1` — is a pre-release, which GitHub
+      # never calls the latest: every installed rusty polls
+      # `releases/latest/download/latest.json`, and a candidate published as
+      # the latest would update all of them onto it. This is what lets the
+      # whole pipeline be tried before a release.
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: false
           body_path: release-body.md
           files: assets/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}

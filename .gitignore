@@ -3,18 +3,9 @@ target/
 **/*.rs.bk
 *.pdb
 
-# Trunk output and its wasm-bindgen cache
-dist/
-.trunk/
-
-# Tauri codegen
-/crates/rusty-app/gen
-
 .DS_Store
 Thumbs.db
 
-# The tools the installer ships, fetched by scripts/bundle-tools.sh — three
-# hundred megabytes of binaries that belong in a release asset, not in git.
-# Everything under bundled/ except what is written by hand.
-/crates/rusty-app/bundled/*
-!/crates/rusty-app/bundled/README.md
+# The tools the installer ships are fetched by scripts/bundle-tools.sh into
+# target/bundled — three hundred megabytes of binaries that belong in a
+# release asset, not in git.
