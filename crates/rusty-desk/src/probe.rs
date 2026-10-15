@@ -45,6 +45,14 @@
 //! literal missing two fields, opens the hover card on it, photographs the
 //! fixes the card lists, applies one by its click and prints the lines it
 //! wrote — on a copy, since it ends by keeping the draft.
+//! With `RUSTY_PROBE_SCROLL[=<px>]`, on a Markdown file, it scrolls the page
+//! that far, photographs it there, half a pixel further and a whole pixel
+//! further, and does the same in the code view over its source — printing
+//! where the half-pixel frame differs from the whole-pixel ones and how much
+//! sharpness it lost there, which is what a wheel's animation draws between.
+//! With `RUSTY_PROBE_SCROLL_WHEEL=<notches>` as well it then turns the page
+//! that many notches, animated as a real wheel is, and keeps every
+//! photograph it could take while the page glided (`wheel-<notch>-<ms>.png`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -115,6 +123,15 @@ pub fn start(window: &AppWindow) {
     let navigating = std::env::var_os("RUSTY_PROBE_NAV").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
+    let gliding = std::env::var_os("RUSTY_PROBE_SCROLL").is_some();
+    let notches = std::env::var("RUSTY_PROBE_SCROLL_WHEEL")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    // The photographs the scroll probe compares, and those it takes while a
+    // wheel's animation runs.
+    let photos: Rc<RefCell<Vec<image::RgbaImage>>> = Rc::default();
+    let frames: Rc<RefCell<Vec<(String, image::RgbaImage)>>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -130,16 +147,26 @@ pub fn start(window: &AppWindow) {
     let latencies: Rc<RefCell<Vec<Duration>>> = Rc::default();
     {
         let (waiting, latencies) = (waiting.clone(), latencies.clone());
-        window
-            .window()
-            .set_rendering_notifier(move |state, _| {
-                if let RenderingState::AfterRendering = state
-                    && let Some(sent) = waiting.take()
-                {
+        let named = Cell::new(false);
+        // The software renderer reports no frames; the probe still runs,
+        // without the times.
+        if let Err(error) = window.window().set_rendering_notifier(move |state, api| {
+            if let RenderingState::AfterRendering = state {
+                if !named.replace(true) {
+                    let api = match api {
+                        slint::GraphicsAPI::NativeOpenGL { .. } => "OpenGL",
+                        slint::GraphicsAPI::WebGL { .. } => "WebGL",
+                        _ => "another",
+                    };
+                    eprintln!("probe: drawn through {api}");
+                }
+                if let Some(sent) = waiting.take() {
                     latencies.borrow_mut().push(sent.elapsed());
                 }
-            })
-            .expect("a renderer that reports its frames");
+            }
+        }) {
+            eprintln!("probe: no frame times from this renderer ({error})");
+        }
     }
 
     let weak = window.as_weak();
@@ -290,6 +317,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if marking {
                     step.set(3000);
+                }
+                if gliding {
+                    step.set(3200);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -730,6 +760,130 @@ pub fn start(window: &AppWindow) {
                 eprintln!("md: after the toggle page {}", shell.get_md_page());
                 snapshot(&window, &dir.join("markdown-source.png"));
                 app.act("app.exit");
+            }
+            // Scrolling, photographed between whole pixels: a Markdown file's
+            // page and then its source in the code view, each drawn at an
+            // offset, half a pixel further and a whole pixel further. A
+            // wheel's animation draws its frames at fractions like these, so
+            // what differs between the half-pixel frame and the whole-pixel
+            // frame beside it is what moving content looks like, held still.
+            // A dispatched wheel event moves at once (the animation is the
+            // platform's wheel only), which is what lets a fraction be asked
+            // for exactly.
+            3200..=3207 if gliding => {
+                if !shell.get_md_page() {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 250 {
+                        step.set(3200);
+                    }
+                    return;
+                }
+                let size = window.window().size().to_logical(window.window().scale_factor());
+                let at = slint::LogicalPosition::new(size.width * 0.6, size.height * 0.5);
+                let wheel = |delta_y: f32| {
+                    window.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+                    window.window().dispatch_event(WindowEvent::PointerScrolled {
+                        position: at,
+                        delta_x: 0.0,
+                        delta_y,
+                    });
+                };
+                match n {
+                    3200 => {
+                        eprintln!("scroll: scale factor {}", window.window().scale_factor());
+                        let start = std::env::var("RUSTY_PROBE_SCROLL")
+                            .ok()
+                            .and_then(|s| s.parse::<f32>().ok())
+                            .unwrap_or(300.0);
+                        wheel(-start);
+                    }
+                    3203 | 3205 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        wheel(-0.5);
+                    }
+                    3207 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        held_still("page", &photos.borrow(), &dir);
+                        photos.borrow_mut().clear();
+                        app.act("markdown.toggle");
+                    }
+                    _ => {}
+                }
+            }
+            3210..=3217 if gliding => {
+                let top = -(code.get_row_height() * 20.0);
+                match n {
+                    3210 => code.set_scroll_y(top),
+                    3213 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        code.set_scroll_y(top - 0.5);
+                    }
+                    3215 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        code.set_scroll_y(top - 1.0);
+                    }
+                    3217 => {
+                        photos.borrow_mut().extend(photo(&window));
+                        held_still("code", &photos.borrow(), &dir);
+                        if notches > 0 {
+                            app.act("markdown.toggle");
+                            step.set(3230);
+                        } else {
+                            app.act("app.exit");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // With RUSTY_PROBE_SCROLL_WHEEL=<notches>, the page is turned by a
+            // mouse wheel as winit hands one to Slint — sixty pixels a notch,
+            // animated over 180 ms — and photographed as often as the
+            // window can be while it glides, each photograph named by the
+            // notch and the milliseconds since it. A real wheel needs a hand
+            // on it; this is the event winit dispatches for one, from the
+            // moment the platform has read it.
+            3230.. if gliding && notches > 0 => {
+                let sent = (n - 3230) / 8;
+                if (n - 3230).is_multiple_of(8) && sent < notches {
+                    let size = window.window().size().to_logical(window.window().scale_factor());
+                    let at = slint::LogicalPosition::new(size.width * 0.6, size.height * 0.5);
+                    window.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+                    window.window().dispatch_event(WindowEvent::internal(
+                        i_slint_core::input::BackendMouseEvent::Wheel {
+                            position: i_slint_core::lengths::LogicalPoint::new(at.x, at.y),
+                            delta_x: 0.0,
+                            delta_y: -60.0,
+                            phase: i_slint_core::input::TouchPhase::Moved,
+                        },
+                    ));
+                    let notch = Instant::now();
+                    let weak = window.as_weak();
+                    let frames = frames.clone();
+                    let fast = Rc::new(Timer::default());
+                    let hold = fast.clone();
+                    // Kept in memory until the end: a photograph costs a
+                    // whole frame's drawing and reading back, and the disk
+                    // would take the moments the animation is in.
+                    fast.start(TimerMode::Repeated, Duration::from_millis(4), move || {
+                        let Some(window) = weak.upgrade() else { return };
+                        let ms = notch.elapsed().as_millis();
+                        if ms > 260 {
+                            hold.stop();
+                            return;
+                        }
+                        if let Some(picture) = photo(&window) {
+                            frames.borrow_mut().push((format!("wheel-{sent}-{ms:03}.png"), picture));
+                        }
+                    });
+                }
+                if sent >= notches {
+                    let frames = frames.take();
+                    eprintln!("scroll: {notches} wheel notches, {} photographs while gliding", frames.len());
+                    for (name, picture) in &frames {
+                        save_quickly(picture, &dir.join(name));
+                    }
+                    app.act("app.exit");
+                }
             }
             // The math toolbox: the Euler example's rows, the attitude row's
             // working played, a row retyped, and the reference.
@@ -2414,6 +2568,117 @@ fn screen_text(shell: &Shell) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The window as it is drawn now, kept in memory.
+fn photo(window: &AppWindow) -> Option<image::RgbaImage> {
+    let buffer = window.window().take_snapshot().ok()?;
+    image::RgbaImage::from_raw(buffer.width(), buffer.height(), buffer.as_bytes().to_vec())
+}
+
+/// A photograph written with the least compression, so that taking the next
+/// one waits on the disk as little as it can.
+fn save_quickly(picture: &image::RgbaImage, path: &Path) {
+    use image::ImageEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    let Ok(file) = std::fs::File::create(path) else {
+        return;
+    };
+    let encoder = PngEncoder::new_with_quality(
+        std::io::BufWriter::new(file),
+        CompressionType::Fast,
+        FilterType::NoFilter,
+    );
+    let _ = encoder.write_image(
+        picture.as_raw(),
+        picture.width(),
+        picture.height(),
+        image::ExtendedColorType::Rgba8,
+    );
+}
+
+/// Three photographs of one surface, scrolled to a whole pixel, half a
+/// pixel further and a whole pixel further: saved, and the half-pixel one
+/// held to the whole-pixel one nearest it. Where the content was only moved
+/// the two agree; where it was drawn between pixels they differ, and the
+/// half-pixel frame has less vertical contrast there — sampled between two
+/// rows, a one-pixel stroke becomes two at half strength.
+fn held_still(what: &str, photos: &[image::RgbaImage], dir: &Path) {
+    let [before, half, after] = photos else {
+        eprintln!("scroll {what}: {} photographs, not three", photos.len());
+        return;
+    };
+    for (picture, name) in [(before, "a"), (half, "half"), (after, "b")] {
+        let path = dir.join(format!("scroll-{what}-{name}.png"));
+        if picture.save(&path).is_ok() {
+            eprintln!("snapshot: {}", path.display());
+        }
+    }
+    let luma = |p: &image::Rgba<u8>| {
+        (i32::from(p[0]) * 299 + i32::from(p[1]) * 587 + i32::from(p[2]) * 114) / 1000
+    };
+    // Summed vertical contrast over a box: what blurring lowers and
+    // moving keeps.
+    let contrast = |picture: &image::RgbaImage, x0: u32, x1: u32, y0: u32, y1: u32| -> i64 {
+        let mut sum = 0i64;
+        for y in y0..y1.min(picture.height() - 1) {
+            for x in x0..=x1 {
+                sum += i64::from(
+                    (luma(picture.get_pixel(x, y + 1)) - luma(picture.get_pixel(x, y))).abs(),
+                );
+            }
+        }
+        sum
+    };
+    let (width, height) = half.dimensions();
+    for (other, name) in [(before, "the frame before"), (after, "the frame after")] {
+        // Rows that differ, and how far across.
+        let rows: Vec<Option<(u32, u32, u32)>> = (0..height)
+            .map(|y| {
+                let mut seen: Option<(u32, u32, u32)> = None;
+                for x in 0..width {
+                    let (a, b) = (half.get_pixel(x, y), other.get_pixel(x, y));
+                    if (0..3).any(|c| a[c].abs_diff(b[c]) > 8) {
+                        let (lo, hi, n) = seen.unwrap_or((x, x, 0));
+                        seen = Some((lo.min(x), hi.max(x), n + 1));
+                    }
+                }
+                seen
+            })
+            .collect();
+        let differing: u32 = rows.iter().flatten().map(|r| r.2).sum();
+        // Runs of differing rows, a gap of up to four rows inside one.
+        let mut bands: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
+        for (y, row) in rows.iter().enumerate() {
+            let Some((lo, hi, n)) = *row else { continue };
+            let y = y as u32;
+            match bands.last_mut() {
+                Some(band) if y <= band.1 + 5 => {
+                    band.1 = y;
+                    band.2 = band.2.min(lo);
+                    band.3 = band.3.max(hi);
+                    band.4 += n;
+                }
+                _ => bands.push((y, y, lo, hi, n)),
+            }
+        }
+        eprintln!(
+            "scroll {what}: half a pixel against {name}: {differing} pixels differ ({:.2}% of the window) in {} bands; contrast {:.3} of it over the window",
+            f64::from(differing) * 100.0 / f64::from(width * height),
+            bands.len(),
+            contrast(half, 0, width - 1, 0, height) as f64
+                / contrast(other, 0, width - 1, 0, height).max(1) as f64
+        );
+        let mut largest = bands.clone();
+        largest.sort_by_key(|band| std::cmp::Reverse(band.4));
+        for (y0, y1, x0, x1, n) in largest.into_iter().take(12) {
+            eprintln!(
+                "    rows {y0}..{y1}, x {x0}..{x1}: {n} differ, contrast {:.3} of it",
+                contrast(half, x0, x1, y0, y1 + 1) as f64
+                    / contrast(other, x0, x1, y0, y1 + 1).max(1) as f64
+            );
+        }
+    }
 }
 
 fn snapshot(window: &AppWindow, path: &Path) {

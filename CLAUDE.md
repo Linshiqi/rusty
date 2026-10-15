@@ -3630,6 +3630,36 @@ is no browser storage, and what the window remembers between runs is
   the build stops at `Cannot override property 'row'`, which reads like a
   name declared twice. It happened twice in one day (the Environment page's
   tool row, the wizard's choice); name the property after what it holds.
+- **Slint's OpenGL renderer draws text half a pixel off sharply, and the
+  contents of a rounded clip half a pixel off blurred — so rusty carries a
+  patched renderer** (`vendor/i-slint-renderer-femtovg`, through
+  `[patch.crates-io]`). Reported as "scrolling looks like behind glass, and
+  sharp once it stops". A wheel notch is 60 px eased over 180 ms
+  (`items/flickable.rs`), so every frame in between leaves the content at a
+  fraction of a pixel — but femtovg puts each glyph run's origin on the
+  pixel grid, so that alone blurs no text. An element with `clip: true` *and*
+  a `border-radius` is different: femtovg cannot clip to a rounded shape, so
+  `visit_clip` draws the children into a texture and copied it to the
+  item's unrounded position, sampling between texels. Measured with
+  `RUSTY_PROBE_SCROLL` on a Markdown page held still half a pixel off: the
+  paragraphs identical to the whole-pixel frame, the code blocks at 0.67
+  and 0.86 of its contrast; the code view, which has no rounded clips,
+  identical; the software renderer sharp. With the texture put on the grid,
+  as femtovg's opacity layers already were, the code blocks match too.
+  `RUSTY_PROBE_SCROLL_WHEEL` then turns the wheel as winit hands it over and
+  photographs the glide: unpatched, a code block's brightest strokes fell
+  from 222 at rest to 177 at half a pixel, and the block was soft at rest
+  as well — the page's centred column had set it half a pixel in; patched,
+  235 at every phase. So it is not only scrolling: anything clipped round
+  (code blocks and tables, a `Field`, the editor's popups) is soft wherever
+  its position falls between pixels. Upstream's `visit_clip` was unchanged
+  when this was written; when slint moves, check it and copy the crate
+  again or drop the patch. A patch whose version slint no longer pins is
+  only a warning that it went unused, so `rusty-desk/tests/renderer.rs`
+  fails on a lockfile whose renderer came from the registry.
+  **The hypothesis that came first — fractional offsets blur text — was
+  right about the motion and wrong about the text**, and only a photograph
+  held between pixels told the two apart.
 - **A Slint `TouchArea`'s `moved` is called only while a button is held**
   (`grabbed`, in `i-slint-core`'s `input_items.rs`), so a hover cannot be
   read there. The code view's hover card was wired to `moved`'s not-pressed

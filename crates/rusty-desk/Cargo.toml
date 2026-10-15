@@ -20,6 +20,10 @@ flate2 = "1.1.9"
 
 [dependencies]
 slint = "1.18.1"
+# Slint's own core, for one thing only: the probe turns a mouse wheel the
+# way winit hands one over (`RUSTY_PROBE_SCROLL_WHEEL`), animated, which the
+# public `PointerScrolled` is not. Pinned to the version slint pins.
+i-slint-core = { version = "=1.18.1", default-features = false }
 rusty-ai = { path = "../rusty-ai" }
 rusty-core = { path = "../rusty-core" }
 rusty-dbg = { path = "../rusty-dbg" }
