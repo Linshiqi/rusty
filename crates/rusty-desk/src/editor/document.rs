@@ -66,6 +66,11 @@ pub struct Document {
     /// The last edit moved or opened folds, so the rows on screen are not
     /// the lines it named and are all drawn again.
     pub folds_moved: bool,
+    /// The server's colours, by line, carried through every edit until it
+    /// answers again.
+    pub semantic: Vec<rusty_lsp::SemanticSpan>,
+    /// The server's inlay hints, by line and column, carried the same way.
+    pub hints: Vec<rusty_lsp::InlayHint>,
     saved: u64,
 }
 
@@ -95,6 +100,8 @@ impl Document {
             read_only: false,
             folds: Folded::default(),
             folds_moved: false,
+            semantic: Vec::new(),
+            hints: Vec::new(),
         }
     }
 
@@ -185,6 +192,9 @@ impl Document {
 
     fn replace(&mut self, text: String, cursors: Vec<Cursor>) -> Change {
         let change = changed_lines(&self.text, &self.lines, &text);
+        // What the server said stays where the text it was about went.
+        rusty_lsp::follow::semantic(&mut self.semantic, &self.text, &text);
+        rusty_lsp::follow::hints(&mut self.hints, &self.text, &text);
         self.text = text;
         self.lines = Lines::of(&self.text);
         self.version += 1;

@@ -161,7 +161,10 @@ impl App {
                     ),
                 );
             }
-            LspEvent::Ready {} | LspEvent::Refresh {} | LspEvent::Companion { .. } => {}
+            // The server's analysis changed: its colours and hints are
+            // asked for again.
+            LspEvent::Ready {} | LspEvent::Refresh {} => self.editor.analyse_soon(),
+            LspEvent::Companion { .. } => {}
         }
         self.sync_server();
     }

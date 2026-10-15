@@ -469,9 +469,9 @@ impl Surface {
             .collect();
         let (x, row) = self.doc().map_or((0.0, popup.line as usize), |doc| {
             let d = doc.borrow();
-            let text = d.lines.text(&d.text, popup.line as usize);
+            let (line, start) = (popup.line as usize, popup.word_start as usize);
             (
-                self.metrics.borrow().x_of(text, popup.word_start as usize),
+                super::inlays::char_on(&self.metrics.borrow(), &d, line, start),
                 d.row_of(popup.line as usize),
             )
         });
@@ -531,7 +531,7 @@ impl Surface {
             let head = d.primary().head;
             let (l, col) = d.lines.position(&d.text, head);
             (
-                self.metrics.borrow().x_of(d.lines.text(&d.text, l), col),
+                super::inlays::caret_on(&self.metrics.borrow(), &d, l, col),
                 d.row_of(line as usize),
             )
         });

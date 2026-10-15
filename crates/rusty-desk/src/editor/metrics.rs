@@ -64,7 +64,10 @@ impl Metrics {
         x
     }
 
-    /// The character boundary nearest to `x`.
+    /// The character boundary nearest to `x`. The editor asks
+    /// `inlays::column_at`, which knows the hints; this is what it must
+    /// agree with on a line without any.
+    #[cfg(test)]
     pub fn column_at(&self, text: &str, x: f32) -> usize {
         let mut at = 0.0;
         for (col, ch) in text.chars().enumerate() {
@@ -75,6 +78,16 @@ impl Metrics {
             at += width;
         }
         text.chars().count()
+    }
+
+    /// Every character `ascii` wide but the tab, for tests that need no
+    /// window to measure in.
+    #[cfg(test)]
+    pub fn fixed(ascii: f32) -> Metrics {
+        Metrics {
+            ascii,
+            wide: HashMap::new(),
+        }
     }
 
     /// One ASCII character's width.

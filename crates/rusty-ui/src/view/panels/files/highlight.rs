@@ -229,29 +229,6 @@ pub(super) fn hover_parts(text: &str) -> AnyView {
         .into_any()
 }
 
-/// rust-analyzer's legend names, mapped into the palette.
-///
-/// Unmapped kinds — operators, namespaces, punctuation — return `None` and
-/// keep the lexical base colour: overlaying everything would repaint half
-/// the buffer in one hue and lose more than it adds.
-fn semantic_token(kind: &str) -> Option<Token> {
-    Some(match kind {
-        "keyword" | "lifetime" | "boolean" | "selfKeyword" | "selfTypeKeyword" => Token::Keyword,
-        "comment" => Token::Comment,
-        "string" | "character" => Token::Str,
-        "number" => Token::Number,
-        "macro" | "macroBang" | "derive" | "deriveHelper" | "attribute" | "attributeBracket" => {
-            Token::Macro
-        }
-        "function" | "method" | "procMacro" => Token::Function,
-        "struct" | "enum" | "union" | "trait" | "typeAlias" | "type" | "builtinType" | "class"
-        | "interface" | "enumMember" | "typeParameter" => Token::Type,
-        "variable" | "parameter" | "property" | "field" | "const" | "static" => Token::Variable,
-        "namespace" => Token::Namespace,
-        _ => return None,
-    })
-}
-
 /// Re-cut a line's spans so the compiler's colours win where they exist and
 /// the lexical base shows everywhere else.
 /// The semantic spans on one line, out of a list sorted by line: found by
@@ -298,43 +275,11 @@ pub(super) fn overlay_semantic(line: Line, index: u32, semantic: &[SemanticSpan]
         .iter()
         .filter(|span| span.line == index)
         .filter_map(|span| {
-            semantic_token(&span.kind)
+            rusty_edit::semantic::token_of(&span.kind)
                 .map(|token| (span.start_col, span.start_col + span.length, token))
         })
         .collect();
-    if marks.is_empty() {
-        return line;
-    }
-
-    let mut out: Vec<Span> = Vec::with_capacity(line.spans.len());
-    let mut col = 0u32;
-    for span in line.spans {
-        let mut text = String::new();
-        let mut current = span.token;
-        for ch in span.text.chars() {
-            let token = marks
-                .iter()
-                .find(|(from, to, _)| (*from..*to).contains(&col))
-                .map(|(_, _, token)| *token)
-                .unwrap_or(span.token);
-            if token != current && !text.is_empty() {
-                out.push(Span {
-                    text: std::mem::take(&mut text),
-                    token: current,
-                });
-            }
-            current = token;
-            text.push(ch);
-            col += 1;
-        }
-        if !text.is_empty() {
-            out.push(Span {
-                text,
-                token: current,
-            });
-        }
-    }
-    Line { spans: out }
+    rusty_edit::semantic::overlay(line, &marks)
 }
 
 /// Token to a class the stylesheet owns.

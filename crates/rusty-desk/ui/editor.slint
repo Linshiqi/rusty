@@ -29,8 +29,17 @@ export struct Mark {
     path: string,
 }
 
+// An inlay hint drawn in the line: its label in a pill, where the pill
+// starts and how wide it is.
+export struct Hint {
+    text: string,
+    x: length,
+    width: length,
+}
+
 export struct Row {
     number: int,
+    hints: [Hint],
     // A block opens on the line (1), collapsed (2); and where the line's
     // text ends, for the ellipsis a collapsed one carries.
     fold: int,
@@ -770,6 +779,23 @@ export component CodeView inherits Rectangle {
                 font-family: Theme.mono;
                 font-size: Code.font-size;
                 vertical-alignment: center;
+            }
+            // The hints, in the room the pieces left them.
+            for hint in row.hints: Rectangle {
+                x: root.gutter + hint.x;
+                y: 2px;
+                width: hint.width;
+                height: parent.height - 4px;
+                border-radius: 3px;
+                background: Theme.hover;
+                Text {
+                    text: hint.text;
+                    color: Theme.label-3;
+                    font-family: Theme.mono;
+                    font-size: Code.font-size;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
             TouchArea {
                 x: 0;

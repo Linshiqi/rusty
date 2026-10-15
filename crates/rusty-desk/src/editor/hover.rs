@@ -168,12 +168,11 @@ impl Surface {
         let text = d.lines.text(&d.text, line);
         let metrics = self.metrics.borrow();
         // The character under the pointer, not the boundary nearest it.
-        let mut col = metrics.column_at(text, x);
-        if col > 0 && x < metrics.x_of(text, col) {
+        let mut col = super::inlays::column_on(&metrics, &d, line, x);
+        if col > 0 && x < super::inlays::char_on(&metrics, &d, line, col) {
             col -= 1;
         }
-        let length = text.chars().count();
-        let past = x > metrics.x_of(text, length) + metrics.ascii();
+        let past = x > super::inlays::end_on(&metrics, &d, line) + metrics.ascii();
         let squiggled = self
             .problems
             .borrow()
@@ -328,10 +327,9 @@ impl Surface {
         };
         let (line_text_x, has_any, row) = {
             let d = doc.borrow();
-            let text = d.lines.text(&d.text, line);
             let col = d.lines.position(&d.text, from).1;
             (
-                metrics.x_of(text, col),
+                super::inlays::char_on(&metrics, &d, line, col),
                 !rows_of_problems.is_empty() || !code_rows.is_empty() || !prose.is_empty(),
                 d.row_of(line),
             )

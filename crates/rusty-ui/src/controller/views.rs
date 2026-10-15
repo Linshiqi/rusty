@@ -65,7 +65,7 @@ pub fn echo_edit(state: AppState, new: &str) {
     {
         state.editor.hints.update(|hints| {
             if let Some(set) = hints {
-                crate::inlay::follow(&mut set.hints, &old, new);
+                rusty_lsp::follow::hints(&mut set.hints, &old, new);
             }
         });
     }

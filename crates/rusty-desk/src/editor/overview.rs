@@ -23,6 +23,7 @@ use crate::{Code, Theme};
 pub(super) struct Overview {
     pub sticky: Cell<bool>,
     pub minimap: Cell<bool>,
+    pub hints: Cell<bool>,
     /// The lines stuck last, for which text and which painting.
     stuck: RefCell<(String, u64, u64, Vec<u32>)>,
     /// What the minimap last painted.
@@ -50,6 +51,7 @@ impl Default for Overview {
         Overview {
             sticky: Cell::new(true),
             minimap: Cell::new(true),
+            hints: Cell::new(true),
             stuck: RefCell::default(),
             painted: RefCell::default(),
             paintings: Cell::new(0),
@@ -63,6 +65,15 @@ impl Surface {
         self.overview.sticky.set(view.sticky_scroll);
         self.overview.minimap.set(view.minimap);
         self.gutter.borrow_mut().no_guides = !view.indent_guides;
+        let hints = self.overview.hints.replace(view.inlay_hints);
+        if hints && !view.inlay_hints {
+            for doc in self.open.borrow().values() {
+                doc.borrow_mut().hints.clear();
+            }
+            self.hints_changed();
+        } else if !hints && view.inlay_hints {
+            self.analyse_soon();
+        }
         self.rows.reset();
         self.view_changed();
     }
@@ -82,6 +93,8 @@ impl Surface {
         let doc = doc.borrow();
         self.stick(&code, &doc);
         self.minimap(&window, &code, &doc);
+        drop(doc);
+        self.analysis_follows_view();
     }
 
     fn stick(&self, code: &Code, doc: &Document) {

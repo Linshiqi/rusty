@@ -10,6 +10,7 @@
 //! `lineops.rs`, under their tests); this module applies it to a
 //! [`Document`] and tells the view, the painter and the app what changed.
 
+mod analysis;
 pub mod backup;
 mod clip;
 mod completion;
@@ -20,6 +21,7 @@ mod finding;
 mod history;
 mod hover;
 mod indent;
+mod inlays;
 mod keymap;
 mod lineops;
 mod lines;
@@ -140,6 +142,8 @@ pub struct Surface {
     completing: completion::Completing,
     /// Sticky scroll and the minimap.
     overview: overview::Overview,
+    /// When the server is next asked for colours and hints.
+    analysis: analysis::Analysis,
 }
 
 impl Surface {
@@ -190,6 +194,7 @@ impl Surface {
             hovering: hover::Hovering::default(),
             completing: completion::Completing::default(),
             overview: overview::Overview::default(),
+            analysis: analysis::Analysis::default(),
         });
         surface.wire(window);
         surface
@@ -393,6 +398,7 @@ impl Surface {
             window.invoke_focus_code();
         }
         self.view_changed();
+        self.analyse_soon();
     }
 
     pub fn show_nothing(&self) {
@@ -951,7 +957,7 @@ impl Surface {
             let last = d.rows() as isize - 1;
             let x_of = |d: &Document, at: usize| {
                 let (line, col) = d.lines.position(&d.text, at);
-                metrics.x_of(d.lines.text(&d.text, line), col)
+                inlays::caret_on(&metrics, d, line, col)
             };
             let want = d.want_x.unwrap_or_else(|| x_of(&d, d.cursors[0].head));
             let moved: Vec<Cursor> = d
@@ -971,8 +977,8 @@ impl Surface {
                         d.text.len()
                     } else {
                         let target = d.line_at_row(target as usize);
-                        let there = d.lines.text(&d.text, target);
-                        d.lines.byte(&d.text, target, metrics.column_at(there, x))
+                        let col = inlays::column_on(&metrics, &d, target, x);
+                        d.lines.byte(&d.text, target, col)
                     };
                     let anchor = if extend { cursor.anchor } else { head };
                     Cursor { anchor, head }
@@ -1005,8 +1011,7 @@ impl Surface {
             let last = d.rows() as isize - 1;
             let screen = (row as isize + (y / row_height).floor() as isize).clamp(0, last);
             let line = d.line_at_row(screen as usize);
-            let text = d.lines.text(&d.text, line);
-            let col = self.metrics.borrow().column_at(text, x.max(0.0));
+            let col = inlays::column_on(&self.metrics.borrow(), &d, line, x.max(0.0));
             (line, d.lines.byte(&d.text, line, col))
         };
         if kind == 0 {
@@ -1140,7 +1145,7 @@ impl Surface {
             let d = doc.borrow();
             let metrics = self.metrics.borrow();
             (change.first..change.first + change.added)
-                .map(|line| metrics.x_of(d.lines.text(&d.text, line), usize::MAX))
+                .map(|line| inlays::end_on(&metrics, &d, line))
                 .fold(self.widest.get(), f32::max)
         };
         if widest > self.widest.get() {
@@ -1156,6 +1161,7 @@ impl Surface {
         self.research(Some(change));
         self.cursors_moved();
         self.view_changed();
+        self.analyse_soon();
     }
 
     /// The cursors moved (or the text under them changed): redraw the rows
@@ -1212,7 +1218,7 @@ impl Surface {
             let (line, col) = d.lines.position(&d.text, at);
             (
                 line,
-                self.metrics.borrow().x_of(d.lines.text(&d.text, line), col),
+                inlays::caret_on(&self.metrics.borrow(), &d, line, col),
             )
         };
         self.scroll_to(line, x);
@@ -1228,7 +1234,7 @@ impl Surface {
             let (line, col) = d.lines.position(&d.text, d.primary().head);
             (
                 line,
-                self.metrics.borrow().x_of(d.lines.text(&d.text, line), col),
+                inlays::caret_on(&self.metrics.borrow(), &d, line, col),
             )
         };
         let code = window.global::<Code>();

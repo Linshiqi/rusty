@@ -13,7 +13,7 @@
 //! Compiled unconditionally, as [`crate::positions`] is: no IO, and both
 //! sides of the wire need it.
 
-use crate::model::FileDiagnostic;
+use crate::model::{FileDiagnostic, InlayHint, SemanticSpan};
 
 /// The one span two texts differ in: `start..old_end` of the old text became
 /// `start..new_end` of the new, all three on character boundaries. Several
@@ -194,6 +194,63 @@ pub fn diagnostics(items: &mut Vec<FileDiagnostic>, old: &str, new: &str) -> boo
     changed
 }
 
+/// Carry inlay hints from `old` to `new`, one edit apart — or several,
+/// taken as the one span that covers them all, which drops the hints
+/// between them until the server answers again rather than guessing where
+/// they went. A hint is drawn inside its line, so one left where it was
+/// while the line changes lands in the middle of somebody's word, and one
+/// dropped until the next answer takes its width with it, sliding the rest
+/// of the line under the caret and back. So hints move with the text, as VS
+/// Code's do: an edit before a hint on its line carries it along, one after
+/// it leaves it be, and only one that takes away the text a hint stood in
+/// takes the hint too. Text typed exactly at a hint goes on the side it is
+/// not about: after a type, which belongs to the name before it; before a
+/// parameter's name, which belongs to the argument after it.
+pub fn hints(hints: &mut Vec<InlayHint>, old: &str, new: &str) {
+    if hints.is_empty() || old == new {
+        return;
+    }
+    let edit = Edit::between(old, new);
+    let (before, after) = (Lines::new(old), Lines::new(new));
+    hints.retain_mut(|hint| {
+        let at = before.byte(hint.line, hint.col);
+        let Some(to) = edit.moved(at, !hint.parameter) else {
+            return false;
+        };
+        if to == at && at < edit.start {
+            // Before the edit: the same line and column as before.
+            return true;
+        }
+        (hint.line, hint.col) = after.line_col(to);
+        true
+    });
+}
+
+/// Carry semantic spans from `old` to `new`, one edit apart: each moved
+/// with the text before it, and gone where the edit touched the text it
+/// coloured — the painter's colour shows there until the server answers.
+pub fn semantic(spans: &mut Vec<SemanticSpan>, old: &str, new: &str) {
+    if spans.is_empty() || old == new {
+        return;
+    }
+    let edit = Edit::between(old, new);
+    let (before, after) = (Lines::new(old), Lines::new(new));
+    spans.retain_mut(|span| {
+        let from = before.byte(span.line, span.start_col);
+        let to = before.byte(span.line, span.start_col + span.length);
+        match edit.span(from, to) {
+            None => false,
+            Some(same) if same == (from, to) => true,
+            Some((from, to)) => {
+                let (line, col) = after.line_col(from);
+                let (end_line, end) = after.line_col(to);
+                (span.line, span.start_col, span.length) = (line, col, end - col);
+                line == end_line
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +360,127 @@ mod tests {
         assert!(!diagnostics(&mut items, "abc", "abc"));
         assert!(!diagnostics(&mut items, "abc\nx", "abc\ny"));
         assert!(diagnostics(&mut items, "abc", "xabc"));
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    fn hint(line: u32, col: u32, parameter: bool) -> InlayHint {
+        InlayHint {
+            line,
+            col,
+            label: if parameter { "x:" } else { ": f32" }.to_string(),
+            parameter,
+            pad_left: false,
+            pad_right: parameter,
+        }
+    }
+
+    fn after(hints: &[InlayHint], old: &str, new: &str) -> Vec<(u32, u32)> {
+        let mut hints = hints.to_vec();
+        super::hints(&mut hints, old, new);
+        hints.iter().map(|h| (h.line, h.col)).collect()
+    }
+
+    /// Typing before a hint on its line carries it along; typing after it,
+    /// or on another line, leaves it be.
+    #[test]
+    fn a_hint_moves_with_the_text_before_it_on_its_line() {
+        let old = "let total = 1;\nlet x = 2;\n";
+        let type_of_total = hint(0, 9, false);
+        assert_eq!(
+            after(
+                std::slice::from_ref(&type_of_total),
+                old,
+                "let  total = 1;\nlet x = 2;\n"
+            ),
+            [(0, 10)]
+        );
+        assert_eq!(
+            after(
+                std::slice::from_ref(&type_of_total),
+                old,
+                "let total = 12;\nlet x = 2;\n"
+            ),
+            [(0, 9)]
+        );
+        assert_eq!(
+            after(&[type_of_total], old, "let total = 1;\nlet xy = 2;\n"),
+            [(0, 9)]
+        );
+    }
+
+    /// Text typed exactly where a type sits goes before the type, which
+    /// belongs to the name it follows; typed where a parameter's name sits,
+    /// it goes after the name, which belongs to the argument.
+    #[test]
+    fn what_is_typed_at_a_hint_goes_on_the_side_it_belongs_to() {
+        let old = "let total = f(1);";
+        let typed = "let totals = f(1);";
+        assert_eq!(after(&[hint(0, 9, false)], old, typed), [(0, 10)]);
+        let argument = "let total = f(21);";
+        assert_eq!(after(&[hint(0, 14, true)], old, argument), [(0, 14)]);
+    }
+
+    #[test]
+    fn a_line_opened_above_moves_the_hints_below_it_down() {
+        let old = "fn a() {\n    let t = 1;\n}\n";
+        let new = "fn a() {\n\n    let t = 1;\n}\n";
+        assert_eq!(after(&[hint(1, 9, false)], old, new), [(2, 9)]);
+        let joined = "fn a() {    let t = 1;\n}\n";
+        assert_eq!(after(&[hint(1, 9, false)], old, joined), [(0, 17)]);
+    }
+
+    /// The text a hint stood in taken away takes the hint with it — and
+    /// only that hint.
+    #[test]
+    fn a_hint_inside_what_was_replaced_goes() {
+        let old = "let (a, b) = pair();";
+        let new = "let c = pair();";
+        let hints = [hint(0, 6, false), hint(0, 9, false), hint(0, 19, false)];
+        assert_eq!(after(&hints, old, new), [(0, 14)]);
+    }
+
+    /// Columns are characters: a `中` before a hint is one column however
+    /// many bytes it is.
+    #[test]
+    fn columns_are_counted_in_characters() {
+        let old = "let 中 = 1;";
+        let new = "let 中文 = 1;";
+        assert_eq!(after(&[hint(0, 5, false)], old, new), [(0, 6)]);
+        assert_eq!(
+            after(&[hint(0, 5, false)], old, "// 中\nlet 中 = 1;"),
+            [(1, 5)]
+        );
+    }
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use super::*;
+
+    fn span(line: u32, start_col: u32, length: u32) -> SemanticSpan {
+        SemanticSpan {
+            line,
+            start_col,
+            length,
+            kind: "variable".into(),
+        }
+    }
+
+    /// A span after an edit on its line moves with it, one on a line below
+    /// moves down, and one whose text the edit touched goes.
+    #[test]
+    fn spans_move_with_the_text_and_go_with_what_they_coloured() {
+        let old = "let a = b;\nlet c = d;";
+        let mut spans = vec![span(0, 4, 1), span(0, 8, 1), span(1, 4, 1)];
+        semantic(&mut spans, old, "let a = zz;\n\nlet c = d;");
+        let at: Vec<(u32, u32, u32)> = spans
+            .iter()
+            .map(|s| (s.line, s.start_col, s.length))
+            .collect();
+        assert_eq!(at, [(0, 4, 1), (2, 4, 1)], "`b` was replaced, and goes");
     }
 }

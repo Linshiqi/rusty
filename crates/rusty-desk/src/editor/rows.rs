@@ -13,9 +13,9 @@ use rusty_edit::{Line, Token};
 use rusty_lsp::DiagSeverity;
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
-use super::{Document, Metrics, Shared, find};
+use super::{Document, Metrics, Shared, find, inlays};
 use crate::lsp::Problems;
-use crate::{Mark, Piece, Row};
+use crate::{Hint, Mark, Piece, Row};
 
 pub struct Rows {
     doc: Shared,
@@ -218,14 +218,23 @@ impl Model for Rows {
         let row = doc.line_at_row(at);
         let text = doc.lines.text(&doc.text, row);
         let metrics = self.metrics.borrow();
+        // The painter's colours, the server's over them where it has any,
+        // placed around the line's hints.
         let painted = doc.painted.get(row).filter(|line| painted_is(line, text));
-        let pieces = match painted {
-            Some(line) => place(
-                &metrics,
-                line.spans.iter().map(|s| (s.text.as_str(), s.token)),
-            ),
-            None => place(&metrics, std::iter::once((text, Token::Plain))),
-        };
+        let base = painted.cloned().unwrap_or_else(|| Line {
+            spans: vec![rusty_edit::Span {
+                text: text.to_string(),
+                token: Token::Plain,
+            }],
+        });
+        let coloured = rusty_edit::semantic::overlay(base, &semantic_marks(&doc, row));
+        let hints = inlays::on(&doc, row);
+        let (pieces, drawn) = place_hinted(
+            &metrics,
+            coloured.spans.iter().map(|s| (s.text.as_str(), s.token)),
+            hints,
+        );
+        let end = inlays::end_x(&metrics, text, hints);
         let gutter = self.gutter.borrow();
         let line = row as u32;
         let breakpoint = match gutter
@@ -245,7 +254,6 @@ impl Model for Rows {
         let lenses = self.lenses(&doc);
         let (lens, lens_x, verdict) = match lenses.get(&line) {
             Some(runnable) => {
-                let end = metrics.x_of(text, text.chars().count());
                 let kind = match runnable.kind {
                     rusty_edit::RunnableKind::Test => 1,
                     rusty_edit::RunnableKind::Example => 2,
@@ -278,7 +286,7 @@ impl Model for Rows {
         } else {
             0
         };
-        let fold_x = metrics.x_of(text, text.chars().count()) + metrics.ascii();
+        let fold_x = end + metrics.ascii();
         Some(Row {
             number: row as i32 + 1,
             fold,
@@ -289,6 +297,7 @@ impl Model for Rows {
             lens_x,
             verdict,
             pieces: ModelRc::new(VecModel::from(pieces)),
+            hints: ModelRc::new(VecModel::from(drawn)),
             marks: ModelRc::new(VecModel::from({
                 // The guides first: everything else is drawn over them.
                 let level = if gutter.no_guides {
@@ -303,6 +312,7 @@ impl Model for Rows {
                 all.extend(marks(
                     &doc,
                     &metrics,
+                    hints,
                     &self.found.borrow(),
                     self.problems
                         .borrow()
@@ -328,13 +338,15 @@ impl Model for Rows {
 fn marks(
     doc: &Document,
     metrics: &Metrics,
+    hints: &[rusty_lsp::InlayHint],
     found: &find::Marks,
     problems: &[rusty_lsp::FileDiagnostic],
     row: usize,
 ) -> Vec<Mark> {
     let (start, end) = (doc.lines.start(row), doc.lines.end(row));
     let text = doc.lines.text(&doc.text, row);
-    let x_at = |at: usize| metrics.x_of(text, text[..at - start].chars().count());
+    let x_at =
+        |at: usize| inlays::caret_x(metrics, text, hints, text[..at - start].chars().count());
     let mut marks = Vec::new();
     let mut span = |from: usize, to: usize, kind: i32| {
         let (a, b) = (from.max(start), to.min(end));
@@ -367,12 +379,22 @@ fn marks(
         .filter(|d| d.severity != DiagSeverity::Hint)
         .filter_map(|d| {
             let (from, to) = rusty_lsp::squiggle::drawn_on(d, row as u32, text)?;
+            let (from, to) = (from as usize, to as usize);
             let count = text.chars().count();
-            let x = metrics.x_of(text, from as usize);
-            // One past the line's end is a cell after everything on it.
-            let past = (to as usize).saturating_sub(count) as f32 * metrics.ascii();
-            let width = metrics.x_of(text, to as usize) + past - x;
-            Some((d.severity, x, width))
+            // One past the line's end is a cell after everything on it,
+            // its hints included.
+            let end = inlays::end_x(metrics, text, hints);
+            let x = if from >= count {
+                end
+            } else {
+                inlays::char_x(metrics, text, hints, from)
+            };
+            let right = if to > count {
+                end + (to - count) as f32 * metrics.ascii()
+            } else {
+                inlays::caret_x(metrics, text, hints, to)
+            };
+            Some((d.severity, x, right - x))
         })
         .collect();
     squiggles.sort_by_key(|(severity, ..)| std::cmp::Reverse(*severity));
@@ -435,8 +457,23 @@ pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
         lens_x: 0.0,
         verdict: 0,
         pieces: ModelRc::new(VecModel::from(pieces)),
+        hints: ModelRc::default(),
         marks: ModelRc::default(),
     }
+}
+
+/// The server's colours on `line` of `doc`, as marks over its columns.
+fn semantic_marks(doc: &Document, line: usize) -> Vec<(u32, u32, Token)> {
+    let line = line as u32;
+    let start = doc.semantic.partition_point(|s| s.line < line);
+    doc.semantic[start..]
+        .iter()
+        .take_while(|s| s.line == line)
+        .filter_map(|s| {
+            rusty_edit::semantic::token_of(&s.kind)
+                .map(|token| (s.start_col, s.start_col + s.length, token))
+        })
+        .collect()
 }
 
 /// A line of the document drawn on its own — a stuck line — with its
@@ -473,12 +510,33 @@ pub fn painted_is(line: &Line, text: &str) -> bool {
 /// Runs of one token placed along the line. A tab ends a piece: it is drawn
 /// as the gap to the next stop, not as a glyph.
 fn place<'t>(metrics: &Metrics, spans: impl Iterator<Item = (&'t str, Token)>) -> Vec<Piece> {
+    place_hinted(metrics, spans, &[]).0
+}
+
+/// [`place`] around a line's hints: a hint ends a piece too, and takes its
+/// width before the column it stands at, as `inlays` measures it.
+fn place_hinted<'t>(
+    metrics: &Metrics,
+    spans: impl Iterator<Item = (&'t str, Token)>,
+    hints: &[rusty_lsp::InlayHint],
+) -> (Vec<Piece>, Vec<Hint>) {
     let mut pieces = Vec::new();
+    let mut drawn = Vec::new();
     let mut x = 0.0;
+    let mut col = 0usize;
+    let mut next = 0;
     for (text, token) in spans {
         let mut start = x;
         let mut run = String::new();
         for ch in text.chars() {
+            if hints.get(next).is_some_and(|h| h.col as usize <= col) {
+                if !run.is_empty() {
+                    pieces.push(piece(std::mem::take(&mut run), start, token));
+                }
+                hints_at(metrics, hints, &mut next, col, &mut x, &mut drawn);
+                start = x;
+            }
+            col += 1;
             let width = metrics.advance(ch, x);
             if ch == '\t' {
                 if !run.is_empty() {
@@ -495,7 +553,34 @@ fn place<'t>(metrics: &Metrics, spans: impl Iterator<Item = (&'t str, Token)>) -
             pieces.push(piece(run, start, token));
         }
     }
-    pieces
+    hints_at(metrics, hints, &mut next, col, &mut x, &mut drawn);
+    (pieces, drawn)
+}
+
+/// The hints standing at or before `col` from `next` on, drawn at `x`,
+/// which moves past them.
+fn hints_at(
+    metrics: &Metrics,
+    hints: &[rusty_lsp::InlayHint],
+    next: &mut usize,
+    col: usize,
+    x: &mut f32,
+    drawn: &mut Vec<Hint>,
+) {
+    while let Some(hint) = hints.get(*next).filter(|h| h.col as usize <= col) {
+        let (left, right) = (
+            inlays::pad(metrics, hint.pad_left),
+            inlays::pad(metrics, hint.pad_right),
+        );
+        let width = inlays::width(metrics, hint);
+        drawn.push(Hint {
+            text: SharedString::from(hint.label.as_str()),
+            x: *x + left,
+            width: width - left - right,
+        });
+        *x += width;
+        *next += 1;
+    }
 }
 
 fn piece(text: String, x: f32, token: Token) -> Piece {
