@@ -19,6 +19,7 @@ mod picker;
 mod probe;
 mod project;
 mod run;
+mod trail;
 mod work;
 mod zoom;
 

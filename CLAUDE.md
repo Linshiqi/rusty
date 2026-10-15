@@ -780,8 +780,9 @@ exactly as with Vim off.
   `start..end` — and using `end` for both was the first bug, visible as the
   cursor landing one past every word.
 - **What it does not know, it names**, in the status line beside the mode. A
-  key that vanishes teaches people the editor is broken. `Ctrl+O`'s jump list
-  says so today rather than pretending.
+  key that vanishes teaches people the editor is broken. `Ctrl+O` and
+  `Ctrl+I` walk the editor's own history (*Back and forward*, under *Two
+  editor groups*), the one Alt+Left walks, and say so at either end.
 - **The switch is `workbench.toml`** (`vim`), read as the window starts and
   written the moment it changes. Landing in the wrong mode is not a shrug, it
   is twenty keystrokes doing something else.
@@ -1260,11 +1261,73 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   type is a jump, as a definition is, and nothing found says so rather than
   being a key that seems to do nothing (`App::show_places`). Every place
   arrives with its line (`rusty_lsp::Place`), because a row of `lib.rs:41`
-  is a riddle. `App::jump` is the one jump, and remembers where the caret
-  was for Alt+Left. Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
+  is a riddle. `App::jump` is the one jump, and the place it lands is a
+  place of its own for Alt+Left however near (*Back and forward*, below).
+  Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
   that know them need not learn ours; type definitions, the call hierarchy
   and a macro's expansion have no key, as in VS Code — whose Shift+Alt+H
   for the hierarchy is an Alt-letter chord, left here to AltGr.
+- **Back and forward are VS Code's navigation history, not a list of
+  jumps** (`crate::trail`, pure and tested; `app/navigate.rs` feeds and walks
+  it). Alt+Left walked only what `App::jump` had recorded, so after picking
+  a tab or clicking around it did nothing — reported in those words. Now
+  every place the caret settles is told to the trail: another file is a new
+  place (a tab picked, a file from the tree, the finder, a search result, a
+  problem), a jump is one however near it lands, and a move of ten lines or
+  more in one file is — a click, Ctrl+Home/End, Go to Line, a find, each
+  measured from the last settling, so the arrow keys never make one.
+  Anything else replaces the current place, which is why Back from the
+  newest place goes to where the caret *was*, not where it first arrived;
+  the same line twice is one place; a place recorded after Back drops what
+  was ahead. **The caret settles once a turn** (`App::caret_moved`, a 0 ms
+  timer): a file opened at a line shows its document's caret and then the
+  line, and recorded at both, the first was a place nobody went to. **A
+  walk is not a move**: the trail ignores the caret until it is somewhere
+  other than where the step left it, so a file still being read does not
+  end the walk, and the arrival is the place walked to. Places follow the
+  edits (`Surface::on_lines`, every edit's `Change`, on screen or off); a
+  place in a closed file reopens it, and a macro's expansion closed since
+  is passed over and forgotten. From a page Back goes to the file that was
+  in front. The mouse's side buttons are Slint 1.18's `PointerEventButton.
+  back` and `.forward`, taken where the code is drawn (both groups and the
+  margin): every other touch area in the window takes the press as its
+  own, and Slint has no hook before them short of the unstable winit
+  accessor. **And Alt+Left never reached Back from the editor at all**:
+  the keys land in the `TextInput` that holds what an input method
+  composes, a key the editor rejects goes on to that `TextInput`, and it
+  moves its own (empty) cursor on any arrow, Alt or not, and accepts — so
+  the root `FocusScope` with the bindings never heard it. What the editor
+  does not take is handed to the bindings from the editor's own key handler
+  now (`Shell::invoke_key`), before the `TextInput` sees it; found by the
+  probe dispatching Alt+Left as the platform does, not by reading the code.
+- **Ctrl over a name draws it as a link** (`editor/link.rs`) —
+  underlined, in the link colour (`Theme.link`, VS Code's
+  `editorLink.activeForeground`), the hand — where the server has a
+  definition for it: the definition itself is asked, as VS Code asks, and
+  nothing is drawn for an empty answer. Asked when the pointer moves with
+  Ctrl held and when Ctrl goes down with the pointer still, once the pointer
+  has rested on a name 60 ms, numbered so a late answer for another word is
+  dropped; gone when Ctrl comes up (the root `FocusScope` hears that from
+  any panel), the pointer leaves the name, the editor loses the keys or a
+  key goes down — a modifier on its own puts neither the link nor the hover
+  card away, as in VS Code. The rows draw it: the name's characters are
+  pieces of their own in the link's colour (`rows::kinds`), not an overlay
+  over the text, and the line under them is a mark (kind 11) placed by
+  `inlays::ink` like every other. **Ctrl+click follows the link drawn**
+  (`Surface::link_under`, `App::follow_link`) rather than asking again
+  about the point the click puts the caret at, so what is underlined is
+  what the click does. **Slint chooses the pointer's shape only on a pointer
+  event**, so a hand that comes or goes with the pointer still is made by
+  dispatching the window's last move again (`pointer_again`). The row's
+  "left" arrives after the next row's move, so it counts only for the row
+  the pointer is on (`link_left`). **The `TextInput` at the caret has no
+  width while nothing is composed** (`ui/editor.slint`, `sink`): a
+  `TextInput` takes the pointer over it, and its few pixels (more than the
+  two it was given: an empty one measures wider) sat exactly where a click
+  had just put the caret — so Ctrl over the name just
+  clicked, a Ctrl+click there, the hover card and a second click of a
+  double-click at the caret all went to it and not to the code. The probe
+  aimed three pixels past the caret and got nothing at all until then.
 - **The editor's right-click menu is VS Code's** (`App::editor_menu`):
   where the name leads, then rename and the fixes, then the palette, each
   row an action named and keyed as the palette names and keys it, and the

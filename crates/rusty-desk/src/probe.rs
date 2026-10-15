@@ -44,7 +44,13 @@
 //! and photographs a name's occurrences washed, then writes a struct
 //! literal missing two fields, opens the hover card on it, photographs the
 //! fixes the card lists, applies one by its click and prints the lines it
-//! wrote — on a copy, since it ends by keeping the draft.
+//! wrote — on a copy, since it ends by keeping the draft. With
+//! `RUSTY_PROBE_LINK`, on `draw-vectors`' `examples/cross.rs`, it moves the
+//! pointer onto `c.norm()` and presses Ctrl, photographs the link, lets go,
+//! comes back with Ctrl held, Ctrl+clicks it, and walks back and forward
+//! with Alt+Left and Alt+Right, through a tab picked and with the mouse's
+//! side buttons, then puts three lines above a place and goes back to it —
+//! every pointer and key dispatched as the platform dispatches them.
 
 use std::{
     cell::{Cell, RefCell},
@@ -115,6 +121,9 @@ pub fn start(window: &AppWindow) {
     let navigating = std::env::var_os("RUSTY_PROBE_NAV").is_some();
     let updating = std::env::var_os("RUSTY_PROBE_UPDATE").is_some();
     let marking = std::env::var_os("RUSTY_PROBE_MARKS").is_some();
+    let linking = std::env::var_os("RUSTY_PROBE_LINK").is_some();
+    // Where the link probe points, in the window.
+    let aim: Rc<Cell<(f32, f32)>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -290,6 +299,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if marking {
                     step.set(3000);
+                }
+                if linking {
+                    step.set(3100);
                 }
             }
             500 if sim => app.act("run.run"),
@@ -1613,6 +1625,292 @@ pub fn start(window: &AppWindow) {
             }
             3017 if marking => snapshot(&window, &dir.join("marks-dark.png")),
             3018 if marking => app.act("app.exit"),
+            // Ctrl over a name and back and forward, through the window's
+            // own events: the pointer and the keys dispatched as the
+            // platform dispatches them, so the row's touch area, the key
+            // path and the bindings are the ones a hand reaches.
+            3100 if linking => {
+                let colours = app.editor().told().map_or(0, |told| told.0);
+                if shell.get_active_kind() != "file" || colours == 0 {
+                    waited.set(waited.get() + 1);
+                    if waited.get() < 3000 {
+                        step.set(3100);
+                        return;
+                    }
+                }
+                eprintln!("link: the server painted {colours} spans after {} ticks", waited.get());
+                waited.set(0);
+                let Some((line, col)) = find("c.norm()", 3) else {
+                    eprintln!("link: no `c.norm()` in the file");
+                    app.act("app.exit");
+                    return;
+                };
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+                app.editor().go_to(line, Some(col));
+            }
+            // Where the code is in the window: a move over the top of its
+            // middle, and what its touch area says it was over.
+            3101 if linking => {
+                let size = window.window().size().to_logical(window.window().scale_factor());
+                window.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(size.width / 2.0, size.height / 4.0),
+                });
+            }
+            3102 if linking => {
+                let Some((row, x, y, (wx, wy))) = app.editor().link_pointer() else {
+                    eprintln!("link: the middle of the window is not over the code");
+                    app.act("app.exit");
+                    return;
+                };
+                let rows = code.get_row_height();
+                let left = wx - x;
+                let top = wy - y - row as f32 * rows;
+                let target = (
+                    left + code.get_caret_x() + 3.0,
+                    top + code.get_caret_line() as f32 * rows + rows / 2.0,
+                );
+                aim.set(target);
+                eprintln!(
+                    "link: the code's rows start at ({left:.0}, {top:.0}) in the window; `norm` is at ({:.0}, {:.0}), row {}",
+                    target.0,
+                    target.1,
+                    code.get_caret_line()
+                );
+                // Onto the name with nothing held: no link, a text cursor.
+                window.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(target.0, target.1),
+                });
+            }
+            3103 if linking => {
+                eprintln!(
+                    "link: over the name with no Ctrl: {:?}, link row {}",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2)),
+                    code.get_link_row()
+                );
+                // Ctrl down, the pointer still.
+                window.window().dispatch_event(WindowEvent::KeyPressed {
+                    text: Key::Control.into(),
+                });
+                waited.set(0);
+            }
+            3104 if linking => {
+                if app.editor().link_shown().is_none() && waited.get() < 1500 {
+                    waited.set(waited.get() + 1);
+                    // A server still loading answers nothing: Ctrl let go
+                    // and pressed again asks again, as a hand would.
+                    if waited.get().is_multiple_of(75) {
+                        let send = |event| window.window().dispatch_event(event);
+                        send(WindowEvent::KeyReleased {
+                            text: Key::Control.into(),
+                        });
+                        send(WindowEvent::KeyPressed {
+                            text: Key::Control.into(),
+                        });
+                    }
+                    step.set(3104);
+                    return;
+                }
+                let linked: Vec<String> = code
+                    .get_rows()
+                    .iter()
+                    .flat_map(|row| {
+                        row.pieces
+                            .iter()
+                            .filter(|p| p.kind == 11)
+                            .map(|p| format!("{}:{:?}", row.number, p.text.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                eprintln!(
+                    "link: Ctrl pressed over `norm`, after {} ticks: {:?}; the line under it {:?}; drawn in the link colour {linked:?}; link row {} (caret row {})",
+                    waited.get(),
+                    app.editor().link_shown(),
+                    drawn(&code, 11),
+                    code.get_link_row(),
+                    code.get_caret_line()
+                );
+                snapshot(&window, &dir.join("link.png"));
+                window.window().dispatch_event(WindowEvent::KeyReleased {
+                    text: Key::Control.into(),
+                });
+            }
+            3105 if linking => {
+                eprintln!(
+                    "link: Ctrl let go: {:?}, link row {}, {} lines under",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2)),
+                    code.get_link_row(),
+                    drawn(&code, 11).len()
+                );
+                // Off the name, Ctrl down, and back onto it: the move asks.
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                send(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(x, y + code.get_row_height() * 2.0),
+                });
+                send(WindowEvent::KeyPressed {
+                    text: Key::Control.into(),
+                });
+                send(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(x, y),
+                });
+                waited.set(0);
+            }
+            3106 if linking => {
+                if app.editor().link_shown().is_none() && waited.get() < 250 {
+                    waited.set(waited.get() + 1);
+                    step.set(3106);
+                    return;
+                }
+                eprintln!(
+                    "link: moved onto `norm` with Ctrl held, after {} ticks: {:?}",
+                    waited.get(),
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2))
+                );
+                // A key with Ctrl still held puts it away; the link comes
+                // back at the next move.
+                key(Key::Escape.into());
+                eprintln!(
+                    "link: after a key: {:?}",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2)),
+                );
+                let (x, y) = aim.get();
+                window.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(x + 1.0, y),
+                });
+                waited.set(0);
+            }
+            3107 if linking => {
+                if app.editor().link_shown().is_none() && waited.get() < 250 {
+                    waited.set(waited.get() + 1);
+                    step.set(3107);
+                    return;
+                }
+                eprintln!(
+                    "link: back after a move: {:?}; Ctrl+click on it",
+                    app.editor().link_shown().map(|l| (l.0, l.1, l.2))
+                );
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                let position = slint::LogicalPosition::new(x + 1.0, y);
+                let button = slint::platform::PointerEventButton::Left;
+                send(WindowEvent::PointerPressed { position, button });
+                send(WindowEvent::PointerReleased { position, button });
+                send(WindowEvent::KeyReleased {
+                    text: Key::Control.into(),
+                });
+                waited.set(0);
+            }
+            3108 if linking => {
+                let path = app.editor().current_path().unwrap_or_default();
+                if path == start_path.borrow().as_str() && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(3108);
+                    return;
+                }
+                eprintln!(
+                    "link: Ctrl+click went to {path} at {:?}: {:?}",
+                    app.editor().status().map(|s| (s.0, s.1)),
+                    app.editor()
+                        .status()
+                        .and_then(|s| draft().and_then(|t| t.lines().nth(s.0 - 1).map(str::to_string)))
+                );
+                snapshot(&window, &dir.join("link-followed.png"));
+                chord(&[Key::Alt], Key::LeftArrow.into());
+            }
+            3110 if linking => {
+                eprintln!(
+                    "link: Alt+Left: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                snapshot(&window, &dir.join("nav-back.png"));
+                chord(&[Key::Alt], Key::RightArrow.into());
+            }
+            3112 if linking => {
+                eprintln!(
+                    "link: Alt+Right: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                // The other tab picked, as a click on the strip picks it.
+                let start = start_path.borrow().clone();
+                let tab = shell
+                    .get_tabs()
+                    .iter()
+                    .find(|t| t.id.ends_with(start.as_str()))
+                    .map(|t| t.id.clone());
+                match tab {
+                    Some(id) => shell.invoke_pick_tab(id),
+                    None => eprintln!("link: no tab for {start}"),
+                }
+            }
+            3114 if linking => {
+                eprintln!(
+                    "link: its tab picked: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                chord(&[Key::Alt], Key::LeftArrow.into());
+            }
+            3116 if linking => {
+                eprintln!(
+                    "link: Alt+Left after the tab: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                snapshot(&window, &dir.join("nav-tab-back.png"));
+                // The mouse's back button, over the code.
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                let position = slint::LogicalPosition::new(x, y);
+                let button = slint::platform::PointerEventButton::Back;
+                send(WindowEvent::PointerPressed { position, button });
+                send(WindowEvent::PointerReleased { position, button });
+            }
+            3118 if linking => {
+                eprintln!(
+                    "link: the mouse's back button: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                let (x, y) = aim.get();
+                let send = |event| window.window().dispatch_event(event);
+                let position = slint::LogicalPosition::new(x, y);
+                let button = slint::platform::PointerEventButton::Forward;
+                send(WindowEvent::PointerPressed { position, button });
+                send(WindowEvent::PointerReleased { position, button });
+            }
+            3120 if linking => {
+                eprintln!(
+                    "link: the mouse's forward button: {:?} at {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1))
+                );
+                // Three lines put at the top of the file not on screen:
+                // its place moves down with them.
+                let start = start_path.borrow().clone();
+                match app.editor().draft_of(&start) {
+                    Some((text, ..)) => {
+                        let version = app.editor().version_of(&start).unwrap_or(0);
+                        let moved = app.editor().replace(&start, version, format!("// one\n// two\n// three\n{text}"));
+                        eprintln!("link: three lines put above the place in {start}: {moved}");
+                    }
+                    None => eprintln!("link: {start} is not open"),
+                }
+                chord(&[Key::Alt], Key::LeftArrow.into());
+            }
+            3122 if linking => {
+                eprintln!(
+                    "link: Alt+Left after the edit: {:?} at {:?}: {:?}",
+                    app.editor().current_path(),
+                    app.editor().status().map(|s| (s.0, s.1)),
+                    app.editor()
+                        .status()
+                        .and_then(|s| draft().and_then(|t| t.lines().nth(s.0 - 1).map(str::to_string)))
+                );
+                chord(&[Key::Control], "z".into());
+            }
+            3124 if linking => app.act("app.exit"),
             // An example that draws, run as its lens runs it.
             800 if drawing => {
                 let plan = rusty_embed::CommandPlan::new(
@@ -2201,7 +2499,7 @@ pub fn start(window: &AppWindow) {
             // then the Problems panel photographed. A project with nothing
             // wrong in it waits the whole minute and says so.
             // Only in the ordinary run: a probe of its own owns these numbers.
-            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || navigating || updating || marking) => {
+            252..=1750 if !(build || targets || sim || edits || drawing || debugging || terminal || repository || measuring || dependencies || asking || reading || sums || cloning.is_some() || following || lenses || folding || hinting || modal || splitting || navigating || updating || marking || linking) => {
                 if shell.get_errors() + shell.get_warnings() > 0 || n == 1750 {
                     eprintln!(
                         "language server: {:?}, {} errors, {} warnings after {:.1} s",
