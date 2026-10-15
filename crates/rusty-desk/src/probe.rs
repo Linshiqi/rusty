@@ -52,6 +52,13 @@
 //! the original, an edited file dragged into the new folder — its tab and
 //! draft going with it — a cut pasted, a delete to the recycle bin, the
 //! arrows and F2 — photographing each and printing the tree as drawn.
+//! With `RUSTY_PROBE_TABS`, on a project with a `book/` of files, it opens
+//! every one until the strip overflows, wheels the strip back to its start
+//! and brings the tab in front into view again, splits, drags the divider
+//! and double-clicks it, right-clicks a tab on each strip and uses a few of
+//! its menu's rows — Split right, Copy path, the closes — and clicks the
+//! logo, photographing each; `RUSTY_PROBE_REVEAL` with it also reveals a
+//! file in the file manager, which opens a window of the system's.
 
 use std::{
     cell::{Cell, RefCell},
@@ -127,6 +134,10 @@ pub fn start(window: &AppWindow) {
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
     let strip = std::env::var_os("RUSTY_PROBE_STRIP").is_some();
+    let tabbing = std::env::var_os("RUSTY_PROBE_TABS").is_some();
+    let revealing = std::env::var_os("RUSTY_PROBE_REVEAL").is_some();
+    // How many tabs the strip is to hold once every file has opened.
+    let tab_goal = Rc::new(Cell::new(0usize));
     let waited = Rc::new(Cell::new(0u32));
     let recents_before = Rc::new(Cell::new(0usize));
     // The text before find replaced everything, to hold the undo to.
@@ -295,6 +306,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if strip {
                     step.set(2900);
+                }
+                if tabbing {
+                    step.set(3700);
                 }
                 if marking {
                     step.set(3000);
@@ -1086,6 +1100,264 @@ pub fn start(window: &AppWindow) {
                 );
                 app.act("app.exit");
             }
+            // The strip, the split and a tab's menu: every file under `book/`
+            // opened until the strip overflows, the lane wheeled back to its
+            // start and the front tab brought into view again; the editor
+            // split, its divider dragged and double-clicked; each strip's tab
+            // menu opened by a right-click and a few of its rows used; and
+            // the logo clicked.
+            3700 if tabbing => {
+                // The layout told the window's size as the window has it,
+                // so what is measured here is where things are drawn: a
+                // scale changed after the window was laid out can leave the
+                // two apart.
+                let size = window
+                    .window()
+                    .size()
+                    .to_logical(window.window().scale_factor());
+                pointer(&window, WindowEvent::Resized { size });
+                let root = app.root_path().unwrap_or_default();
+                let mut names: Vec<String> = std::fs::read_dir(root.join("book"))
+                    .map(|entries| {
+                        entries
+                            .filter_map(Result::ok)
+                            .map(|e| format!("book/{}", e.file_name().to_string_lossy()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                names.sort();
+                eprintln!("tabs: opening {} files", names.len());
+                tab_goal.set(names.len() + shell.get_tabs().row_count());
+                for name in names {
+                    app.open_file(name);
+                }
+            }
+            3701 if tabbing => {
+                if shell.get_tabs().row_count() < tab_goal.get() {
+                    step.set(3701);
+                }
+            }
+            3706 if tabbing => {
+                eprintln!(
+                    "tabs: {} open, {:?} in front",
+                    shell.get_tabs().row_count(),
+                    shell.get_active_tab()
+                );
+                snapshot(&window, &dir.join("tabs-overflow.png"));
+                // The wheel over the strip, turned towards its start.
+                let (left, _) = editor_span(&window, &shell);
+                let at = LogicalPosition::new(left + 200.0, STRIP_Y);
+                pointer(&window, WindowEvent::PointerMoved { position: at });
+                pointer(
+                    &window,
+                    WindowEvent::PointerScrolled {
+                        position: at,
+                        delta_x: 0.0,
+                        delta_y: 4000.0,
+                    },
+                );
+            }
+            3709 if tabbing => {
+                snapshot(&window, &dir.join("tabs-wheel.png"));
+                let first = shell.get_tabs().row_data(0).map(|t| t.id).unwrap_or_default();
+                shell.invoke_pick_tab(first);
+            }
+            3711 if tabbing => {
+                // The last tab picked from out of view: brought back into it.
+                let count = shell.get_tabs().row_count();
+                let last = shell
+                    .get_tabs()
+                    .row_data(count.saturating_sub(1))
+                    .map(|t| t.id)
+                    .unwrap_or_default();
+                shell.invoke_pick_tab(last);
+            }
+            3715 if tabbing => {
+                snapshot(&window, &dir.join("tabs-reveal.png"));
+                app.act("editor.split");
+            }
+            3719 if tabbing => {
+                let (left, width) = editor_span(&window, &shell);
+                let share = shell.get_split_share();
+                eprintln!(
+                    "split: share {share}, the divider at {}",
+                    left + divider_at(width, share)
+                );
+                snapshot(&window, &dir.join("split-half.png"));
+                // The divider taken hold of a pixel beside its line and
+                // dragged 250 px to the left.
+                let x = left + divider_at(width, share) + 2.0;
+                let from = LogicalPosition::new(x, 300.0);
+                let to = LogicalPosition::new(x - 250.0, 300.0);
+                pointer(&window, WindowEvent::PointerMoved { position: from });
+                pointer(
+                    &window,
+                    WindowEvent::PointerPressed {
+                        position: from,
+                        button: PointerEventButton::Left,
+                    },
+                );
+                pointer(&window, WindowEvent::PointerMoved { position: to });
+                pointer(
+                    &window,
+                    WindowEvent::PointerReleased {
+                        position: to,
+                        button: PointerEventButton::Left,
+                    },
+                );
+            }
+            3722 if tabbing => {
+                eprintln!(
+                    "split: dragged: share {:.3}, kept as {:.3}",
+                    shell.get_split_share(),
+                    rusty_embed::config::workbench().layout.split
+                );
+                snapshot(&window, &dir.join("split-dragged.png"));
+                // A double-click on the divider where it now is.
+                let (left, width) = editor_span(&window, &shell);
+                let at = LogicalPosition::new(
+                    left + divider_at(width, shell.get_split_share()) - 2.0,
+                    300.0,
+                );
+                pointer(&window, WindowEvent::PointerMoved { position: at });
+                for _ in 0..2 {
+                    pointer(
+                        &window,
+                        WindowEvent::PointerPressed {
+                            position: at,
+                            button: PointerEventButton::Left,
+                        },
+                    );
+                    pointer(
+                        &window,
+                        WindowEvent::PointerReleased {
+                            position: at,
+                            button: PointerEventButton::Left,
+                        },
+                    );
+                }
+            }
+            3725 if tabbing => {
+                eprintln!(
+                    "split: double-clicked: share {:.3}, kept as {:.3}",
+                    shell.get_split_share(),
+                    rusty_embed::config::workbench().layout.split
+                );
+                snapshot(&window, &dir.join("split-reset.png"));
+                // A right-click on a tab of the left strip, the group
+                // without the keys.
+                let (left, _) = editor_span(&window, &shell);
+                right_click(&window, LogicalPosition::new(left + 40.0, STRIP_Y));
+            }
+            3728 if tabbing => {
+                eprintln!(
+                    "menu: open {} for {:?}: {:?}",
+                    shell.get_menu_open(),
+                    app.tab_menu_for(),
+                    menu_rows(&shell)
+                );
+                snapshot(&window, &dir.join("tab-menu-left.png"));
+                shell.invoke_menu_picked("tab.split-right".into());
+            }
+            3731 if tabbing => {
+                eprintln!("split right: {}", groups(&shell));
+                snapshot(&window, &dir.join("tab-split-right.png"));
+                // And on the right strip, the group with the keys.
+                let (left, width) = editor_span(&window, &shell);
+                let x = left + divider_at(width, shell.get_split_share()) + 1.0 + 40.0;
+                right_click(&window, LogicalPosition::new(x, STRIP_Y));
+            }
+            3734 if tabbing => {
+                eprintln!(
+                    "menu: open {} for {:?}: {:?}",
+                    shell.get_menu_open(),
+                    app.tab_menu_for(),
+                    menu_rows(&shell)
+                );
+                snapshot(&window, &dir.join("tab-menu-right.png"));
+                shell.invoke_menu_picked("tab.copy-path".into());
+            }
+            3735 if tabbing => {
+                eprintln!("copy path: {:?}", clipboard());
+                let id = shell.get_active_tab();
+                shell.invoke_tab_menu(id, false, 400.0, 80.0);
+                shell.invoke_menu_picked("tab.copy-relative-path".into());
+            }
+            3736 if tabbing => {
+                eprintln!("copy relative path: {:?}", clipboard());
+                // Close to the right of the left group's fourth tab.
+                let id = shell.get_shade_tabs().row_data(3).map(|t| t.id).unwrap_or_default();
+                shell.invoke_tab_menu(id, true, 100.0, 80.0);
+                shell.invoke_menu_picked("tab.close-right".into());
+            }
+            3738 if tabbing => {
+                eprintln!("close to the right: {}", groups(&shell));
+                // Something typed in the group's Rust file, then Close saved
+                // on the group: every tab but that one goes, and nothing
+                // asks.
+                let rust = shell
+                    .get_tabs()
+                    .iter()
+                    .find(|t| t.title == "lib.rs")
+                    .map(|t| t.id)
+                    .unwrap_or_default();
+                shell.invoke_pick_tab(rust);
+            }
+            3739 if tabbing => key("x".into()),
+            3740 if tabbing => {
+                let id = shell.get_tabs().row_data(0).map(|t| t.id).unwrap_or_default();
+                shell.invoke_tab_menu(id, false, 100.0, 80.0);
+                shell.invoke_menu_picked("tab.close-saved".into());
+            }
+            3741 if tabbing => {
+                eprintln!("close saved: {}", groups(&shell));
+                // Close all on the other group: the split ends.
+                let id = shell.get_shade_tabs().row_data(0).map(|t| t.id).unwrap_or_default();
+                shell.invoke_tab_menu(id, true, 600.0, 80.0);
+                shell.invoke_menu_picked("tab.close-all".into());
+            }
+            3743 if tabbing => {
+                eprintln!("close all on the other group: {}", groups(&shell));
+                snapshot(&window, &dir.join("tabs-closed.png"));
+                chord(&[Key::Control], "z".into());
+                if revealing {
+                    let id = shell.get_active_tab();
+                    shell.invoke_tab_menu(id, false, 100.0, 80.0);
+                    shell.invoke_menu_picked("tab.reveal".into());
+                    eprintln!("reveal: asked for {:?}", shell.get_active_tab());
+                }
+            }
+            3745 if tabbing => {
+                // The logo at the title bar's far left: the window's menu.
+                let at = LogicalPosition::new(21.0, 20.0);
+                pointer(&window, WindowEvent::PointerMoved { position: at });
+                pointer(
+                    &window,
+                    WindowEvent::PointerPressed {
+                        position: at,
+                        button: PointerEventButton::Left,
+                    },
+                );
+                pointer(
+                    &window,
+                    WindowEvent::PointerReleased {
+                        position: at,
+                        button: PointerEventButton::Left,
+                    },
+                );
+            }
+            3748 if tabbing => {
+                eprintln!(
+                    "logo: the picker open {}, saying {:?}, {} rows",
+                    shell.get_picker_open(),
+                    shell.get_picker_hint(),
+                    shell.get_picker_rows().row_count()
+                );
+                snapshot(&window, &dir.join("logo-menu.png"));
+                shell.set_picker_open(false);
+                shell.invoke_picker_pick(-1);
+            }
+            3750 if tabbing => app.act("app.exit"),
             // Check for updates by hand, download what the feed offers, and
             // stop at the restart: what Settings says at each step.
             2800 if updating => app.act("update.check"),
@@ -2830,6 +3102,96 @@ fn screen_text(shell: &Shell) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The middle of the tab strips across the window: under the title bar and
+/// its line, half a strip down.
+const STRIP_Y: f32 = 41.0 + 18.0;
+
+/// Where the editor area is across the window, in logical pixels: its left
+/// edge and its width, from the docks either side.
+fn editor_span(window: &AppWindow, shell: &Shell) -> (f32, f32) {
+    let size = window
+        .window()
+        .size()
+        .to_logical(window.window().scale_factor());
+    let left = if shell.get_left_open() {
+        shell.get_left_size() + 1.0
+    } else {
+        0.0
+    };
+    let right = if shell.get_right_open() {
+        shell.get_right_size() + 1.0
+    } else {
+        0.0
+    };
+    (left, size.width - left - right)
+}
+
+/// Where the editor groups part, from the editor area's left edge: the
+/// arithmetic `ui/pages.slint` places the divider by.
+fn divider_at(width: f32, share: f32) -> f32 {
+    let least = 220f32.min((width - 1.0) / 2.0);
+    (width * share).round().clamp(least, width - 1.0 - least)
+}
+
+/// A pointer event, as the platform would deliver it.
+fn pointer(window: &AppWindow, event: WindowEvent) {
+    window.window().dispatch_event(event);
+}
+
+fn right_click(window: &AppWindow, at: LogicalPosition) {
+    pointer(window, WindowEvent::PointerMoved { position: at });
+    pointer(
+        window,
+        WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Right,
+        },
+    );
+    pointer(
+        window,
+        WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Right,
+        },
+    );
+}
+
+/// The open menu's rows as they read, a divider as `—`.
+fn menu_rows(shell: &Shell) -> Vec<String> {
+    shell
+        .get_menu_items()
+        .iter()
+        .map(|item| {
+            if item.id.is_empty() {
+                "—".to_string()
+            } else if item.chord.is_empty() {
+                item.label.to_string()
+            } else {
+                format!("{} ({})", item.label, item.chord)
+            }
+        })
+        .collect()
+}
+
+/// Both groups' strips and what each has in front.
+fn groups(shell: &Shell) -> String {
+    let titles = |tabs: slint::ModelRc<crate::DocTab>| {
+        tabs.iter().map(|t| t.title.to_string()).collect::<Vec<_>>()
+    };
+    format!(
+        "split {} | keys {:?} front {:?} | other {:?} front {:?}",
+        shell.get_split(),
+        titles(shell.get_tabs()),
+        shell.get_active_tab(),
+        titles(shell.get_shade_tabs()),
+        shell.get_shade_active()
+    )
+}
+
+fn clipboard() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok()
 }
 
 fn snapshot(window: &AppWindow, path: &Path) {

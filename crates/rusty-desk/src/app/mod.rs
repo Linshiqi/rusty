@@ -53,6 +53,7 @@ mod servers;
 mod sheet;
 mod sim;
 mod strip;
+mod tab_menu;
 mod terminal;
 mod testing;
 mod tree;
@@ -182,6 +183,9 @@ struct State {
     search: search::Search,
     git: git::Git,
     menu: Option<&'static str>,
+    /// The tab a right-click menu is open for: whether it is the other
+    /// group's, and its id.
+    tab_menu: Option<(bool, String)>,
     memory: memory::Memory,
     crates: crates::Crates,
     assistant: assistant::Assistant,
@@ -416,7 +420,12 @@ impl App {
         on!(on_pick_tab, |app, id| app.pick_tab(&id));
         on!(on_close_tab, |app, id| app.close_tab(&id));
         on!(on_shade_pick, |app, id| app.shade_pick(&id));
-        on!(on_shade_close, |app, id| app.close_tab(&id));
+        on!(on_shade_close, |app, id| {
+            app.close_tab_in(true, &id);
+        });
+        on!(on_tab_menu, |app, id, other, x, y| app
+            .tab_menu(&id, other, x, y));
+        on!(on_split_resized, |app, share| app.split_resized(share));
         let weak = Rc::downgrade(self);
         window
             .global::<crate::Shade>()
@@ -733,6 +742,14 @@ impl App {
                     self.close_tab(&id);
                 }
             }
+            "tab.close-others"
+            | "tab.close-right"
+            | "tab.close-saved"
+            | "tab.close-all"
+            | "tab.copy-path"
+            | "tab.copy-relative-path"
+            | "tab.reveal"
+            | "tab.split-right" => self.tab_act(id),
             "dock.left" => self.toggle_dock(Dock::Left),
             "dock.bottom" => self.toggle_dock(Dock::Bottom),
             "dock.right" => self.toggle_dock(Dock::Right),
@@ -1022,18 +1039,18 @@ impl App {
         }
     }
 
-    /// Close a tab; a file with changes not saved asks first — save, throw
-    /// the changes away, or keep the tab — as every editor does.
+    /// Close a tab, of the group with the keys when that group has it.
     fn close_tab(self: &Rc<Self>, id: &str) {
-        let tab = {
-            let state = self.state.borrow();
-            state
-                .tabs
-                .iter()
-                .chain(&state.other)
-                .find(|t| t.id() == id)
-                .cloned()
-        };
+        let other = !self.state.borrow().tabs.iter().any(|t| t.id() == id);
+        self.close_tab_in(other, id);
+    }
+
+    /// Close a tab of one group — `other` for the group without the keys,
+    /// since one file can be a tab in both. A file with changes not saved
+    /// asks first — save, throw the changes away, or keep the tab — as
+    /// every editor does; false when the answer was to keep it.
+    fn close_tab_in(self: &Rc<Self>, other: bool, id: &str) -> bool {
+        let tab = self.tab_in(other, id);
         // The last view of a file with changes asks; one of two does not,
         // since the other still holds them.
         if let Some(Tab::File(path)) = tab
@@ -1046,23 +1063,32 @@ impl App {
                     if let Some(root) = self.root() {
                         self.keeper.remove(&root, &path);
                     }
-                    self.drop_tab(id);
+                    self.drop_tab(other, id);
                 }
-                None => {}
+                None => return false,
             }
-            return;
+            return true;
         }
-        self.drop_tab(id);
+        self.drop_tab(other, id);
+        true
     }
 
-    fn drop_tab(self: &Rc<Self>, id: &str) {
+    /// Drop a tab from whichever group has it, the keys group's first: for
+    /// a file gone from the disk, whose tabs go from both groups, asking
+    /// nothing — the same id twice drops both.
+    fn drop_tab_anywhere(self: &Rc<Self>, id: &str) {
+        let other = !self.state.borrow().tabs.iter().any(|t| t.id() == id);
+        self.drop_tab(other, id);
+    }
+
+    fn drop_tab(self: &Rc<Self>, other: bool, id: &str) {
         let closed = {
             let mut state = self.state.borrow_mut();
             let state = &mut *state;
-            let (tabs, active) = if state.tabs.iter().any(|t| t.id() == id) {
-                (&mut state.tabs, &mut state.active)
-            } else {
+            let (tabs, active) = if other {
                 (&mut state.other, &mut state.other_active)
+            } else {
+                (&mut state.tabs, &mut state.active)
             };
             let Some(at) = tabs.iter().position(|t| t.id() == id) else {
                 return;
@@ -1244,6 +1270,16 @@ impl App {
             return;
         };
         dock.of_mut(&mut self.state.borrow_mut().layout).size = size;
+        self.save_layout();
+    }
+
+    /// The divider between the editor groups let go of: where the groups
+    /// part is kept with the docks' sizes.
+    fn split_resized(self: &Rc<Self>, share: f32) {
+        if !share.is_finite() {
+            return;
+        }
+        self.state.borrow_mut().layout.split = share.clamp(0.05, 0.95);
         self.save_layout();
     }
 
@@ -1718,6 +1754,7 @@ impl App {
         shell.set_right_size(layout.right.size);
         shell.set_right_panels(panels(Dock::Right));
         shell.set_right_front(Dock::Right.front(layout).into());
+        shell.set_split_share(layout.split);
     }
 
     fn sync_tabs(&self) {

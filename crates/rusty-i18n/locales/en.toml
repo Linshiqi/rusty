@@ -862,6 +862,17 @@ show-preview = "Show the rendered page"
 image-remote = "Not fetched: a remote image would tell its host that you opened this file"
 image-failed = "{path} could not be shown: {error}"
 
+[strip]
+# A tab's right-click menu, VS Code's rows; each is also in the palette, for
+# the tab in front. Copying a path and revealing a file use the tree's words
+# (`context.tree-*`).
+close-others = "Close others"
+close-right = "Close to the right"
+close-saved = "Close saved"
+close-all = "Close all"
+split-right = "Split right"
+not-a-file = "{name} is not a file on disk"
+
 [places]
 # The finder's title over a list of places the language server named.
 references = "References to {name}"
@@ -1337,7 +1348,7 @@ open-failed = "Could not open {path}: {reason}"
 dock-left = "Show or hide the left dock"
 dock-bottom = "Show or hide the bottom dock"
 dock-right = "Show or hide the right dock"
-close-tab = "Close the tab"
+close-tab = "Close"
 zoom-in = "Zoom in"
 zoom-out = "Zoom out"
 zoom-reset = "Reset zoom"
