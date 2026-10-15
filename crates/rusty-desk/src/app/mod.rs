@@ -643,6 +643,13 @@ impl App {
         self.editor.on_caret(move || {
             if let Some(app) = weak.upgrade() {
                 app.sync_status();
+                app.caret_moved();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.editor.on_lines(move |path, first, removed, added| {
+            if let Some(app) = weak.upgrade() {
+                app.lines_moved(path, first, removed, added);
             }
         });
     }
