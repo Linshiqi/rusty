@@ -57,6 +57,7 @@ mod sheet;
 mod shortcuts;
 mod sim;
 mod strip;
+mod symbols;
 mod tab_menu;
 mod terminal;
 mod testing;
@@ -186,6 +187,9 @@ struct State {
     jumps: navigate::Jumps,
     /// The call hierarchy the Calls panel shows.
     calls: calls::Calls,
+    /// The finder's `@` and `#`: the outline asked for, the workspace
+    /// searched, the view as it was before a symbol was shown in it.
+    symbols: symbols::Symbols,
     /// The fixes the picker lists, with the version of the text they are for.
     /// And which surface asked for them, which applies the one picked.
     fixes: Option<(u64, rusty_lsp::CodeActions, usize)>,
@@ -499,6 +503,7 @@ impl App {
             .open_project(PathBuf::from(path.as_str()), None));
         on!(on_picker_query, |app, query| app.picker_query(&query));
         on!(on_picker_pick, |app, index| app.picker_pick(index as usize));
+        on!(on_picker_moved, |app, index| app.picker_moved(index));
         on!(on_dismiss_note, |app, id| app.dismiss_note(id));
         on!(on_problem_click, |app, index| app
             .problem_click(index as usize));
@@ -808,6 +813,8 @@ impl App {
             "find.next" => self.keyed().find_next(true),
             "find.previous" => self.keyed().find_next(false),
             "editor.go-to-line" => self.open_picker_with(Mode::Files, ":"),
+            "finder.symbols" => self.open_picker_with(Mode::Files, "@"),
+            "finder.workspace-symbols" => self.open_picker_with(Mode::Files, "#"),
             "editor.show-hover" => self.keyed().hover_caret(),
             "editor.definition" => self.go_to_definition(),
             "editor.references" => self.find_places(navigate::Places::References),
@@ -1501,6 +1508,7 @@ impl App {
     }
 
     fn open_picker_titled(self: &Rc<Self>, mode: Mode, text: &str, heading: Option<String>) {
+        self.symbols_opened();
         self.state.borrow_mut().picker = Some((mode, Vec::new()));
         if let Some(window) = self.window() {
             let shell = window.global::<Shell>();
@@ -1526,6 +1534,33 @@ impl App {
         let Some(mode) = self.state.borrow().picker.as_ref().map(|(mode, _)| *mode) else {
             return;
         };
+        // The finder's `@` and `#`: symbols, with an icon for each kind.
+        let symbolic = (mode == Mode::Files)
+            .then(|| crate::symbols::target(query))
+            .flatten();
+        if !matches!(symbolic, Some(crate::symbols::Target::Outline { .. })) {
+            self.preview_ends(true);
+        }
+        if let Some(target) = symbolic {
+            let (rows, picks): (Vec<PickRow>, Vec<Pick>) = self
+                .symbol_rows(target)
+                .into_iter()
+                .map(|row| {
+                    let shown = PickRow {
+                        title: row.title.into(),
+                        detail: row.detail.into(),
+                        chord: row.right.into(),
+                        windowed: false,
+                        glyph: row.glyph,
+                        tint: row.tint,
+                        group: row.group.into(),
+                    };
+                    (shown, row.pick)
+                })
+                .unzip();
+            self.picker_show(mode, rows, picks);
+            return;
+        }
         let found = match mode {
             Mode::Commands => picker::commands(query, &self.state.borrow().keys.map),
             Mode::Files if picker::line_target(query).is_some() => self.line_rows(query),
@@ -1566,14 +1601,26 @@ impl App {
                 } else {
                     SharedString::new()
                 },
+                glyph: 0,
+                tint: 0,
+                group: SharedString::new(),
             })
             .collect();
-        self.state.borrow_mut().picker = Some((mode, found.into_iter().map(|(.., p)| p).collect()));
+        let picks = found.into_iter().map(|(.., p)| p).collect();
+        self.picker_show(mode, rows, picks);
+    }
+
+    /// The picker's rows on screen, the first selected — and, for the
+    /// finder's `@`, shown in the editor.
+    fn picker_show(&self, mode: Mode, rows: Vec<PickRow>, picks: Vec<Pick>) {
+        self.state.borrow_mut().picker = Some((mode, picks));
         if let Some(window) = self.window() {
             let shell = window.global::<Shell>();
             shell.set_picker_rows(ModelRc::new(VecModel::from(rows)));
+            shell.set_picker_listed(shell.get_picker_listed() + 1);
             shell.set_picker_selected(0);
         }
+        self.picker_moved(0);
     }
 
     fn picker_pick(self: &Rc<Self>, index: usize) {
@@ -1591,13 +1638,15 @@ impl App {
         if let Some(window) = self.window() {
             window.global::<Shell>().set_picker_open(false);
         }
+        // What `@` showed in the editor is put back, unless it is gone to.
+        self.symbols_closed(matches!(pick, Some(Pick::Outline(_))));
         match pick {
             Some(Pick::Action(id)) => self.act(id),
             Some(Pick::File(path)) => self.open_file(path),
             Some(Pick::Project(path)) if windowed => self.new_window(Some(PathBuf::from(path))),
             Some(Pick::Project(path)) => self.open_project(PathBuf::from(path), None),
             Some(Pick::Line(line, col)) => self.editor.go_to(line, col),
-            Some(Pick::Place(location)) => self.jump(&location),
+            Some(Pick::Place(location)) | Some(Pick::Outline(location)) => self.jump(&location),
             // The keys back in the code the fix or the rename changes.
             Some(Pick::Fix(index)) => {
                 self.front_focus();

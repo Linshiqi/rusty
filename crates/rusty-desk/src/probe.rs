@@ -101,6 +101,9 @@
 //! project refused — and writes what it saw to `said.txt`, which this
 //! window prints once the second has gone, with its own project and the
 //! recents both windows wrote.
+//! With `RUSTY_PROBE_SYMBOLS` it runs the finder's `@` and `#` in
+//! `probe_symbols.rs`: an outline shown in the editor and gone to, and a
+//! slow answer to a workspace search never shown under the name after it.
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below).
@@ -191,6 +194,7 @@ pub fn start(window: &AppWindow) {
     let zooming = std::env::var_os("RUSTY_PROBE_ZOOM").is_some();
     let menus = std::env::var_os("RUSTY_PROBE_MENUS").is_some();
     let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
+    let symbolic = std::env::var_os("RUSTY_PROBE_SYMBOLS").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
     // variables, so it probes itself into a directory of its own.
@@ -453,11 +457,16 @@ pub fn start(window: &AppWindow) {
                 if reading_book {
                     step.set(6400);
                 }
+                if symbolic {
+                    step.set(7200);
+                }
             }
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),
             6200..=6399 if menus => crate::probe_surfaces::menus(n, &surfaces),
+            // The finder's `@` and `#` (`probe_symbols.rs`).
+            7200..=7299 if symbolic => crate::probe_symbols::symbols(n, &surfaces),
             // Keyboard Shortcuts: opened by its chord from the code, searched,
             // a refused key and a colliding one recorded, Save moved to
             // Ctrl+F7 and used there — the old key no longer saving — the

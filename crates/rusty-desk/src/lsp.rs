@@ -302,6 +302,61 @@ impl Servers {
         self.for_path(path).is_some()
     }
 
+    /// The server the language table names for `path`, running or not —
+    /// what a refusal names when none is running for it.
+    pub fn named_for(&self, path: &str) -> Option<ServerKind> {
+        if rusty_edit::is_expansion(path) {
+            return None;
+        }
+        language::of(path)?.server
+    }
+
+    /// The server a question about the whole project goes to — the
+    /// workspace's symbols: the one reading `near`, the file in front, when
+    /// one does, and the project's own otherwise.
+    fn for_project(&self, near: Option<&str>) -> Option<Arc<LspClient>> {
+        near.and_then(|path| self.for_path(path))
+            .or_else(|| self.running.borrow().first().cloned())
+    }
+
+    /// Which server [`Self::ask_project`] asks, or `None` with none running.
+    pub fn project_kind(&self, near: Option<&str>) -> Option<ServerKind> {
+        self.for_project(near).map(|client| client.kind())
+    }
+
+    /// Whether the server reading `path` has said it finished loading — so
+    /// an empty answer from it is "nothing" and not "not yet". `None` for a
+    /// server that never says, which clangd does not, or none running.
+    pub fn settled_for(&self, path: &str) -> Option<bool> {
+        let client = self.for_path(path)?;
+        said_settled(&client)
+    }
+
+    /// [`Self::settled_for`] for the server [`Self::ask_project`] asks.
+    pub fn project_settled(&self, near: Option<&str>) -> Option<bool> {
+        let client = self.for_project(near)?;
+        said_settled(&client)
+    }
+
+    /// [`Self::ask_always`] for a question about the whole project rather
+    /// than one file, asked of [`Self::for_project`]'s server: its answer
+    /// or its failure. False, and nothing asked, with no server running.
+    pub fn ask_project<T: Send + 'static>(
+        &self,
+        near: Option<&str>,
+        question: impl FnOnce(&LspClient) -> rusty_lsp::Result<T> + Send + 'static,
+        then: impl FnOnce(&Rc<App>, Result<T, String>) + Send + 'static,
+    ) -> bool {
+        let Some(client) = self.for_project(near) else {
+            return false;
+        };
+        work::spawn(
+            move || question(&client).map_err(|error| error.to_string()),
+            then,
+        );
+        true
+    }
+
     /// [`Self::ask`] for a question something waits on — a panel saying
     /// "asking" — so that its failure comes back as well as its answer,
     /// in the client's words. False, and nothing asked, when no server
@@ -360,6 +415,11 @@ impl Servers {
             .collect::<Vec<_>>()
             .join(" + ")
     }
+}
+
+/// rust-analyzer says when it has finished loading; clangd says nothing.
+fn said_settled(client: &LspClient) -> Option<bool> {
+    (client.kind() == ServerKind::RustAnalyzer).then(|| client.is_quiescent())
 }
 
 /// Whether an event from a server beside the project's is passed on: what

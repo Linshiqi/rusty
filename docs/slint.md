@@ -644,7 +644,8 @@ tests green, and CLAUDE.md saying how it works.
    this one did not, as v0.7.0's notes say: the call hierarchy, macro
    expansion, the finder's `@` and `#`, New window, a file or a commit in a
    window of its own, and a choice of the terminal's shell — a file in a
-   window of its own has since come back (item 8, above).
+   window of its own has since come back (item 8, above), and so have the
+   finder's `@` and `#` (below).
 
    Since then, navigation by what the code means: Go to type definition
    beside references and implementations in the picker; Expand macro
@@ -655,6 +656,20 @@ tests green, and CLAUDE.md saying how it works.
    tests, and `app/calls.rs`); and the editor's right-click menu that
    offers them. The probe's `RUSTY_PROBE_NAV` drives all three on
    `draw-vectors`' example.
+
+   And the finder's symbols, VS Code's Go to Symbol in Editor and in
+   Workspace (`crate::symbols`, `app/symbols.rs`): Ctrl+Shift+O opens it
+   with `@`, the file in front's outline in file order until a name is
+   typed, its kind an icon in the colour the code draws that kind in, what
+   it sits in and its line; `@:` groups the kinds. The selected row is shown
+   in the editor — the line brought into view below the finder and lit,
+   the caret where it was — Enter goes there through `App::jump`, and
+   Escape puts the view back. Ctrl+T opens it with `#`, the project's symbols asked once the
+   typing pauses, each answer kept with its ask so a slow one is never
+   shown under the name typed after it. Where no server can answer, the
+   finder says why. The picker's rows scroll past twelve, for the outlines
+   that run to dozens. `RUSTY_PROBE_SYMBOLS` drives both, a held-back
+   answer included (`probe_symbols.rs`).
 
    Then the tree's own verbs, reported from the release candidate as "the
    tree cannot make, copy, paste or rename anything": VS Code's explorer

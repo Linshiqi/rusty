@@ -39,6 +39,12 @@ export struct PickRow {
     chord: string,
     // A project, which can open in a new window instead.
     windowed: bool,
+    // A symbol's kind (`Icons.symbol`, 0 for none) and the token colour it
+    // is drawn in (`Theme.token`).
+    glyph: int,
+    tint: int,
+    // `@:`'s heading for the kind the rows from this one are.
+    group: string,
 }
 
 // A row of the Keyboard Shortcuts page: an action, the key it has now, and
@@ -1506,7 +1512,13 @@ export global Shell {
     in property <int> picker-opened;
     in property <string> picker-hint;
     in property <[PickRow]> picker-rows;
+    // Counts every new set of rows, which start scrolled to the top.
+    in property <int> picker-listed;
     in-out property <int> picker-selected;
+    // How far down the window the finder hangs with the rows it has — the
+    // `Picker`'s layout (`chrome.slint`): its panel at 52, the field, and at
+    // most twelve rows of 34. What `@` shows in the editor goes below it.
+    out property <length> picker-foot: 98px + min(picker-rows.length, 12) * 34px;
 
     // Notifications, newest last.
     in property <[Note]> notes;
@@ -1539,6 +1551,8 @@ export global Shell {
     callback open-recent(string);
     callback picker-query(string);
     callback picker-pick(int);
+    // The row selected moved: the finder's `@` shows where it leads.
+    callback picker-moved(int);
     // A project's row, opened in a new window: Ctrl+Enter or its button.
     callback picker-pick-new-window(int);
     callback dismiss-note(int);

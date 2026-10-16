@@ -68,6 +68,18 @@ pub const ALL: &[Action] = &[
         Some("Shift+F3"),
     ),
     action("editor.go-to-line", "menu.view.go-to-line", Some("Ctrl+G")),
+    // The finder opened with `@` and with `#`, as VS Code's Go to Symbol in
+    // Editor and in Workspace open its own.
+    action(
+        "finder.symbols",
+        "menu.view.symbols-file",
+        Some("Ctrl+Shift+O"),
+    ),
+    action(
+        "finder.workspace-symbols",
+        "menu.view.symbols-workspace",
+        Some("Ctrl+T"),
+    ),
     action("editor.show-hover", "desk.show-hover", None),
     action(
         "editor.definition",

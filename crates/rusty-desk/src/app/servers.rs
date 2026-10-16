@@ -25,6 +25,19 @@ pub(super) struct ServerStatus {
     trouble: Option<(HealthLevel, String)>,
 }
 
+impl ServerStatus {
+    /// Still being started: nothing is running to ask yet.
+    pub(super) fn is_starting(&self) -> bool {
+        self.starting
+    }
+
+    /// Starting, loading or indexing — so an empty answer may mean "not
+    /// yet" rather than "nothing".
+    pub(super) fn is_busy(&self) -> bool {
+        self.starting || self.busy.is_some()
+    }
+}
+
 impl App {
     /// The project's servers, started off this thread; whatever ran for the
     /// last project goes, and nothing it said still counts.
@@ -168,6 +181,9 @@ impl App {
                     surface.analyse_soon();
                     surface.occurrences_again();
                 }
+                // And the finder's symbols, where they came back empty
+                // while it loaded.
+                self.symbols_settled();
             }
             LspEvent::Companion { .. } => {}
         }
