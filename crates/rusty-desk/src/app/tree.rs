@@ -907,6 +907,8 @@ impl App {
                     gutter.breakpoints.insert(new, lines);
                 }
             }
+            // A failed test's mark: the text it is about moved, unchanged.
+            gutter.failures.moved(from, to);
         }
         if let Some(root) = self.root() {
             for (old, new) in &moved {
@@ -947,6 +949,15 @@ impl App {
             self.drop_tab_anywhere(&id);
         }
         self.torn_deleted(path);
+        let marked = self
+            .editor
+            .gutter()
+            .borrow_mut()
+            .failures
+            .forget(|mark| rusty_edit::is_within(&mark.path, path));
+        if marked {
+            self.editor.gutter_changed();
+        }
         let mut state = self.state.borrow_mut();
         if let Some(project) = state.project.as_mut() {
             project

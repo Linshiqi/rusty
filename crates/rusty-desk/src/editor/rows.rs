@@ -61,6 +61,8 @@ pub struct Gutter {
     /// The last run's verdicts, by the harness's name for each test; a
     /// lens finds its own by its file's module path.
     pub verdicts: std::collections::HashMap<String, rusty_edit::testrun::Verdict>,
+    /// Where the failed tests panicked, and what they said (`failed.rs`).
+    pub failures: super::failed::Failures,
     /// Indent guides turned off in Settings.
     pub no_guides: bool,
 }
@@ -254,7 +256,23 @@ impl Model for Rows {
             .stopped
             .as_ref()
             .is_some_and(|(path, at)| *path == doc.path && *at == line);
-        // A lens after everything on its line.
+        // A failed test's message after everything on its line, and its
+        // squiggle with every other problem's.
+        let failed: Vec<&super::failed::Failed> = gutter.failures.on(&doc.path, line).collect();
+        let (message, message_x, message_width) = match failed.first() {
+            Some(mark) => {
+                let first = mark.first_line();
+                let (x, width) = super::failed::message_place(&metrics, &doc, row, first);
+                (SharedString::from(first), x, width)
+            }
+            None => (SharedString::new(), 0.0, 0.0),
+        };
+        // A lens after everything on its line, the message included.
+        let lens_after = if failed.is_empty() {
+            end
+        } else {
+            message_x + message_width
+        };
         let lenses = self.lenses(&doc);
         let (lens, lens_x, verdict) = match lenses.get(&line) {
             Some(runnable) => {
@@ -273,7 +291,7 @@ impl Model for Rows {
                     Some(rusty_edit::testrun::Verdict::Failed) => 2,
                     _ => 0,
                 };
-                (kind, end + metrics.ascii() * 3.0, verdict)
+                (kind, lens_after + metrics.ascii() * 3.0, verdict)
             }
             None => (0, 0.0, 0),
         };
@@ -300,6 +318,8 @@ impl Model for Rows {
             lens,
             lens_x,
             verdict,
+            message,
+            message_x,
             pieces: ModelRc::new(VecModel::from(pieces)),
             hints: ModelRc::new(VecModel::from(drawn)),
             marks: ModelRc::new(VecModel::from({
@@ -313,16 +333,29 @@ impl Model for Rows {
                 let mut all: Vec<Mark> = (0..level)
                     .map(|k| mark(f32::from(k) * tab, 1.0, 8))
                     .collect();
+                let problems = self.problems.borrow();
+                let found = problems.get(&doc.path).map_or(&[][..], Vec::as_slice);
+                // A failed test's place is squiggled as a problem is, and
+                // is no problem anybody else lists.
+                let with_failures: Vec<rusty_lsp::FileDiagnostic>;
+                let found = if failed.is_empty() {
+                    found
+                } else {
+                    with_failures = found
+                        .iter()
+                        .filter(|d| d.start_line <= line && line <= d.end_line)
+                        .cloned()
+                        .chain(failed.iter().map(|mark| mark.diagnostic()))
+                        .collect();
+                    &with_failures
+                };
                 all.extend(marks(
                     &doc,
                     &metrics,
                     hints,
                     &self.found.borrow(),
                     &self.resting.borrow(),
-                    self.problems
-                        .borrow()
-                        .get(&doc.path)
-                        .map_or(&[][..], Vec::as_slice),
+                    found,
                     row,
                 ));
                 all
@@ -477,6 +510,8 @@ pub fn painted_row(metrics: &Metrics, line: &Line) -> Row {
         lens: 0,
         lens_x: 0.0,
         verdict: 0,
+        message: SharedString::new(),
+        message_x: 0.0,
         pieces: ModelRc::new(VecModel::from(pieces)),
         hints: ModelRc::default(),
         marks: ModelRc::default(),

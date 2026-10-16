@@ -2603,17 +2603,59 @@ where anyone looks for it, and the margin had no room to say "Debug".
 - **What a run says is read as it goes** (`rusty_edit::testrun`, pure and
   tested against a captured run; `app/testing.rs` feeds it every line the run
   prints): each test's verdict, and for each failed one where it panicked
-  and what it said. The lens carries a tick or a cross from the last run — a
-  module's is the worst of its tests', found by the file's module path
+  and what it said. The lens carries a tick or a cross from the last run —
+  drawn as icons, since `✓` and `✗` were boxes in the font a Chinese window
+  falls back to — a module's is the worst of its tests', found by the
+  file's module path
   (`module_of`) and never by a bare suffix, which would put another file's
   result on this lens. **A panic is a failure only where the verdict says
   so**: a `#[should_panic]` test that passed prints its panic under
   `successes:`. A run replaces the verdicts of the tests it ran and keeps
   the rest, as VS Code's do. The dock marks a `panicked at` line as an
-  error (`run::kind_of`). Still to come: the failing line given the red line
-  every problem gets with the panic's first line after it (VS Code's test
-  message) and the whole message on its card — the reader has both. Not in
-  Problems, which lists what stops the build.
+  error (`run::kind_of`).
+- **A failed test's message is on the line where it panicked**, VS Code's
+  test message (`editor/failed.rs`): the red line every problem gets, a
+  point widened to the word it touches (`squiggle::drawn_on`), the
+  message's first line after everything on the line — its hints, a
+  collapsed block's ellipsis, and before a lens that shares the line —
+  dim, in the code's font, placed by Rust like every other x; and the
+  whole message on the hover card, in the code's font so an `assert_eq!`'s
+  `left` and `right` line up, under the pointer on the squiggle or on the
+  message itself. The card asks for no fix for it. **Not in Problems**,
+  which lists what stops the build: the marks live in the margin every
+  view shares (`Gutter.failures`), beside the lenses' verdicts, so the
+  other group and a window of its own draw them too, and never in what the
+  servers found.
+- **A panic names its file as rustc was handed it, which is relative to
+  the workspace's root**, not to the directory the run started in:
+  `core\src\lib.rs` from the root and from inside `core/` alike, an
+  absolute path for a path package outside the workspace — measured all
+  three ways (`testrun`'s tests hold the captured runs). So the run asks
+  cargo (`host_debug::workspace_root`, `cargo locate-project --workspace`,
+  beside the build) and `testrun::file_in` resolves the place against that
+  root and makes it the project's; a place outside the project, or a run
+  whose root cargo would not name, is marked nowhere. Read against the
+  run's directory — as the dock's links still read every compiler path
+  (`App::place_path`) — a project opened at its member `core/` would look
+  for `core/src/lib.rs` inside `core/`. `RUSTY_PROBE_TESTFAIL` drives all
+  of it in the window, at a root package, a member from the root and a
+  member opened as the project.
+- **A mark is about the text the test ran against, so it does not follow
+  an edit**: an edit to the file takes its marks away, and a file edited
+  while a run goes — after its drafts were written, while cargo built what
+  the disk held — is given none by that run. A file nobody has open that
+  the disk changes loses its marks too; a rename carries them. A new run
+  takes away what an earlier run marked for every test it gives a verdict,
+  so a test that passes now is marked no more, and keeps the rest. Another
+  project forgets the verdicts and the marks.
+- **A test run through Debug is read by the same reader**
+  (`App::testing_debug_heard`, what the debugger forwards of the program),
+  and that is less than a run prints: Debug runs the binary with
+  `--nocapture`, so the panic goes to the program's stderr, and both
+  debuggers' stderr is `null()` (`rusty-dbg`) — the verdict on stdout can
+  reach the lens, the panic's place cannot reach the line. Not run here
+  either way: this machine's only adapter is LLVM's `lldb-dap`, which
+  starts and answers nothing.
 - **Debug builds, asks, then runs.** `App::debug_test` runs `cargo test
   --no-run` visibly, then the same with `--message-format=json` to learn
   where each test executable landed, then asks each binary `<exe> <filter>

@@ -21,6 +21,7 @@ mod picker;
 mod picture;
 mod probe;
 mod probe_surfaces;
+mod probe_testfail;
 mod project;
 mod reveal;
 mod run;

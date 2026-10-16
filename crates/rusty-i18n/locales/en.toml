@@ -389,6 +389,8 @@ lens-run-test = "Run Test"
 lens-run-tests = "Run Tests"
 lens-run = "Run"
 lens-debug = "Debug"
+# Under a failed test's message on the hover card: which test said it.
+lens-failed = "Test {name} failed"
 
 [toolbar]
 build = "Build — with the project's own build system (cargo, PlatformIO or CMake), output in the dock"

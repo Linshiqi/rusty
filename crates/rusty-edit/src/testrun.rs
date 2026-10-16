@@ -18,6 +18,14 @@
 //! A panic is a failure only where the verdict says so: a `#[should_panic]`
 //! test that passed prints its panic too, under `successes:`, and marking
 //! it would be marking a test that did what it was written to do.
+//!
+//! **The place is printed as rustc was handed the file**, which is not as
+//! the project names it: cargo runs rustc in the workspace's root and names
+//! every path package under it relative to that root — `core\src\lib.rs`
+//! whether the run was started at the root or in `core/` itself, measured
+//! both ways — and a package outside it by its absolute path. So a place
+//! is kept as printed, and [`file_in`] turns it into the project's file
+//! once the workspace's root is known.
 
 use std::collections::HashMap;
 
@@ -34,9 +42,10 @@ pub enum Verdict {
 pub struct Failure {
     /// The harness's name for the test: `math::vector::tests::the_sum`.
     pub test: String,
-    /// Project-relative with forward slashes, zero-based line and column —
-    /// `None` for a place outside the project (the standard library, a
-    /// dependency) and for a test that failed without panicking.
+    /// The file as the panic printed it (`core\src\math\vector.rs`, or an
+    /// absolute path outside the workspace), zero-based line and column —
+    /// `None` for a test that failed without saying where. [`file_in`]
+    /// says which of the project's files the path is, if any.
     pub at: Option<(String, u32, u32)>,
     /// The panic's message, every line of it.
     pub message: String,
@@ -103,23 +112,89 @@ fn panic_header(text: &str) -> Option<(&str, &str)> {
     Some((thread, after))
 }
 
-/// A location as a panic prints it — `core\src\lib.rs:5:20` — made the
-/// editor's: project-relative with forward slashes, zero-based. `None`
-/// outside the project: a path with a drive letter or a leading separator
-/// is the standard library's or a dependency's.
+/// A location as a panic prints it — `core\src\lib.rs:5:20` — as the path
+/// it printed and a zero-based line and column. A path with a drive letter
+/// splits at its last two colons, as every place does.
 fn location(text: &str) -> Option<(String, u32, u32)> {
     let mut parts = text.trim_end_matches(':').rsplitn(3, ':');
     let col: u32 = parts.next()?.parse().ok()?;
     let line: u32 = parts.next()?.parse().ok()?;
-    let path = parts.next()?;
-    let absolute = path.starts_with('/')
-        || path.starts_with('\\')
-        || path.as_bytes().get(1) == Some(&b':')
-        || path.is_empty();
-    if absolute || line == 0 {
+    let path = parts.next()?.trim();
+    if path.is_empty() || line == 0 {
         return None;
     }
-    Some((path.replace('\\', "/"), line - 1, col.saturating_sub(1)))
+    Some((path.to_string(), line - 1, col.saturating_sub(1)))
+}
+
+/// The project's file a panic names, as the editor names it — relative to
+/// `root`, the opened project, with forward slashes — or `None` when the
+/// file is not in it: the standard library (`/rustc/<hash>/library/…`), a
+/// registry crate, a path package outside the workspace.
+///
+/// `printed` is the path as the panic printed it and `base` the directory
+/// rustc ran in, which for anything cargo builds is the workspace's root
+/// (`cargo locate-project --workspace`): a relative path is resolved
+/// against it, never against the directory the run was started in, which
+/// for a project opened at a member is one directory too deep. A path with
+/// a drive letter is a Windows path whatever host reads it, so its letter
+/// folds everywhere and the rest only on Windows, where the whole path
+/// does.
+pub fn file_in(printed: &str, base: &str, root: &str) -> Option<String> {
+    let printed = plain(printed);
+    let full = if is_absolute(&printed) {
+        printed
+    } else {
+        format!("{}/{printed}", plain(base).trim_end_matches('/'))
+    };
+    let full = without_dots(&full)?;
+    let root = plain(root);
+    let root = root.trim_end_matches('/');
+    let (head, tail) = full.split_at_checked(root.len())?;
+    let same = if cfg!(windows) {
+        head.eq_ignore_ascii_case(root)
+    } else {
+        head == root
+    };
+    let rest = tail.strip_prefix('/')?;
+    (same && !rest.is_empty()).then(|| rest.to_string())
+}
+
+/// A path's spelling made comparable: no verbatim prefix, forward slashes,
+/// a drive letter in lower case.
+fn plain(path: &str) -> String {
+    let path = path
+        .strip_prefix(r"\\?\")
+        .unwrap_or(path)
+        .replace('\\', "/");
+    match path.as_bytes() {
+        [drive, b':', ..] if drive.is_ascii_alphabetic() => {
+            format!("{}{}", drive.to_ascii_lowercase() as char, &path[1..])
+        }
+        _ => path,
+    }
+}
+
+fn is_absolute(path: &str) -> bool {
+    path.starts_with('/')
+        || matches!(path.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
+}
+
+/// `a/./b//../c` as `a/c`, its leading slashes kept; `None` for a `..` that
+/// climbs out of the top.
+fn without_dots(path: &str) -> Option<String> {
+    let rest = path.trim_start_matches('/');
+    let lead = &path[..path.len() - rest.len()];
+    let mut kept: Vec<&str> = Vec::new();
+    for part in rest.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                kept.pop()?;
+            }
+            other => kept.push(other),
+        }
+    }
+    Some(format!("{lead}{}", kept.join("/")))
 }
 
 /// Reads a run's lines in order, remembering what a line cannot say alone:
@@ -490,13 +565,13 @@ test result: FAILED. 3 passed; 6 failed; 1 ignored; 0 measured; 0 filtered out; 
                 .unwrap_or_else(|| panic!("{name} failed"))
         };
         let sum = by_test("math::vector::tests::the_sum_is_four");
-        assert_eq!(sum.at, at("core/src/math/vector.rs", 16, 8));
+        assert_eq!(sum.at, at(r"core\src\math\vector.rs", 16, 8));
         assert_eq!(
             sum.message,
             "assertion `left == right` failed\n  left: 3\n right: 4"
         );
         let turn = by_test("math::vector::tests::a_quarter_turn_is_positive");
-        assert_eq!(turn.at, at("core/src/math/vector.rs", 11, 8));
+        assert_eq!(turn.at, at(r"core\src\math\vector.rs", 11, 8));
         assert_eq!(
             turn.message, "-1.5707963",
             "the hook's note is not the message"
@@ -505,10 +580,10 @@ test result: FAILED. 3 passed; 6 failed; 1 ignored; 0 measured; 0 filtered out; 
         assert_eq!(lines.message, "first line\nsecond line");
         // Where the library panicked, from the test that called it.
         let library = by_test("tests::the_library_panics_for_it");
-        assert_eq!(library.at, at("core/src/lib.rs", 4, 19));
+        assert_eq!(library.at, at(r"core\src\lib.rs", 4, 19));
         // Failures that are no panic.
         let returned = by_test("math::vector::tests::it_does_not_panic");
-        assert_eq!(returned.at, at("core/src/math/vector.rs", 33, 7));
+        assert_eq!(returned.at, at(r"core\src\math\vector.rs", 33, 7));
         assert_eq!(returned.message, "test did not panic as expected");
         let error = by_test("math::vector::tests::it_returns_an_error");
         assert_eq!(error.at, None);
@@ -552,7 +627,7 @@ test tests::a_value_is_held ... ok
             found[0].test,
             "math::vector::tests::a_quarter_turn_is_positive"
         );
-        assert_eq!(found[0].at, at("core/src/math/vector.rs", 11, 8));
+        assert_eq!(found[0].at, at(r"core\src\math\vector.rs", 11, 8));
     }
 
     /// A scene a failing test was drawing goes out as it unwinds, after the
@@ -574,18 +649,225 @@ angle is off
     }
 
     #[test]
-    fn a_place_outside_the_project_is_no_place() {
-        assert_eq!(
-            location(r"C:\Users\x\.cargo\registry\src\index\libm-0.2.16\src\lib.rs:5:9:"),
-            None
-        );
-        assert_eq!(
-            location("/rustc/48a229cea/library/core/src/option.rs:1:2:"),
-            None
-        );
+    fn a_place_is_kept_as_it_was_printed() {
         assert_eq!(
             location(r"core\src\lib.rs:5:20:"),
-            at("core/src/lib.rs", 4, 19)
+            at(r"core\src\lib.rs", 4, 19)
+        );
+        assert_eq!(
+            location(r"C:\Users\x\.cargo\registry\src\index\libm-0.2.16\src\lib.rs:5:9:"),
+            at(
+                r"C:\Users\x\.cargo\registry\src\index\libm-0.2.16\src\lib.rs",
+                4,
+                8
+            )
+        );
+        assert_eq!(location("src/lib.rs:0:1:"), None, "lines count from one");
+    }
+
+    #[test]
+    fn a_place_outside_the_project_is_no_file_of_it() {
+        let (base, root) = (r"E:\work\ws", r"E:\work\ws");
+        assert_eq!(
+            file_in(
+                r"C:\Users\x\.cargo\registry\src\index\libm-0.2.16\src\lib.rs",
+                base,
+                root
+            ),
+            None
+        );
+        assert_eq!(
+            file_in("/rustc/48a229cea/library/core/src/option.rs", base, root),
+            None
+        );
+        // A path package outside the workspace is printed whole.
+        assert_eq!(file_in(r"E:\work\outside\src\lib.rs", base, root), None);
+        // A prefix is not a directory.
+        assert_eq!(file_in(r"E:\work\ws2\src\lib.rs", base, root), None);
+        assert_eq!(file_in(r"..\outside\src\lib.rs", base, root), None);
+        // Unless it is inside the project after all.
+        assert_eq!(
+            file_in(r"e:\work\ws\core\src\lib.rs", base, root).as_deref(),
+            Some("core/src/lib.rs"),
+            "the drive letter folds"
+        );
+        assert_eq!(
+            file_in(r"core\.\src\..\src\lib.rs", base, root).as_deref(),
+            Some("core/src/lib.rs")
+        );
+        assert_eq!(file_in("", base, root), None);
+        assert_eq!(
+            file_in(r"\\?\E:\work\ws\src\main.rs", base, root).as_deref(),
+            Some("src/main.rs")
+        );
+        // Elsewhere than Windows, the same arithmetic.
+        assert_eq!(
+            file_in("core/src/lib.rs", "/home/u/ws", "/home/u/ws/core").as_deref(),
+            Some("src/lib.rs")
+        );
+    }
+
+    /// Verbatim from `cargo test --workspace -- --show-output` at the root
+    /// of a workspace whose root is a package and has a member, `core/`,
+    /// Rust 1.98 on Windows: every place is printed relative to the
+    /// workspace's root, the member's with its directory in front.
+    const WORKSPACE_RUN: &str = r"    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running unittests src\lib.rs (target\debug\deps\wscore-4e10437ee9979408.exe)
+
+running 1 test
+test tests::member_fails ... FAILED
+
+successes:
+
+successes:
+
+failures:
+
+---- tests::member_fails stdout ----
+
+thread 'tests::member_fails' (33440) panicked at core\src\lib.rs:9:9:
+assertion `left == right` failed
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::member_fails
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p wscore --lib`
+     Running unittests src\lib.rs (target\debug\deps\wsroot-1d5d78aa1938a9f7.exe)
+
+running 1 test
+test tests::root_fails ... FAILED
+
+successes:
+
+successes:
+
+failures:
+
+---- tests::root_fails stdout ----
+
+thread 'tests::root_fails' (18252) panicked at src\lib.rs:9:9:
+assertion `left == right` failed
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::root_fails
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p wsroot --lib`
+     Running tests\outer.rs (target\debug\deps\outer-42df40d216e8d867.exe)
+
+running 1 test
+test integration_fails ... FAILED
+
+successes:
+
+successes:
+
+failures:
+
+---- integration_fails stdout ----
+
+thread 'integration_fails' (27288) panicked at tests\outer.rs:3:5:
+assertion `left == right` failed: integration
+  left: 2
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    integration_fails
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+";
+
+    /// The same workspace's member, `cargo test member -- --show-output`
+    /// run in `core/` itself (verbatim but for the directory's name): the
+    /// place is still the workspace root's spelling, `core\src\lib.rs`, and
+    /// not `src\lib.rs`.
+    const MEMBER_RUN: &str = r"     Running unittests src\lib.rs (E:\work\ws\target\debug\deps\wscore-4e10437ee9979408.exe)
+
+running 1 test
+test tests::member_fails ... FAILED
+
+successes:
+
+successes:
+
+failures:
+
+---- tests::member_fails stdout ----
+
+thread 'tests::member_fails' (30312) panicked at core\src\lib.rs:9:9:
+assertion `left == right` failed
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::member_fails
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+";
+
+    /// Where each failure of a real run lands: the project's own file, from
+    /// the root and from a member, the workspace's root being where rustc
+    /// ran in both.
+    #[test]
+    fn a_panic_lands_on_the_projects_file_from_the_root_and_from_a_member() {
+        let landed = |run: &str, root: &str| -> Vec<(String, Option<String>, u32, u32)> {
+            failures(&read_all(run))
+                .into_iter()
+                .map(|f| {
+                    let (printed, line, col) = f.at.clone().expect("a place");
+                    (
+                        f.test.clone(),
+                        file_in(&printed, r"E:\work\ws", root),
+                        line,
+                        col,
+                    )
+                })
+                .collect()
+        };
+        let file = |path: &str| Some(path.to_string());
+        assert_eq!(
+            landed(WORKSPACE_RUN, r"E:\work\ws"),
+            vec![
+                ("tests::member_fails".into(), file("core/src/lib.rs"), 8, 8),
+                ("tests::root_fails".into(), file("src/lib.rs"), 8, 8),
+                ("integration_fails".into(), file("tests/outer.rs"), 2, 4),
+            ]
+        );
+        // The member opened as the project: its file is `src/lib.rs`, and
+        // the root package's is no file of it.
+        assert_eq!(
+            landed(WORKSPACE_RUN, r"E:\work\ws\core"),
+            vec![
+                ("tests::member_fails".into(), file("src/lib.rs"), 8, 8),
+                ("tests::root_fails".into(), None, 8, 8),
+                ("integration_fails".into(), None, 2, 4),
+            ]
+        );
+        assert_eq!(
+            landed(MEMBER_RUN, r"E:\work\ws\core"),
+            vec![("tests::member_fails".into(), file("src/lib.rs"), 8, 8)]
+        );
+        // The whole message, for the card; its first line, after the code.
+        let heard = read_all(WORKSPACE_RUN);
+        let member = failures(&heard)[0];
+        assert_eq!(
+            member.message,
+            "assertion `left == right` failed\n  left: 4\n right: 5"
         );
     }
 

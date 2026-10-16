@@ -223,13 +223,19 @@ impl Surface {
             col -= 1;
         }
         let past = x > super::inlays::end_on(&metrics, &d, line) + metrics.ascii();
+        drop(metrics);
         let squiggled = self
             .problems
             .borrow()
             .get(&d.path)
-            .is_some_and(|items| !problems_at(items, line as u32, text, col as u32).is_empty());
+            .is_some_and(|items| !problems_at(items, line as u32, text, col as u32).is_empty())
+            || !self.failures_at(&d, line, col).is_empty();
         if past && !squiggled {
-            return None;
+            // A failed test's message after the line is the place it is
+            // about, as VS Code's hover over the message is the message.
+            return self
+                .failure_message_under(&d, line, x)
+                .map(|mark| (line, d.lines.byte(&d.text, line, mark.col as usize)));
         }
         Some((line, d.lines.byte(&d.text, line, col)))
     }
@@ -238,7 +244,7 @@ impl Surface {
     /// once, and the server's account of the name when it comes.
     fn hover_at(self: &Rc<Self>, line: usize, at: usize) {
         let Some(doc) = self.doc() else { return };
-        let (path, col, problems, word, version, draft_text) = {
+        let (path, col, problems, failed, word, version, draft_text) = {
             let d = doc.borrow();
             let text = d.lines.text(&d.text, line);
             let col = d.lines.position(&d.text, at).1;
@@ -253,12 +259,14 @@ impl Surface {
                         .collect()
                 })
                 .unwrap_or_default();
+            let failed = self.failures_at(&d, line, col);
             let word = super::cursors::word_at(&d.text, at)
                 .filter(|&(from, to)| from <= at && at < to.max(from + 1));
             (
                 d.path.clone(),
                 col,
                 problems,
+                failed,
                 word,
                 d.version,
                 d.text.clone(),
@@ -270,11 +278,15 @@ impl Surface {
         self.hovering.hide.stop();
         self.drop_fixes();
         // The problems now; the server's account joins them when it comes,
-        // and so do their fixes, asked for once the card is up.
-        if problems.is_empty() {
+        // and so do their fixes, asked for once the card is up. A failed
+        // test's message is on the card and asks for no fix: it is about
+        // the test, which no edit the server offers mends.
+        if problems.is_empty() && failed.is_empty() {
             self.close_card();
         } else {
-            self.show_card(line, from, &problems, None);
+            self.show_card(line, from, &problems, &failed, None);
+        }
+        if !problems.is_empty() {
             let draft = self.servers.draft(&draft_text);
             let about = path.clone();
             let asker = self.id;
@@ -302,7 +314,7 @@ impl Surface {
                     }
                 },
             );
-        } else if problems.is_empty() {
+        } else if problems.is_empty() && failed.is_empty() {
             self.hide_hover();
         }
     }
@@ -320,11 +332,12 @@ impl Surface {
         // The card is drawn again with the answer beside the problems
         // already on it, which are read afresh: a server may have spoken
         // since.
-        let problems: Vec<FileDiagnostic> = {
+        let (problems, failed) = {
             let d = doc.borrow();
             let text = d.lines.text(&d.text, line);
             let col = d.lines.position(&d.text, from).1;
-            self.problems
+            let problems: Vec<FileDiagnostic> = self
+                .problems
                 .borrow()
                 .get(&d.path)
                 .map(|items| {
@@ -333,42 +346,67 @@ impl Surface {
                         .cloned()
                         .collect()
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            (problems, self.failures_at(&d, line, col))
         };
         match info.filter(|info| !info.text.trim().is_empty()) {
-            Some(info) => self.show_card(line, from, &problems, Some(&info.text)),
-            None if problems.is_empty() => self.hide_hover(),
+            Some(info) => self.show_card(line, from, &problems, &failed, Some(&info.text)),
+            None if problems.is_empty() && failed.is_empty() => self.hide_hover(),
             None => {}
         }
     }
 
-    fn show_card(&self, line: usize, from: usize, problems: &[FileDiagnostic], said: Option<&str>) {
+    fn show_card(
+        &self,
+        line: usize,
+        from: usize,
+        problems: &[FileDiagnostic],
+        failed: &[super::failed::Failed],
+        said: Option<&str>,
+    ) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
         let Some(doc) = self.doc() else { return };
         let code = window.global::<Code>();
-        let rows_of_problems: Vec<HoverProblem> = problems
+        // A failed test's message first, whole — every line of an
+        // `assert_eq!`'s — then what the servers found, worst first.
+        let rows_of_problems: Vec<HoverProblem> = failed
             .iter()
-            .map(|d| HoverProblem {
-                kind: match d.severity {
-                    rusty_lsp::DiagSeverity::Error => 1,
-                    rusty_lsp::DiagSeverity::Warning => 2,
-                    _ => 3,
-                },
-                text: d.message.as_str().into(),
-                detail: match (&d.source, &d.code) {
-                    (Some(source), Some(c)) => format!("{source}({c})"),
-                    (Some(source), None) => source.clone(),
-                    (None, Some(c)) => c.clone(),
-                    (None, None) => String::new(),
-                }
-                .into(),
+            .map(|mark| HoverProblem {
+                kind: 1,
+                text: mark.message.as_str().into(),
+                detail: t!("files.lens-failed", name = mark.test).into(),
+                mono: true,
             })
+            .chain(problems.iter().map(|d| {
+                HoverProblem {
+                    kind: match d.severity {
+                        rusty_lsp::DiagSeverity::Error => 1,
+                        rusty_lsp::DiagSeverity::Warning => 2,
+                        _ => 3,
+                    },
+                    text: d.message.as_str().into(),
+                    detail: match (&d.source, &d.code) {
+                        (Some(source), Some(c)) => format!("{source}({c})"),
+                        (Some(source), None) => source.clone(),
+                        (None, Some(c)) => c.clone(),
+                        (None, None) => String::new(),
+                    }
+                    .into(),
+                    mono: false,
+                }
+            }))
             .collect();
         let (blocks, prose) = said.map(split).unwrap_or_default();
         let metrics = self.metrics.borrow();
-        let mut widest: f32 = 0.0;
+        // A message as wide as its widest line, beside the icon's column,
+        // so `left` and `right` are not wrapped apart.
+        let mut widest: f32 = failed
+            .iter()
+            .flat_map(|mark| mark.message.lines())
+            .map(|text| metrics.x_of(text, usize::MAX) + 22.0)
+            .fold(0.0, f32::max);
         let mut code_rows: Vec<Row> = Vec::new();
         for (lang, body) in &blocks {
             // A block fenced as nothing is the document's own language.

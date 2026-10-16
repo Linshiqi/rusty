@@ -194,6 +194,11 @@ impl App {
         });
     }
 
+    /// Which session is the debugger's now: what it sends is named by it.
+    pub(super) fn debug_epoch(&self) -> u64 {
+        self.state.borrow().debug.epoch
+    }
+
     fn debug_heard(self: &Rc<Self>, epoch: u64, update: DebugState) {
         if self.state.borrow().debug.epoch != epoch {
             return;
@@ -201,6 +206,7 @@ impl App {
         for text in &update.output {
             self.runner.say(text, crate::run::kind::PLAIN);
         }
+        self.testing_debug_heard(epoch, &update.output);
         // Attached: the standing breakpoints are placed, and the frozen
         // target runs to them.
         let first = {
@@ -304,6 +310,7 @@ impl App {
     }
 
     fn debug_ended(self: &Rc<Self>, epoch: u64) {
+        self.testing_debug_ended(epoch);
         let (exited, halted, any) = {
             let state = self.state.borrow();
             if state.debug.epoch != epoch {

@@ -507,6 +507,24 @@ tests green, and CLAUDE.md saying how it works.
    adapter. Proven by the probe on `examples/draw-vectors`: two lenses
    found, one of them run, and both carry the run's tick.
 
+   A failed test's message, on its line (v0.7.1, `editor/failed.rs`): the
+   reader's place and message, drawn as VS Code draws a test message — a
+   red squiggle where the test panicked, the message's first line dim
+   after the line (the row's `message`, placed in Rust past the text, the
+   hints and a collapsed block's ellipsis, with a lens on the same line
+   moved after it), and the whole message on the hover card in the code's
+   font, with no fix asked for. The marks are the margin's, beside the
+   verdicts, so both groups and a window of its own draw them, and they
+   are never what the servers found, so Problems does not list them. The
+   place is resolved against the workspace's root cargo names for the run
+   (`cargo locate-project --workspace`), since rustc prints every member's
+   path from there; an edit takes a file's marks away, a run's verdict
+   takes the earlier runs' mark for its test. `RUSTY_PROBE_TESTFAIL` runs a
+   failing `assert_eq!` test from its lens and photographs the squiggle and
+   the message, the card from the keys and under the pointer, the marks
+   in a window of its own, the line typed on and the marks gone, and the
+   test mended with its tick and no mark.
+
    Folding, sticky scroll and the minimap next. The folds live in the
    document, carried across every edit (`document::carry`: one below an
    edit moves, one whose hidden lines it reached opens, one being typed on

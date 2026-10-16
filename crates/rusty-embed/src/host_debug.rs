@@ -149,6 +149,33 @@ pub fn gdb_reads(host: &str) -> Result<()> {
     Ok(())
 }
 
+/// The workspace's root for a project at `dir`, as cargo answers it: the
+/// directory rustc runs in for everything the workspace builds, and so what
+/// every relative path in a panic, a backtrace or a diagnostic is relative
+/// to — `core\src\lib.rs`, from the root and from inside `core/` alike. A
+/// project opened at a member is not that directory, and a path read
+/// against the directory a run started in lands one directory too deep.
+pub fn workspace_root(dir: &Path) -> Result<PathBuf> {
+    let output = process::command("cargo")
+        .args(["locate-project", "--workspace", "--message-format", "plain"])
+        .current_dir(dir)
+        .output()
+        .map_err(|source| Error::Spawn {
+            tool: "cargo".to_string(),
+            source,
+        })?;
+    let said = String::from_utf8_lossy(&output.stdout);
+    let manifest = PathBuf::from(said.trim());
+    match manifest.parent() {
+        Some(root) if output.status.success() && manifest.is_absolute() => Ok(root.to_path_buf()),
+        _ => Err(Error::refused(format!(
+            "`cargo locate-project --workspace` named no workspace for {}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
+    }
+}
+
 /// The host toolchain's target triple, as `rustc -vV` reports it — asked in
 /// the project, so a `rust-toolchain.toml` pin answers rather than the default.
 pub fn host_triple(root: &Path) -> Result<String> {
@@ -322,5 +349,37 @@ mod tests {
     fn no_binaries_is_a_refusal_that_says_so() {
         let refused = binary_holding(&[], "anything").expect_err("nothing to run");
         assert!(refused.to_string().contains("no test binaries at all"));
+    }
+
+    /// Asked from a member, cargo names the workspace's root — the
+    /// directory a member's panics are printed relative to — and asked from
+    /// the root, the root itself.
+    #[test]
+    fn a_members_workspace_root_is_the_workspaces() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = dir.path();
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            std::fs::write(path, text).expect("written");
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"core\"]\n\n[package]\nname = \"top\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write("src/lib.rs", "");
+        write(
+            "core/Cargo.toml",
+            "[package]\nname = \"core-part\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write("core/src/lib.rs", "");
+        let canonical = |path: &Path| path.canonicalize().expect("there");
+        let from_member = workspace_root(&root.join("core")).expect("a workspace");
+        assert_eq!(canonical(&from_member), canonical(root));
+        let from_root = workspace_root(root).expect("a workspace");
+        assert_eq!(canonical(&from_root), canonical(root));
+        // Somewhere with no manifest above it is refused, not guessed.
+        let nowhere = tempfile::tempdir().expect("a directory");
+        assert!(workspace_root(nowhere.path()).is_err());
     }
 }

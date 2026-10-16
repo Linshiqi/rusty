@@ -18,6 +18,7 @@ mod clip;
 mod completion;
 mod cursors;
 mod document;
+mod failed;
 mod find;
 mod finding;
 mod history;
@@ -64,6 +65,7 @@ use crate::{
 use cursors::Cursor;
 use document::Change;
 pub use document::Document;
+pub use failed::Failed;
 use history::Kind;
 use host::{Host, Strong};
 use keymap::Command;
@@ -460,6 +462,7 @@ impl Surface {
     pub fn gutter_changed(&self) {
         for view in self.views.live() {
             view.rows.reset();
+            view.shade.rows.reset();
         }
     }
 
@@ -575,6 +578,7 @@ impl Surface {
             self.paint(doc);
             let path = doc.borrow().path.clone();
             self.servers.changed(&path, &doc.borrow().text);
+            self.failures_edited(&path);
             self.tell_edit(&path);
             self.tell_lines(&path, change);
             self.follows(doc, Some(change));
@@ -1694,6 +1698,8 @@ impl Surface {
         self.paint(doc);
         let path = doc.borrow().path.clone();
         self.servers.changed(&path, &doc.borrow().text);
+        // A failed test's marks are about the text the test ran against.
+        self.failures_edited(&path);
         self.tell_edit(&path);
         self.tell_lines(&path, change);
         self.research(Some(change));

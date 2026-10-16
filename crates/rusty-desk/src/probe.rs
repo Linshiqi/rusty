@@ -104,6 +104,11 @@
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below).
+//! With `RUSTY_PROBE_TESTFAIL[=<test>]`, on a file with a failing
+//! `assert_eq!` test, it runs the test from its lens and photographs its
+//! message on the line where it failed, on the hover card, in a window of
+//! its own, gone once the line is typed on, and gone with the test mended
+//! (`probe_testfail.rs`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -226,6 +231,7 @@ pub fn start(window: &AppWindow) {
     let photos: Rc<RefCell<Vec<image::RgbaImage>>> = Rc::default();
     let frames: Rc<RefCell<Vec<(String, image::RgbaImage)>>> = Rc::default();
     let reading_book = std::env::var_os("RUSTY_PROBE_BOOK").is_some();
+    let failing = std::env::var_os("RUSTY_PROBE_TESTFAIL").is_some();
     let chapter: Rc<RefCell<String>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
@@ -453,7 +459,12 @@ pub fn start(window: &AppWindow) {
                 if reading_book {
                     step.set(6400);
                 }
+                if failing {
+                    step.set(7300);
+                }
             }
+            // A failed test's message on its line (`probe_testfail.rs`).
+            7300..=7499 if failing => crate::probe_testfail::run(n, &surfaces),
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),
@@ -5348,7 +5359,7 @@ pub(crate) fn snapshot(window: &AppWindow, path: &Path) {
 }
 
 /// [`snapshot`] of any of the process's windows.
-fn snapshot_of(window: &slint::Window, path: &Path) {
+pub(crate) fn snapshot_of(window: &slint::Window, path: &Path) {
     match window.take_snapshot() {
         Ok(buffer) => {
             let (width, height) = (buffer.width(), buffer.height());

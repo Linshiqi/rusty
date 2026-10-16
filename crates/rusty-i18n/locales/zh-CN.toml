@@ -368,6 +368,7 @@ lens-run-test = "运行测试"
 lens-run-tests = "运行全部测试"
 lens-run = "运行"
 lens-debug = "调试"
+lens-failed = "测试 {name} 未通过"
 
 [toolbar]
 build = "构建 —— 用工程自己的构建系统（cargo、PlatformIO 或 CMake），输出在下方面板"

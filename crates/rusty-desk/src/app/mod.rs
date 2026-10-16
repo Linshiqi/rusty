@@ -1016,6 +1016,11 @@ impl App {
             state.project = Some(project);
             // A hierarchy is about the project it was asked in.
             state.calls.forget();
+        }
+        // So are the tests' verdicts and the marks of the failed ones.
+        self.forget_tests();
+        {
+            let mut state = self.state.borrow_mut();
             if !state.layout.left.open {
                 state.layout.left.open = true;
             }

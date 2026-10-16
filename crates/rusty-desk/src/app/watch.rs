@@ -92,6 +92,9 @@ impl App {
     /// what the disk has now.
     pub(super) fn follow_changed(self: &Rc<Self>, changed: Vec<String>) {
         self.pictures_changed(&changed);
+        // A failed test's mark in a file nobody has open is about the text
+        // the disk no longer holds; an open one's go with its edits.
+        self.editor.tests_disk_changed(&changed);
         let Some(root) = self.root() else { return };
         let open: Vec<(String, String)> = changed
             .into_iter()
