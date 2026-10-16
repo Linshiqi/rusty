@@ -145,6 +145,7 @@ impl App {
                         program: PathBuf::from(image.path),
                         args: Vec::new(),
                         root,
+                        cwd: None,
                         breakpoints,
                         board: Some(Board {
                             chip: target,
@@ -210,7 +211,8 @@ impl App {
         }
         self.testing_debug_heard(epoch, &update.output);
         // Attached: the standing breakpoints are placed, and the frozen
-        // target runs to them.
+        // target runs to them — `begin`, not `resume`: an adapter's program
+        // is already running, and may already be stopped at one.
         let first = {
             let mut state = self.state.borrow_mut();
             let first = update.attached && !state.debug.placed;
@@ -227,7 +229,7 @@ impl App {
                     for (file, line) in standing {
                         let _ = session.add_breakpoint(&file, line);
                     }
-                    let _ = session.resume();
+                    let _ = session.begin();
                 });
             }
         }

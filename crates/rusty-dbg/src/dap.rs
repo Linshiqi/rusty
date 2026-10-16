@@ -91,8 +91,13 @@ pub struct DapLaunch {
     /// The program to run, or for a board the image to flash and debug.
     pub program: PathBuf,
     pub args: Vec<String>,
-    /// Where the program runs, and what source paths are relative to.
+    /// What source paths are relative to, and where the program runs unless
+    /// `cwd` says otherwise.
     pub root: PathBuf,
+    /// Where the program runs when that is not `root`: a test in its
+    /// package's directory, as `cargo test` runs it, so a fixture read by a
+    /// relative path is found under the debugger as without it.
+    pub cwd: Option<PathBuf>,
     /// The breakpoints standing when the session starts, project-relative and
     /// zero-based.
     ///
@@ -199,6 +204,7 @@ impl Wire {
             "arguments": arguments,
         });
         let body = serde_json::to_vec(&message).map_err(|_| Error::Closed)?;
+        trace("-->", &message);
         let mut slot = self.socket.lock().expect("dap socket");
         let socket = slot.as_mut().ok_or(Error::Closed)?;
         socket
@@ -322,10 +328,15 @@ impl DapSession {
         session.handshake(launch, &ready_rx)?;
 
         // Attached, and running: the program starts the moment configuration
-        // is done. The panel's first resume is therefore a no-op rather than
-        // an error about a program that is already going. Unless the session
-        // is already over — the adapter gone the moment it was configured —
-        // in which case its last state has been sent and nothing follows it.
+        // is done. Said *before* `configurationDone` goes, so the first stop
+        // — which can only follow it — lands on a session already marked
+        // running and is never overwritten by it: said after, a stop the
+        // reader had taken first would be published as running, and
+        // Continue — nothing, for a program already going — would do
+        // nothing for good.
+        // Unless the session is already over — the adapter gone the moment
+        // it was configured — in which case its last state has been sent and
+        // nothing follows it.
         session.running.store(true, Ordering::SeqCst);
         if let Some(sender) = outlet.lock().expect("dap outlet").as_ref() {
             let mut state = session.state.lock().expect("dap state");
@@ -333,14 +344,16 @@ impl DapSession {
             state.running = true;
             publish(&mut state, sender);
         }
+        session.wire.send("configurationDone", json!({}))?;
 
         Ok((session, Events::new(receiver)))
     }
 
     /// `initialize` and `launch`, then — once the adapter says it will take
-    /// configuration — the standing breakpoints and `configurationDone`. An
-    /// adapter that never says so is an error, and like every error here it
-    /// drops the session, which stops the adapter.
+    /// configuration — the standing breakpoints; `configurationDone` is the
+    /// caller's, once the session says it is running. An adapter that never
+    /// says so is an error, and like every error here it drops the session,
+    /// which stops the adapter.
     fn handshake(&self, launch: &DapLaunch, ready: &Receiver<Ready>) -> Result<()> {
         self.wire.send(
             "initialize",
@@ -384,9 +397,7 @@ impl DapSession {
             }
         }
 
-        self.place_all(&launch.breakpoints)?;
-        self.wire.send("configurationDone", json!({}))?;
-        Ok(())
+        self.place_all(&launch.breakpoints)
     }
 
     /// The state as it stands, for a caller that missed the last push.
@@ -497,11 +508,11 @@ impl DapSession {
         self.send_source(&file)
     }
 
-    /// Continue — or nothing, when the program is already going.
-    ///
-    /// The panel resumes once on attach, as it must for a target frozen at
-    /// reset. A launched program is not frozen, and `continue` against a
-    /// running one is an adapter error on the one button that has to work.
+    /// Continue — or nothing, when the program is already going: `continue`
+    /// against a running program is an adapter error on the one button that
+    /// has to work. The window's run on attach is not this (`AnySession::
+    /// begin`): a launched program is not frozen, and a `continue` sent
+    /// after it had reached its first breakpoint would take it past.
     pub fn resume(&self) -> Result<()> {
         if self.running.load(Ordering::SeqCst) {
             return Ok(());
@@ -638,7 +649,7 @@ fn launch_arguments(launch: &DapLaunch) -> Value {
         None => json!({
             "program": launch.program.to_string_lossy(),
             "args": launch.args,
-            "cwd": launch.root.to_string_lossy(),
+            "cwd": launch.cwd.as_ref().unwrap_or(&launch.root).to_string_lossy(),
             "stopOnEntry": false,
         }),
         Some(board) => {
@@ -930,9 +941,19 @@ impl Reader {
                     *self.thread.lock().expect("dap thread") = id;
                 }
                 self.running.store(false, Ordering::SeqCst);
-                self.state.lock().expect("dap state").halted(reason_of(
-                    body.get("reason").and_then(Value::as_str).unwrap_or(""),
-                ));
+                {
+                    let mut state = self.state.lock().expect("dap state");
+                    state.halted(reason_of(
+                        body.get("reason").and_then(Value::as_str).unwrap_or(""),
+                    ));
+                    // The last stop's stack and locals are not this one's.
+                    // An adapter need not say `continued` after a request
+                    // that implies it, and without that nothing cleared
+                    // them: the stop read as the one before it until its
+                    // own stack came.
+                    state.stack.clear();
+                    state.variables.clear();
+                }
                 // The stop names one thread and nothing else; the stack is
                 // a separate question, and asking it here is what makes
                 // the panel complete the moment it appears.
@@ -1112,7 +1133,19 @@ fn read_frame(reader: &mut BufReader<TcpStream>) -> Option<Value> {
     let length = content_length(&header)?;
     let mut body = vec![0u8; length];
     reader.read_exact(&mut body).ok()?;
-    serde_json::from_slice(&body).ok()
+    let message = serde_json::from_slice(&body).ok()?;
+    trace("<--", &message);
+    Some(message)
+}
+
+/// Every message on the wire, to stderr, when `RUSTY_DAP_LOG` is set — the
+/// difference between a theory about what an adapter did and its own
+/// answer, as `RUSTY_LSP_LOG` is for a language server.
+fn trace(direction: &str, message: &Value) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("RUSTY_DAP_LOG").is_some()) {
+        eprintln!("{direction} {message}");
+    }
 }
 
 /// Add or update one breakpoint, keyed by the adapter's id. `clicked` is
@@ -1463,9 +1496,21 @@ mod tests {
             program: PathBuf::from("tests"),
             args: Vec::new(),
             root: root(),
+            cwd: None,
             breakpoints: Vec::new(),
             board: None,
         }
+    }
+
+    /// A program runs where it was asked to, and at the root where nothing
+    /// was asked: a test in its package's directory, as `cargo test` runs
+    /// it, while its source paths stay the root's.
+    #[test]
+    fn a_program_runs_where_it_was_asked_to() {
+        let mut member = launch();
+        member.cwd = Some(PathBuf::from(r"E:\CodeBase\proj\core"));
+        assert_eq!(launch_arguments(&member)["cwd"], r"E:\CodeBase\proj\core");
+        assert_eq!(launch_arguments(&launch())["cwd"], r"E:\CodeBase\proj");
     }
 
     /// A start that fails once the adapter is running stops it. Only the
@@ -1565,6 +1610,48 @@ mod tests {
         let stopped = event("stopped", json!({ "reason": "step", "threadId": 1 }));
         assert!(reader.handle(&stopped));
         assert_eq!(reader.state.lock().expect("the state").frame, 0);
+    }
+
+    /// A stop is not the stop before it. An adapter need not say
+    /// `continued` after a step — the protocol says a request that implies
+    /// it is enough — so a stop takes the last stop's stack and locals away
+    /// itself, and the session reads as stopped nowhere until its own stack
+    /// is in, never as stopped where it was.
+    #[test]
+    fn a_stop_with_no_continued_before_it_shows_none_of_the_last_stop() {
+        let (reader, states) = unwired();
+        let stack = |line: i64| {
+            json!({
+                "seq": 9, "type": "response", "command": "stackTrace", "success": true,
+                "request_seq": 5,
+                "body": { "stackFrames": [{
+                    "id": 1001, "name": "draw_vectors::probe::two_is_three", "line": line,
+                    "source": { "path": r"E:\CodeBase\proj\src\lib.rs" },
+                }] },
+            })
+        };
+        reader.handle(&event(
+            "stopped",
+            json!({ "reason": "breakpoint", "threadId": 1 }),
+        ));
+        reader.handle(&stack(76));
+        reader.handle(&json!({
+            "seq": 10, "type": "response", "command": "variables", "success": true,
+            "request_seq": 7,
+            "body": { "variables": [{ "name": "a", "value": "1", "variablesReference": 0 }] },
+        }));
+        // A step, answered with no `continued`, and its stop.
+        reader.handle(&event(
+            "stopped",
+            json!({ "reason": "step", "threadId": 1 }),
+        ));
+        let at_the_stop = states.try_iter().last().expect("the stop's state");
+        assert!(!at_the_stop.running);
+        assert!(at_the_stop.stack.is_empty(), "not the last stop's stack");
+        assert!(at_the_stop.variables.is_empty(), "nor its locals");
+        reader.handle(&stack(77));
+        let placed = states.try_iter().last().expect("the stack's state");
+        assert_eq!(placed.stack[0].line, Some(76), "the step's own line");
     }
 
     #[test]

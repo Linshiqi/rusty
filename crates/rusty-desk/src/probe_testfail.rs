@@ -8,9 +8,10 @@
 //! message each time and saying whether a fix was asked for; moves the file
 //! into a window of its own and photographs the marks there; types on the
 //! line and photographs the marks gone; mends the test, runs it again and
-//! photographs the tick with no mark. Every line it prints says what the
-//! rows, the card and the Problems panel held — on a copy, since the run
-//! writes the mended test to disk.
+//! photographs the tick with no mark; and last runs the title bar's Test
+//! and says which command it ran and which tests that ran. Every line it
+//! prints says what the rows, the card and the Problems panel held — on a
+//! copy, since the run writes the mended test to disk.
 
 use slint::{
     ComponentHandle, Model,
@@ -394,7 +395,7 @@ pub fn run(n: u32, run: &Run) {
             let version = editor.version_of(&path).unwrap_or(0);
             if !text.contains(WRONG) {
                 eprintln!("testfail: no `{WRONG}` to mend");
-                app.act("app.exit");
+                step.set(7330);
                 return;
             }
             editor.replace(&path, version, text.replacen(WRONG, RIGHT, 1));
@@ -420,7 +421,33 @@ pub fn run(n: u32, run: &Run) {
             );
             photo("testfail-mended.png");
         }
-        7330 => app.act("app.exit"),
+        // The title bar's Test: the whole suite, and what it ran.
+        7330 => {
+            app.act("run.test");
+            waited.set(0);
+        }
+        7331 => {
+            let lines = || {
+                (0..app.runner().counts().0)
+                    .filter_map(|index| app.runner().line(index))
+                    .map(|line| line.text.to_string())
+                    .collect::<Vec<_>>()
+            };
+            let ended = !app.runner().is_running()
+                && lines().iter().any(|text| text.starts_with("test result"));
+            if !ended && wait(3000) {
+                return;
+            }
+            eprintln!(
+                "testfail: the title bar's Test ({} ticks) ran {:?}",
+                waited.get(),
+                lines()
+                    .into_iter()
+                    .filter(|text| text.starts_with("$ ") || text.starts_with("test "))
+                    .collect::<Vec<_>>()
+            );
+        }
+        7332 => app.act("app.exit"),
         _ => {}
     }
 }

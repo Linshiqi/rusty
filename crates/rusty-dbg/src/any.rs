@@ -51,6 +51,22 @@ impl AnySession {
         either!(self, session => session.resume())
     }
 
+    /// What the window asks for once, when the session is attached and the
+    /// standing breakpoints are placed: the run to them.
+    ///
+    /// gdb's target is frozen until then — QEMU at reset, a host program
+    /// not yet started — and this is what starts it. A debug adapter's
+    /// program has been running since `configurationDone`, with its
+    /// breakpoints in the launch, so there is nothing to start; a resume
+    /// sent instead could land after the program had reached its first
+    /// breakpoint and take it straight past.
+    pub fn begin(&self) -> Result<()> {
+        match self {
+            AnySession::Gdb(session) => session.resume(),
+            AnySession::Dap(_) => Ok(()),
+        }
+    }
+
     pub fn pause(&self) -> Result<()> {
         either!(self, session => session.pause())
     }
