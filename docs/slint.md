@@ -602,6 +602,26 @@ tests green, and CLAUDE.md saying how it works.
    a link is drawn and followed, Ctrl+K Ctrl+S opens Keyboard Shortcuts in
    the main window, Alt+Left walks back, and Ctrl and the wheel there size
    the text in both windows.
+
+   Then tabs that drag, reported for v0.7.1 as "a tab cannot be dragged
+   out, or dragged in". Before, a tab let go of beyond the window's edge
+   was all a drag did: along its strip and onto the other group it went
+   nowhere, and a window of its own's tab did not drag at all. Now a tab
+   carried more than four pixels moves along its strip to the gap a
+   marker shows, onto the other group's strip or code, onto the right half
+   of the only group's code to open the split with it there under a
+   translucent overlay, or out into a window of its own — and from there
+   back onto the main window's strips or code, followed through the
+   screen, since Slint carries no drag between windows. Where it lands is
+   `crate::tab_drag`, pure and tested; the strips are measured by Rust
+   (`DocTab.width`), since nothing outside a `for` can read what it laid
+   out, and the panes and lanes are read off the window at every move
+   (`EditorArea.tab-geometry`). Each group is clipped to its pane now too:
+   with the divider dragged tight, a page wider than its pane was printed
+   under the other group's code. `RUSTY_PROBE_TABDRAG` (`probe_tabs.rs`)
+   drives every one of those by the pointer, Escape and the strip's
+   scrolling under a held tab included, and drags the divider to both ends
+   with the History page in one group and code in the other.
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 

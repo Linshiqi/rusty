@@ -610,6 +610,20 @@ impl Surface {
         self.paint(&doc);
     }
 
+    /// Where `path`'s view was left: where the next view to show it finds
+    /// it (`show`, and the other group's view when a tab is moved there).
+    pub fn kept_scroll(&self, path: &str) -> Option<(f32, f32)> {
+        self.open.borrow().get(path).map(|doc| doc.borrow().scroll)
+    }
+
+    /// `path`'s view left at `at`, by a view about to show something else
+    /// — the other group's, whose file a dragged tab took the place of.
+    pub fn keep_scroll(&self, path: &str, at: (f32, f32)) {
+        if let Some(doc) = self.open.borrow().get(path) {
+            doc.borrow_mut().scroll = (shade::within(at.0), at.1);
+        }
+    }
+
     pub fn show(&self, path: &str) {
         let Some(doc) = self.open.borrow().get(path).cloned() else {
             return;

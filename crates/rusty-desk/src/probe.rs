@@ -101,6 +101,9 @@
 //! project refused — and writes what it saw to `said.txt`, which this
 //! window prints once the second has gone, with its own project and the
 //! recents both windows wrote.
+//! With `RUSTY_PROBE_TABDRAG`, on a copy of a Cargo project, it drags tabs
+//! the ways VS Code drags them (`probe_tabs.rs`): along a strip, onto the
+//! other group, into the split, out into a window of its own and back.
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below).
@@ -191,6 +194,7 @@ pub fn start(window: &AppWindow) {
     let zooming = std::env::var_os("RUSTY_PROBE_ZOOM").is_some();
     let menus = std::env::var_os("RUSTY_PROBE_MENUS").is_some();
     let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
+    let tab_dragging = std::env::var_os("RUSTY_PROBE_TABDRAG").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
     // variables, so it probes itself into a directory of its own.
@@ -453,7 +457,12 @@ pub fn start(window: &AppWindow) {
                 if reading_book {
                     step.set(6400);
                 }
+                if tab_dragging {
+                    step.set(7400);
+                }
             }
+            // Tabs dragged the ways VS Code drags them (`probe_tabs.rs`).
+            7400..=7599 if tab_dragging => crate::probe_tabs::tab_drag(n, &surfaces),
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),
@@ -5348,7 +5357,7 @@ pub(crate) fn snapshot(window: &AppWindow, path: &Path) {
 }
 
 /// [`snapshot`] of any of the process's windows.
-fn snapshot_of(window: &slint::Window, path: &Path) {
+pub(crate) fn snapshot_of(window: &slint::Window, path: &Path) {
     match window.take_snapshot() {
         Ok(buffer) => {
             let (width, height) = (buffer.width(), buffer.height());

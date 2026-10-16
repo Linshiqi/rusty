@@ -4,7 +4,7 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
 import { Splitter, Tip } from "widgets.slint";
-import { Shell, PanelTab, DocTab, TreeRow, PickRow, KeyRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdPiece, MdLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam } from "shell.slint";
+import { Shell, PanelTab, DocTab, TabGeometry, TabDrag, TreeRow, PickRow, KeyRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdPiece, MdLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam } from "shell.slint";
 import { Code, Find, Shade, Row, Piece, HoverProblem, HoverFix, CompletionRow } from "editor.slint";
 import { TitleBar } from "titlebar.slint";
 import { LeftDock, BottomDock, RightDock } from "docks.slint";
@@ -15,7 +15,7 @@ import { GitPrompt, ClonePrompt } from "git.slint";
 // A tab moved into a window of its own (`src/app/torn.rs`).
 export { TornWindow } from "torn.slint";
 
-export { Theme, Icons, Shell, Code, Find, Shade, Tip, Row, Piece, HoverProblem, HoverFix, CompletionRow, PanelTab, DocTab, TreeRow, PickRow, KeyRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdPiece, MdLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam }
+export { Theme, Icons, Shell, Code, Find, Shade, Tip, Row, Piece, HoverProblem, HoverFix, CompletionRow, PanelTab, DocTab, TabGeometry, TabDrag, TreeRow, PickRow, KeyRow, Note, Recent, ProblemRow, OutputLine, EnvRow, WizRow, WizFact, WizNote, PlaygroundCard, BoardWire, BoardWord, BoardLamp, BoardSwitch, BoardShape, BoardScreen, BoardRotor, BoardControl, BoardPart, BoardProp, LibraryRow, PlotCurve, PlotTunable, WaveLane, WaveTick, DrawRow, DrawPiece, FlightAxis, FlightMotor, DebugFrame, DebugVariable, CallLine, RegField, RegRow, SearchRow, TermSpan, TermRow, GitChange, GitStash, GitRef, GitLane, GitLabel, GitCommitRow, GitFile, DiffRow, MenuItem, MemBuild, MemCrate, MemSection, CrateVital, CrateDep, CrateDup, FeatPackage, FeatRow, DiskTree, DiskItemRow, DiskIdle, CodeSpan, CodeLine, MdPiece, MdLine, MdCell, MdRow, MdBlock, AiEntry, MathRow, MathStep, MathLine, LabSource, LabPreset, LabConsole, LabLane, LabRecord, LabTick, LabDot, LabParam }
 
 export component AppWindow inherits Window {
     // What the task bar calls the window: the file, the project, rusty.
@@ -72,6 +72,31 @@ export component AppWindow inherits Window {
         scope.focus();
     }
 
+    // Where a dragged tab can land (`EditorArea.tab-geometry`).
+    public function tab-geometry() -> TabGeometry {
+        return area.tab-geometry();
+    }
+
+    // What a tab's name and the hint beside it measure, at the sizes the
+    // strip draws them (`src/app/tab_drag.rs`): a tab is as wide as the
+    // Rust side makes it from these.
+    in property <string> tab-probe-title;
+    in property <string> tab-probe-hint;
+    out property <length> tab-probe-title-width: tab-title-probe.preferred-width;
+    out property <length> tab-probe-hint-width: tab-hint-probe.preferred-width;
+
+    tab-title-probe := Text {
+        visible: false;
+        text: root.tab-probe-title;
+        font-size: Theme.small;
+    }
+
+    tab-hint-probe := Text {
+        visible: false;
+        text: root.tab-probe-hint;
+        font-size: Theme.caption;
+    }
+
     probe := Text {
         visible: false;
         text: root.probe-text;
@@ -93,6 +118,15 @@ export component AppWindow inherits Window {
 
     // Keys nothing focused took arrive here, and the bindings get them.
     scope := FocusScope {
+        // Escape gives a dragged tab up, wherever the keys are: before the
+        // code, which would take it for itself.
+        capture-key-pressed(event) => {
+            if (Shell.tab-drag.on && event.text == Key.Escape) {
+                Shell.tab-drag-cancel();
+                return accept;
+            }
+            reject
+        }
         key-pressed(event) => {
             if (Shell.key(event)) {
                 return accept;
@@ -175,6 +209,45 @@ export component AppWindow inherits Window {
                 }
             }
             StatusBar { }
+        }
+    }
+
+    // A tab being dragged (`src/app/tab_drag.rs` places all three): the
+    // overlay over the code it would take, the marker in the strip's gap it
+    // would go in, and its name beside the pointer.
+    if Shell.tab-drag.on && Shell.tab-drag.overlay: Rectangle {
+        x: Shell.tab-drag.overlay-x;
+        y: Shell.tab-drag.overlay-y;
+        width: Shell.tab-drag.overlay-w;
+        height: Shell.tab-drag.overlay-h;
+        background: Theme.slate-fill;
+        border-width: 1px;
+        border-color: Theme.slate;
+    }
+    if Shell.tab-drag.on && Shell.tab-drag.marker: Rectangle {
+        x: Shell.tab-drag.marker-x;
+        y: Shell.tab-drag.marker-y;
+        width: 2px;
+        height: Shell.tab-drag.marker-h;
+        background: Theme.slate;
+    }
+    if Shell.tab-drag.on && Shell.tab-drag.inside: Rectangle {
+        x: Shell.tab-drag.x + 14px;
+        y: Shell.tab-drag.y + 10px;
+        width: ghost.preferred-width + 20px;
+        height: 24px;
+        border-radius: 4px;
+        background: Theme.raised;
+        border-width: 1px;
+        border-color: Theme.line;
+        opacity: 0.9;
+        ghost := Text {
+            x: 10px;
+            width: self.preferred-width;
+            text: Shell.tab-drag.title;
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
         }
     }
 

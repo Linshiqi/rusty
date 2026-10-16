@@ -15,7 +15,7 @@ import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
 import { Button, IconButton, RowButton, Caption, Segments, Splitter } from "widgets.slint";
 import { WizardPage } from "wizard.slint";
-import { Shell, DocTab } from "shell.slint";
+import { Shell, DocTab, TabGeometry } from "shell.slint";
 import { CodeView, ShadeView } from "editor.slint";
 import { EnvironmentPage } from "environment.slint";
 import { KeysPage } from "keys.slint";
@@ -27,21 +27,35 @@ import { NotYet } from "docks.slint";
 // no tab is ever under one, and when there are more than fit the lane
 // scrolls sideways under the wheel; the tab in front is brought into view
 // whenever it changes, or the lane is resized.
+//
+// A tab pressed and carried a few pixels is dragged (`src/app/tab_drag.rs`
+// decides where it lands, `src/tab_drag.rs` how): each tab is as wide as
+// the Rust side measured it (`DocTab.width`), so the gap the pointer is in
+// is the gap drawn there; and held near an end of a lane with more tabs
+// that way, the lane scrolls.
 component TabStrip inherits Rectangle {
     in property <[DocTab]> tabs;
     in property <string> active;
     in property <bool> focused: true;
+    // The other group's strip, which a drag from it names.
+    in property <bool> other;
     // The split button, on the strip of the group being edited.
     in property <bool> splits;
     callback pick(string);
     callback close(string);
     // A right-click on a tab, at a point of the window.
     callback menu(string, length, length);
-    // A tab let go of, where in the window: beyond its edge is a window of
-    // its own (`src/app/torn.rs`).
+    // A tab carried past a few pixels (`begun` the first time), and let go
+    // of, where in the window.
+    callback drag(string, bool, length, length);
     callback dropped(string, length, length);
     height: 36px;
     background: Theme.window;
+
+    // How much of the lane shows and how far it is scrolled, for where a
+    // dragged tab lands (`EditorArea.tab-geometry`).
+    out property <length> lane-width: view.width;
+    out property <length> lane-offset: root.offset;
 
     // How far the lane is scrolled, as last set; what is drawn is that kept
     // inside how far the tabs can travel, so closing tabs never leaves the
@@ -52,6 +66,17 @@ component TabStrip inherits Rectangle {
 
     changed travel => {
         root.scroll = root.offset;
+    }
+
+    // A dragged tab held near an end of this lane: a step that way every
+    // frame, and where it would land worked out again under the pointer.
+    Timer {
+        interval: 16ms;
+        running: Shell.tab-drag.on && Shell.tab-drag.scroll-dir != 0 && Shell.tab-drag.scroll-strip == (root.other ? 2 : 1);
+        triggered => {
+            root.scroll = clamp(root.offset + Shell.tab-drag.scroll-dir * 8px, 0px, root.travel);
+            Shell.tab-drag-again();
+        }
     }
 
     // A tab at `x` of the lane, `w` wide: scrolled just far enough to show
@@ -120,8 +145,12 @@ component TabStrip inherits Rectangle {
                             root.reveal(tab-box.x, tab-box.width);
                         }
                     }
-                    width: min(row.preferred-width, 240px);
+                    // The Rust side's width, from the words below and the
+                    // room round them (`app/tab_drag.rs`, `tab_width`).
+                    width: tab.width;
                     background: tab.id == root.active ? Theme.content : touch.has-hover ? Theme.hover : transparent;
+                    // Faint while it is the tab being dragged.
+                    opacity: Shell.tab-drag.on && Shell.tab-drag.id == tab.id && Shell.tab-drag.other == root.other ? 0.45 : 1.0;
                     row := HorizontalLayout {
                         padding-left: 12px;
                         padding-right: 6px;
@@ -131,6 +160,7 @@ component TabStrip inherits Rectangle {
                             color: tab.id == root.active ? Theme.label : Theme.label-2;
                             font-size: Theme.small;
                             vertical-alignment: center;
+                            overflow: elide;
                         }
                         if tab.hint != "": Text {
                             text: tab.hint;
@@ -169,12 +199,36 @@ component TabStrip inherits Rectangle {
                         height: 2px;
                         background: Theme.rust;
                     }
+                    // A click picks the tab, a middle click closes it, and a
+                    // press carried more than four pixels is a drag: the
+                    // click it would have been is not made, and every move
+                    // after says where the pointer is until it is let go.
                     touch := TouchArea {
                         z: -1;
+                        property <bool> held;
+                        property <bool> carried;
+                        property <length> press-x;
+                        property <length> press-y;
                         clicked => {
-                            root.pick(tab.id);
+                            if (!self.carried) {
+                                root.pick(tab.id);
+                            }
+                        }
+                        moved => {
+                            if (self.held && !self.carried && (abs(self.mouse-x - self.press-x) > 4px || abs(self.mouse-y - self.press-y) > 4px)) {
+                                self.carried = true;
+                                root.drag(tab.id, true, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            } else if (self.held && self.carried) {
+                                root.drag(tab.id, false, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            }
                         }
                         pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                self.held = true;
+                                self.carried = false;
+                                self.press-x = self.mouse-x;
+                                self.press-y = self.mouse-y;
+                            }
                             if (event.kind == PointerEventKind.up && event.button == PointerEventButton.middle) {
                                 root.close(tab.id);
                             }
@@ -182,7 +236,10 @@ component TabStrip inherits Rectangle {
                                 root.menu(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                             }
                             if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
-                                root.dropped(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                self.held = false;
+                                if (self.carried) {
+                                    root.dropped(tab.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
                             }
                         }
                     }
@@ -755,6 +812,23 @@ export component EditorArea inherits Rectangle {
         code.focus-find(replace);
     }
 
+    // Where a dragged tab can land, in the window (`TabGeometry`): read by
+    // the Rust side as it is laid out, at every move of the drag.
+    public function tab-geometry() -> TabGeometry {
+        return {
+            x: panes.absolute-position.x,
+            y: panes.absolute-position.y,
+            width: panes.width,
+            height: panes.height,
+            left: panes.left,
+            strip: keys-strip.height,
+            keys-lane: keys-strip.lane-width,
+            keys-scroll: keys-strip.lane-offset,
+            other-lane: other-strip.lane-width,
+            other-scroll: other-strip.lane-offset,
+        };
+    }
+
     VerticalLayout {
         if Shell.playground != "": PlaygroundBar { }
         panes := Rectangle {
@@ -765,11 +839,16 @@ export component EditorArea inherits Rectangle {
             property <length> left: Shell.split ? clamp(round(self.width * Shell.split-share / 1px) * 1px, self.least, self.width - 1px - self.least) : self.width;
             property <length> right: self.width - self.left - 1px;
             property <bool> on-right: Shell.split && Shell.focus-group == 1;
+            // Each group draws inside its own pane and nowhere else: a
+            // page laid out wider than the pane it was given, or a group
+            // squeezed to its least by the divider, is cut at the pane's
+            // edge rather than printed over the group beside it.
             live := Rectangle {
                 x: panes.on-right ? panes.left + 1px : 0;
                 width: panes.on-right ? panes.right : panes.left;
+                clip: true;
                 VerticalLayout {
-                    TabStrip {
+                    keys-strip := TabStrip {
                         tabs: Shell.tabs;
                         active: Shell.active-tab;
                         splits: true;
@@ -781,6 +860,9 @@ export component EditorArea inherits Rectangle {
                         }
                         menu(id, x, y) => {
                             Shell.tab-menu(id, false, x, y);
+                        }
+                        drag(id, begun, x, y) => {
+                            Shell.tab-dragged(id, false, begun, x, y);
                         }
                         dropped(id, x, y) => {
                             Shell.tab-dropped(id, false, x, y);
@@ -872,14 +954,20 @@ export component EditorArea inherits Rectangle {
                     }
                 }
             }
-            if Shell.split: Rectangle {
+            // Always made, and shown while split: its strip is what a
+            // dragged tab is measured against (`tab-geometry`), which an
+            // element made only while split could not be read for.
+            Rectangle {
+                visible: Shell.split;
                 x: panes.on-right ? 0 : panes.left + 1px;
-                width: panes.on-right ? panes.left : panes.right;
+                width: !Shell.split ? 0px : panes.on-right ? panes.left : panes.right;
+                clip: true;
                 VerticalLayout {
-                    TabStrip {
+                    other-strip := TabStrip {
                         tabs: Shell.shade-tabs;
                         active: Shell.shade-active;
                         focused: false;
+                        other: true;
                         pick(id) => {
                             Shell.shade-pick(id);
                         }
@@ -889,13 +977,18 @@ export component EditorArea inherits Rectangle {
                         menu(id, x, y) => {
                             Shell.tab-menu(id, true, x, y);
                         }
+                        drag(id, begun, x, y) => {
+                            Shell.tab-dragged(id, true, begun, x, y);
+                        }
                         dropped(id, x, y) => {
                             Shell.tab-dropped(id, true, x, y);
                         }
                     }
                     Rectangle {
                         if Shell.shade-kind == "file": ShadeView { }
-                        if Shell.shade-kind != "file": PageBody {
+                        // Not while one group shows, when there is no page
+                        // here to make — `PageBody` of nothing is the welcome.
+                        if Shell.split && Shell.shade-kind != "file": PageBody {
                             kind: Shell.shade-kind;
                             title: Shell.shade-title;
                         }

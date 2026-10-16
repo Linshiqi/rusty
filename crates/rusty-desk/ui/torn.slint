@@ -44,6 +44,13 @@ export component TornWindow inherits Window {
     callback close-tab();
     // The tab back among the main window's.
     callback move-back();
+    // The tab carried a few pixels from its press (`begun` the first time),
+    // where the pointer is in this window — beyond it, very likely, over
+    // the main window — and let go of there: onto the main window's strips
+    // or code it goes back in (`src/app/tab_drag.rs`). Escape gives it up.
+    callback tab-drag(bool, length, length);
+    callback tab-dropped(length, length);
+    callback tab-drag-cancel();
 
     // The window took a new size: made on its display, resized, or moved
     // to a display of another scale — its zoom is worked out again, as the
@@ -72,6 +79,15 @@ export component TornWindow inherits Window {
     }
 
     FocusScope {
+        capture-key-pressed(event) => {
+            if (tab-touch.held && tab-touch.carried && event.text == Key.Escape) {
+                tab-touch.carried = false;
+                tab-touch.held = false;
+                root.tab-drag-cancel();
+                return accept;
+            }
+            reject
+        }
         key-pressed(event) => {
             if (root.key(event)) {
                 return accept;
@@ -88,6 +104,40 @@ export component TornWindow inherits Window {
                     Rectangle {
                         width: min(row.preferred-width, 320px);
                         background: Theme.content;
+                        opacity: tab-touch.held && tab-touch.carried ? 0.45 : 1.0;
+                        // Pressed and carried more than four pixels, the tab
+                        // is dragged: the main window draws where it would
+                        // land, as its own tabs' drags do.
+                        tab-touch := TouchArea {
+                            z: -1;
+                            property <bool> held;
+                            property <bool> carried;
+                            property <length> press-x;
+                            property <length> press-y;
+                            moved => {
+                                if (self.held && !self.carried && (abs(self.mouse-x - self.press-x) > 4px || abs(self.mouse-y - self.press-y) > 4px)) {
+                                    self.carried = true;
+                                    root.tab-drag(true, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                } else if (self.held && self.carried) {
+                                    root.tab-drag(false, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                    self.held = true;
+                                    self.carried = false;
+                                    self.press-x = self.mouse-x;
+                                    self.press-y = self.mouse-y;
+                                }
+                                if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                    self.held = false;
+                                    if (self.carried) {
+                                        self.carried = false;
+                                        root.tab-dropped(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                    }
+                                }
+                            }
+                        }
                         row := HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 6px;

@@ -16,6 +16,56 @@ export struct DocTab {
     dirty: bool,
     // `file`, or the page it is: `welcome`, `settings`, …
     kind: string,
+    // As wide as it is drawn, measured by the Rust side
+    // (`src/app/tab_drag.rs`): where a dragged tab lands along a strip is
+    // worked out from the same widths the strip is drawn with.
+    width: length,
+}
+
+// Where everything a dragged tab can land on is in the window, as the
+// editor area laid it out (`EditorArea.tab-geometry`): the groups' panes,
+// how wide the left one is (all of them while one group shows), a strip's
+// height, and how much of each strip's lane shows and how far it is
+// scrolled — the group with the keys' and the other's.
+export struct TabGeometry {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    left: length,
+    strip: length,
+    keys-lane: length,
+    keys-scroll: length,
+    other-lane: length,
+    other-scroll: length,
+}
+
+// A tab being dragged (`src/app/tab_drag.rs`), as this window draws it: its
+// name beside the pointer while the pointer is in the window, the marker in
+// the strip's gap it would go in, the overlay over the code it would take,
+// and a strip to scroll while the pointer is held near an end of it — 1 the
+// group with the keys', 2 the other's, `scroll-dir` -1 towards its start
+// and 1 towards its end. `id` and `other` name the tab when it is one of
+// this window's strips', which draws it faint.
+export struct TabDrag {
+    on: bool,
+    title: string,
+    x: length,
+    y: length,
+    inside: bool,
+    marker: bool,
+    marker-x: length,
+    marker-y: length,
+    marker-h: length,
+    overlay: bool,
+    overlay-x: length,
+    overlay-y: length,
+    overlay-w: length,
+    overlay-h: length,
+    scroll-strip: int,
+    scroll-dir: int,
+    id: string,
+    other: bool,
 }
 
 // A row of the project tree: an entry, or the box a name is typed in
@@ -1524,9 +1574,18 @@ export global Shell {
     callback dock-resized(string /* dock */, length);
     callback pick-tab(string);
     callback close-tab(string);
-    // A tab let go of after a drag, where the pointer was in the window: let
-    // go beyond the window's edge, it moves into a window of its own.
+    // A tab carried a few pixels from where it was pressed — `begun` on the
+    // first move — and where the pointer is in the window; then let go
+    // there: along a strip, onto the other group, onto the right half of
+    // the only group's code, or beyond the window's edge into a window of
+    // its own (`src/app/tab_drag.rs`).
+    callback tab-dragged(string, bool /* the other group's */, bool /* begun */, length /* x */, length /* y */);
     callback tab-dropped(string, bool /* the other group's */, length /* x */, length /* y */);
+    // A strip scrolled under a dragged tab held near its end: where it
+    // would land is worked out again. And Escape, which gives the drag up.
+    callback tab-drag-again();
+    callback tab-drag-cancel();
+    in property <TabDrag> tab-drag;
     // The other group's strip: its group to front, and the tab.
     callback shade-pick(string);
     callback shade-close(string);
