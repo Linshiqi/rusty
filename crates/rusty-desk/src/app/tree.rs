@@ -632,6 +632,9 @@ impl App {
                         project.set_entries(entries);
                     }
                 }
+                // A file made, moved or deleted: read before the watcher
+                // has heard, as the tree is.
+                app.scan_unlinked();
                 match written {
                     Ok(answer) if app.root().as_deref() == Some(root.as_path()) => {
                         then(app, answer)
@@ -1036,6 +1039,7 @@ impl App {
                         }
                         TreeRow {
                             depth: row.depth as i32,
+                            unlinked: !row.dir && state.unlinked.is_dimmed(&row.path),
                             selected,
                             cut: cut
                                 .as_deref()

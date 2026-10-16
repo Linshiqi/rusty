@@ -97,6 +97,10 @@ export global Code {
     in property <bool> block-caret;
     in property <length> caret-width: 2px;
     in property <bool> has-document;
+    // The document is a Rust file no `mod` declares, so in no crate: its
+    // text is drawn faint (`app/unlinked.rs`). What is drawn over the text
+    // — the hover card, the popups, a squiggle — keeps its strength.
+    in property <bool> dim;
     in property <length> content-width: 2000px;
     // The text's size, the one row height every layer reads and the
     // margin's width, set together by `Surface::set_scale` — never
@@ -774,6 +778,8 @@ component RowPaint inherits Rectangle {
     in property <length> gutter;
     // The caret's row: its number is bright.
     in property <bool> current;
+    // The text and its hints faint: a file in no crate.
+    in property <bool> dim;
     // Where the debugger stopped, the whole line.
     if root.line.stopped: Rectangle {
         background: Theme.amber-fill;
@@ -842,7 +848,7 @@ component RowPaint inherits Rectangle {
         x: root.gutter + piece.x;
         height: parent.height;
         text: piece.text;
-        color: Theme.token(piece.kind);
+        color: Theme.token(piece.kind).transparentize(root.dim ? Theme.dimmed : 0);
         font-italic: piece.kind == 4;
         font-family: Theme.mono;
         font-size: Code.font-size;
@@ -858,7 +864,7 @@ component RowPaint inherits Rectangle {
         background: Theme.hover;
         Text {
             text: hint.text;
-            color: Theme.label-3;
+            color: Theme.label-3.transparentize(root.dim ? Theme.dimmed : 0);
             font-family: Theme.mono;
             font-size: Code.font-size;
             horizontal-alignment: center;
@@ -873,6 +879,8 @@ component RowPaint inherits Rectangle {
 export global Shade {
     in property <[Row]> rows;
     in property <bool> has-document;
+    // Its file is in no crate: drawn faint, as `Code.dim`.
+    in property <bool> dim;
     in property <length> content-width: 2000px;
     in-out property <length> scroll-y;
     in-out property <length> scroll-x;
@@ -909,6 +917,7 @@ export component ShadeView inherits Rectangle {
             RowPaint {
                 line: shaded;
                 gutter: root.gutter;
+                dim: Shade.dim;
             }
             TouchArea {
                 mouse-cursor: text;
@@ -997,6 +1006,7 @@ export component CodeView inherits Rectangle {
                 line: row;
                 gutter: root.gutter;
                 current: index == Code.caret-line;
+                dim: Code.dim;
             }
             TouchArea {
                 x: 0;
@@ -1247,7 +1257,7 @@ export component CodeView inherits Rectangle {
                 x: root.gutter + piece.x + list.content-x;
                 height: parent.height;
                 text: piece.text;
-                color: Theme.token(piece.kind);
+                color: Theme.token(piece.kind).transparentize(Code.dim ? Theme.dimmed : 0);
                 font-italic: piece.kind == 4;
                 font-family: Theme.mono;
                 font-size: Code.font-size;
@@ -1291,6 +1301,8 @@ export component CodeView inherits Rectangle {
             source: Code.minimap;
             image-fit: fill;
             image-rendering: pixelated;
+            // The text's miniature, as faint as the text.
+            opacity: Code.dim ? 1 - Theme.dimmed : 1;
         }
         Rectangle {
             y: Code.minimap-slider-top;

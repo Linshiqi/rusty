@@ -31,6 +31,7 @@ impl App {
     pub(super) fn start_servers(self: &Rc<Self>) {
         self.servers.stop();
         self.problems.borrow_mut().clear();
+        self.unlinked_unheard();
         let target = {
             let mut state = self.state.borrow_mut();
             state.server = ServerStatus {
@@ -123,6 +124,7 @@ impl App {
                     }
                 }
                 self.editor.problems_changed(&path);
+                self.unlinked_heard(&path);
                 self.problems_soon();
                 return;
             }

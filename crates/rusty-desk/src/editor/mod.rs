@@ -43,7 +43,7 @@ pub(crate) use rows::kind as token_kind;
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     ops::Range,
     rc::{Rc, Weak},
     sync::Arc,
@@ -123,7 +123,12 @@ struct Common {
     servers: Rc<Servers>,
     problems: Problems,
     views: Rc<Views>,
+    dimmed: Dimmed,
 }
+
+/// The files whose text every view draws faint: Rust files no `mod`
+/// declares, which the app works out (`app/unlinked.rs`).
+type Dimmed = Rc<RefCell<BTreeSet<String>>>;
 
 /// Who is told after an edit, with the edited document's path.
 type OnEdit = RefCell<Option<Box<dyn Fn(&str)>>>;
@@ -244,6 +249,8 @@ pub struct Surface {
     modal: modal::Modal,
     /// The other editor group's file, drawn beside this one.
     shade: shade::Shade,
+    /// The files drawn faint, shared by every surface.
+    dimmed: Dimmed,
 }
 
 impl Surface {
@@ -263,6 +270,7 @@ impl Surface {
             servers,
             problems,
             views: Rc::default(),
+            dimmed: Rc::default(),
         };
         Surface::build(&strong, Host::Main(window.as_weak()), common)
     }
@@ -280,6 +288,7 @@ impl Surface {
             servers: self.servers.clone(),
             problems: self.problems.clone(),
             views: self.views.clone(),
+            dimmed: self.dimmed.clone(),
         };
         Surface::build(&strong, Host::Torn(window.as_weak()), common)
     }
@@ -294,6 +303,7 @@ impl Surface {
             servers,
             problems,
             views,
+            dimmed,
         } = common;
         let current: Shared = Rc::default();
         let found: Rc<RefCell<find::Marks>> = Rc::default();
@@ -366,6 +376,7 @@ impl Surface {
                 doc: shade_doc,
                 rows: shade_rows,
             },
+            dimmed,
         });
         surface.wire(strong);
         surface
@@ -634,6 +645,7 @@ impl Surface {
         if let Some(window) = self.window.upgrade() {
             let code = window.global::<Code>();
             code.set_has_document(true);
+            code.set_dim(self.dimmed.borrow().contains(path));
             code.set_content_width(self.widest.get() + 200.0);
             code.set_scroll_y(shade::within(scroll.0));
             code.set_scroll_x(scroll.1);
@@ -762,8 +774,46 @@ impl Surface {
         self.rest_nowhere();
         self.rows.reset();
         if let Some(window) = self.window.upgrade() {
-            window.global::<Code>().set_has_document(false);
+            let code = window.global::<Code>();
+            code.set_has_document(false);
+            code.set_dim(false);
         }
+    }
+
+    /// The files to draw faint — Rust files no `mod` declares — and every
+    /// view, in every window, drawn to match: the text of one it shows goes
+    /// faint, and of one no longer among them comes back.
+    pub fn set_dimmed(&self, dimmed: BTreeSet<String>) {
+        *self.dimmed.borrow_mut() = dimmed;
+        for view in self.views.live() {
+            view.draw_dim();
+        }
+    }
+
+    /// This view, and in the main window the other group's view, faint or
+    /// not by whether the file each shows is among the dimmed.
+    fn draw_dim(&self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let dimmed = self.dimmed.borrow();
+        let faint = |doc: &Shared| {
+            doc.borrow()
+                .as_ref()
+                .is_some_and(|doc| dimmed.contains(&doc.borrow().path))
+        };
+        window.global::<Code>().set_dim(faint(&self.current));
+        if let Strong::Main(main) = &window {
+            main.global::<crate::Shade>()
+                .set_dim(faint(&self.shade.doc));
+        }
+    }
+
+    /// Whether the document on screen is drawn faint, for the probe.
+    pub fn dimmed_now(&self) -> bool {
+        self.window
+            .upgrade()
+            .is_some_and(|window| window.global::<Code>().get_dim())
     }
 
     pub fn close(&self, path: &str) {

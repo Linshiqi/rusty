@@ -8,7 +8,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
-import { IconButton } from "widgets.slint";
+import { IconButton, Tip } from "widgets.slint";
 import { Code, CodeView } from "editor.slint";
 import { Tooltip } from "chrome.slint";
 
@@ -33,6 +33,9 @@ export component TornWindow inherits Window {
     in property <string> name;
     in property <string> hint;
     in property <bool> dirty;
+    // A Rust file no `mod` declares: its name greyed, as on the main
+    // window's strip, and its code faint (`Code.dim`).
+    in property <bool> unlinked;
     // The caret as people number it, Vim's mode when Vim is on, and what the
     // last key here could not do.
     in property <string> caret;
@@ -85,16 +88,34 @@ export component TornWindow inherits Window {
                 background: Theme.window;
                 HorizontalLayout {
                     alignment: start;
-                    Rectangle {
+                    tab := Rectangle {
                         width: min(row.preferred-width, 320px);
                         background: Theme.content;
+                        // Why its name is grey, once the pointer rests on it.
+                        name-touch := TouchArea {
+                            changed has-hover => {
+                                if (!self.has-hover && root.unlinked) {
+                                    Tip.shown = false;
+                                }
+                            }
+                        }
+                        Timer {
+                            interval: 600ms;
+                            running: name-touch.has-hover && root.unlinked && !Tip.shown;
+                            triggered => {
+                                Tip.text = @tr("files.unlinked");
+                                Tip.x = tab.absolute-position.x;
+                                Tip.y = tab.absolute-position.y + tab.height + 4px;
+                                Tip.shown = true;
+                            }
+                        }
                         row := HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 6px;
                             spacing: 6px;
                             Text {
                                 text: root.name;
-                                color: Theme.label;
+                                color: root.unlinked ? Theme.label-3 : Theme.label;
                                 font-size: Theme.small;
                                 vertical-alignment: center;
                             }

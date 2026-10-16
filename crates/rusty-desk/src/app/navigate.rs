@@ -507,6 +507,11 @@ impl App {
     /// holds its file relative to the project.
     fn reread(self: &Rc<Self>, paths: Vec<String>) {
         let Some(root) = self.root() else { return };
+        // A fix that wrote a `mod` line — rust-analyzer's own for a file in
+        // no crate — is read before the watcher hears of it.
+        if super::unlinked::touches_rust(&paths) {
+            self.scan_unlinked();
+        }
         let open: Vec<String> = paths
             .iter()
             .map(|path| within(&root, path).unwrap_or_else(|| path.clone()))
