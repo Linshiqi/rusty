@@ -18,7 +18,7 @@ use std::{collections::HashMap, path::PathBuf, rc::Rc};
 use rusty_dbg::{AnySession, DapLaunch, DapSession, Debugger, Events, Launch, Target};
 use rusty_edit::testrun::{Heard, Reader, Verdict};
 use rusty_edit::{Runnable, RunnableKind};
-use rusty_embed::{CommandPlan, host_debug};
+use rusty_embed::{CommandPlan, activity::Kind, host_debug};
 use rusty_i18n::t;
 
 use super::App;
@@ -76,7 +76,9 @@ impl App {
             let plan = CommandPlan::new("cargo", args, String::new());
             // A run of its own in an empty dock, as rust-analyzer's
             // runnables clear their terminal.
-            app.runner.clear();
+            if !app.begin_run(Kind::Test) {
+                return;
+            }
             app.state.borrow_mut().testing.reader = Some(Reader::default());
             app.run(&plan, Some(root), |app, _| app.test_ended());
         });
@@ -90,7 +92,10 @@ impl App {
                 vec!["run".into(), "--example".into(), name],
                 String::new(),
             );
-            app.runner.clear();
+            // Run from its lens as a test is, and afresh as a test is.
+            if !app.begin_run(Kind::Test) {
+                return;
+            }
             app.run(&plan, Some(root), |_, _| {});
         });
     }
@@ -167,7 +172,11 @@ impl App {
                 let plan = host_debug::build_plan();
                 let built_root = root.clone();
                 app.write_all_then(move |app| {
-                    app.runner.clear();
+                    // Afresh once: the build, then the debugger on what it
+                    // built, are one run.
+                    if !app.begin_run(Kind::Debug) {
+                        return;
+                    }
                     app.run(&plan, Some(built_root), move |app, ended| {
                         if ended != Ended::Done {
                             return;

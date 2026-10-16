@@ -246,7 +246,8 @@ impl App {
             }
             "output" => {
                 let lines = self.window()?.global::<Shell>().get_output();
-                if lines.row_count() == 0 {
+                // A filter that hides every line still leaves them to copy.
+                if self.runner.counts().1 == 0 {
                     return None;
                 }
                 let line = row.filter(|&at| at < lines.row_count());
@@ -370,8 +371,9 @@ impl App {
         }
     }
 
-    /// The keys back to the terminal, which its menu took them from.
-    fn term_refocus(&self) {
+    /// The keys back to the terminal, which its menu took them from — or
+    /// Ctrl+` gives them to.
+    pub(super) fn term_refocus(&self) {
         if let Some(window) = self.window() {
             let shell = window.global::<Shell>();
             shell.set_term_focus(shell.get_term_focus().wrapping_add(1));
@@ -418,10 +420,10 @@ impl App {
                             copy_text(&line.text);
                         }
                     }
-                    "copy-all" => {
-                        let all: Vec<String> = lines.iter().map(|l| l.text.to_string()).collect();
-                        copy_text(&all.join("\n"));
-                    }
+                    // Every line kept, as VS Code's Copy All is under a
+                    // filter: the filter decides what is drawn, not what
+                    // the run said.
+                    "copy-all" => copy_text(&self.runner.all_text()),
                     "clear" => self.runner.clear(),
                     _ => {}
                 }

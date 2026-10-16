@@ -113,6 +113,11 @@
 //! `Insert mod …;` by its click and photographs the file no longer dim once
 //! the parent's edit has landed — on a copy, since the fix writes the
 //! parent.
+//! With `RUSTY_PROBE_OUTPUT`, on a copy of `draw-vectors` opened at
+//! `src/lib.rs`, it breaks the library, builds, mends it and runs again —
+//! a build, a test's lens, an example's ▶ Run — and says what the dock and
+//! Problems kept of the first run; then filters both and presses Ctrl+`
+//! from the code and from the terminal (`probe_output.rs`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -200,6 +205,7 @@ pub fn start(window: &AppWindow) {
     let zooming = std::env::var_os("RUSTY_PROBE_ZOOM").is_some();
     let menus = std::env::var_os("RUSTY_PROBE_MENUS").is_some();
     let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
+    let outputs = std::env::var_os("RUSTY_PROBE_OUTPUT").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
     // variables, so it probes itself into a directory of its own.
@@ -466,7 +472,14 @@ pub fn start(window: &AppWindow) {
                 if unlinking {
                     step.set(7100);
                 }
+                if outputs {
+                    step.set(7500);
+                }
             }
+            // Output and Problems across runs, their filter, and Ctrl+`
+            // (`probe_output.rs`).
+            7500..=7529 if outputs => crate::probe_output::reproduce(n, &surfaces),
+            7530..=7699 if outputs => crate::probe_output::filter_and_terminal(n, &surfaces),
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),

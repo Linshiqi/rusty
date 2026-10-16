@@ -5,7 +5,7 @@ import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
 import { IconButton, RowButton, Caption, Field, Tip } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
-import { Shell, PanelTab, TreeRow, ProblemRow } from "shell.slint";
+import { Shell, PanelTab, TreeRow, ProblemRow, FilterState } from "shell.slint";
 import { BoardPanel } from "board.slint";
 import { PlotPanel } from "plot.slint";
 import { WavesPanel } from "waves.slint";
@@ -353,9 +353,123 @@ component ProjectTree inherits Rectangle {
     }
 }
 
+// The filter box in the bottom dock's title row, for the panel in front,
+// VS Code's: the text typed narrows the panel to the rows holding it, in
+// any case — judged on committed text, so pinyin on its way to 飞 never
+// empties the panel — Escape clears it, and the count says how many rows
+// show out of how many. The three switches beside it narrow to errors, to
+// warnings and to the rest; none on is every level.
+component PanelFilter inherits HorizontalLayout {
+    in property <string> panel;
+    in property <FilterState> state;
+    in-out property <string> text;
+    spacing: 1px;
+    alignment: end;
+
+    // The box takes the keys when asked: Ctrl+F in its panel.
+    property <int> focus-tick: Shell.filter-focus;
+    changed focus-tick => {
+        input.focus();
+        input.select-all();
+    }
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        width: 210px;
+        height: 24px;
+        border-radius: 5px;
+        background: Theme.sunken;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.rust : Theme.line;
+        clip: true;
+        Icon {
+            x: 6px;
+            path: Icons.filter;
+            size: 12px;
+            color: root.text != "" ? Theme.rust : Theme.label-3;
+        }
+        if root.text == "" && input.preedit-text == "": Text {
+            x: 23px;
+            width: parent.width - 30px;
+            text: @tr("desk.filter-placeholder");
+            color: Theme.label-3;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        input := TextInput {
+            x: 23px;
+            width: parent.width - 23px - (count.visible ? count.preferred-width + 10px : 6px);
+            height: parent.height;
+            text <=> root.text;
+            color: Theme.label;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            single-line: true;
+            edited => {
+                if (self.preedit-text == "") {
+                    Shell.filter-edited(root.panel, self.text);
+                }
+            }
+            key-pressed(event) => {
+                if (self.preedit-text != "") {
+                    return reject;
+                }
+                if (event.text == Key.Escape && self.text != "") {
+                    self.text = "";
+                    Shell.filter-edited(root.panel, "");
+                    return accept;
+                }
+                reject
+            }
+        }
+        count := Text {
+            x: parent.width - self.width - 6px;
+            visible: root.state.count != "";
+            text: root.state.count;
+            color: Theme.label-3;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+    }
+    IconButton {
+        y: 3px;
+        icon: Icons.close;
+        glyph: 13px;
+        tint: Theme.crimson;
+        active: root.state.errors;
+        tip: @tr("desk.filter-errors");
+        clicked => {
+            Shell.filter-level(root.panel, "errors");
+        }
+    }
+    IconButton {
+        y: 3px;
+        icon: Icons.warn;
+        glyph: 13px;
+        tint: Theme.amber;
+        active: root.state.warnings;
+        tip: @tr("desk.filter-warnings");
+        clicked => {
+            Shell.filter-level(root.panel, "warnings");
+        }
+    }
+    IconButton {
+        y: 3px;
+        icon: Icons.output;
+        glyph: 13px;
+        active: root.state.other;
+        tip: @tr("desk.filter-other");
+        clicked => {
+            Shell.filter-level(root.panel, "other");
+        }
+    }
+}
+
 // What the window ran, as it printed it: the command first, errors in
 // red and warnings in amber. It follows the end while the end is in
-// view, and stays where it was put while somebody reads back.
+// view, and stays where it was put while somebody reads back. A click
+// gives it the keys, and Ctrl+F then goes to the filter box.
 component OutputPanel inherits Rectangle {
     property <int> count: Shell.output.length;
     property <bool> follow: true;
@@ -364,8 +478,16 @@ component OutputPanel inherits Rectangle {
             list.content-y = min(0px, list.visible-height - list.content-height);
         }
     }
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (Shell.panel-key("output", event)) {
+                return accept;
+            }
+            reject
+        }
+    }
     if Shell.output.length == 0: Text {
-        text: @tr("desk.output-none");
+        text: Shell.output-filter.count != "" ? @tr("desk.filter-none") : @tr("desk.output-none");
         color: Theme.label-3;
         font-size: Theme.small;
         horizontal-alignment: center;
@@ -374,6 +496,9 @@ component OutputPanel inherits Rectangle {
     // A right-click where no line is.
     TouchArea {
         pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                keys.focus();
+            }
             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                 Shell.surface-menu("output", "", -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
             }
@@ -385,17 +510,37 @@ component OutputPanel inherits Rectangle {
         scrolled => {
             root.follow = self.content-y <= self.visible-height - self.content-height + 4px;
         }
-        for line[index] in Shell.output: Rectangle {
+        for line[index] in Shell.output: row := Rectangle {
+            property <color> ink: line.kind == 2 ? Theme.crimson : line.kind == 3 ? Theme.amber : line.kind == 4 ? Theme.patina : line.kind == 1 ? Theme.label-2 : Theme.label;
             height: 18px;
             background: link.has-hover && line.path != "" ? Theme.hover : transparent;
-            Text {
+            if line.pieces.length == 0: Text {
                 x: 10px;
                 text: line.text;
-                color: line.kind == 2 ? Theme.crimson : line.kind == 3 ? Theme.amber : line.kind == 4 ? Theme.patina : line.kind == 1 ? Theme.label-2 : Theme.label;
+                color: row.ink;
                 font-weight: line.kind == 1 ? 600 : 400;
                 font-family: Theme.mono;
                 font-size: Theme.small;
                 vertical-alignment: center;
+            }
+            // Under the filter: the line in pieces, what the box holds
+            // marked as a find's match is.
+            if line.pieces.length > 0: HorizontalLayout {
+                x: 10px;
+                alignment: start;
+                for piece in line.pieces: Rectangle {
+                    width: piece-text.preferred-width;
+                    background: piece.hit ? Theme.find-match : transparent;
+                    border-radius: 2px;
+                    piece-text := Text {
+                        text: piece.text;
+                        color: row.ink;
+                        font-weight: line.kind == 1 ? 600 : 400;
+                        font-family: Theme.mono;
+                        font-size: Theme.small;
+                        vertical-alignment: center;
+                    }
+                }
             }
             // A line that names a place goes there; any line has the menu.
             link := TouchArea {
@@ -406,6 +551,9 @@ component OutputPanel inherits Rectangle {
                     }
                 }
                 pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        keys.focus();
+                    }
                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                         Shell.surface-menu("output", "", index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                     }
@@ -428,14 +576,30 @@ component OutputPanel inherits Rectangle {
 }
 
 // What the language servers found: each file, then its problems, worst
-// first. A click goes to the problem.
+// first. A click goes to the problem. The filter box narrows it as it
+// narrows Output, and Ctrl+F while it has the keys goes there.
 component ProblemsPanel inherits Rectangle {
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (Shell.panel-key("problems", event)) {
+                return accept;
+            }
+            reject
+        }
+    }
     if Shell.problems.length == 0: Text {
-        text: @tr("desk.problems-none");
+        text: Shell.problems-filter.count != "" ? @tr("desk.filter-none") : @tr("desk.problems-none");
         color: Theme.label-3;
         font-size: Theme.small;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+    TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                keys.focus();
+            }
+        }
     }
     ListView {
         for row[index] in Shell.problems: Rectangle {
@@ -448,6 +612,9 @@ component ProblemsPanel inherits Rectangle {
                     Shell.problem-click(index);
                 }
                 pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        keys.focus();
+                    }
                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                         Shell.surface-menu("problems", "", index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                     }
@@ -564,6 +731,18 @@ export component BottomDock inherits Rectangle {
                 dock: "bottom";
                 panels: Shell.bottom-panels;
                 front: Shell.bottom-front;
+            }
+            // Each panel's own box, so a filter on Output is still there
+            // when Output comes back to front.
+            if Shell.bottom-front == "output": PanelFilter {
+                panel: "output";
+                state: Shell.output-filter;
+                text <=> Shell.output-filter-text;
+            }
+            if Shell.bottom-front == "problems": PanelFilter {
+                panel: "problems";
+                state: Shell.problems-filter;
+                text <=> Shell.problems-filter-text;
             }
             if Shell.bottom-front == "output" && Shell.running: IconButton {
                 y: 3px;

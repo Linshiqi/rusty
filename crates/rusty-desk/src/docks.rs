@@ -110,6 +110,31 @@ pub fn hide(dock: &mut DockLayout, panel: &str, listed: &[&str]) -> bool {
     true
 }
 
+/// What Ctrl+` does, VS Code's Toggle Terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalToggle {
+    /// The bottom dock opened, or turned to the terminal, with the keys in
+    /// it.
+    Show,
+    /// The terminal is in front already and the keys are elsewhere: the
+    /// keys to it.
+    Focus,
+    /// The terminal has the keys: the dock put away, and the keys back to
+    /// the code.
+    Hide,
+}
+
+/// The toggle, from whether the bottom dock is open, the panel in front of
+/// it and whether the terminal has the keys. Hidden only from inside it, so
+/// a key pressed in the code always ends with the keys in the terminal.
+pub fn toggle_terminal(open: bool, front: &str, keys_in_terminal: bool) -> TerminalToggle {
+    match (open && front == "terminal", keys_in_terminal) {
+        (true, true) => TerminalToggle::Hide,
+        (true, false) => TerminalToggle::Focus,
+        (false, _) => TerminalToggle::Show,
+    }
+}
+
 /// The icons a dock's tab can wear, by the name `ui/icons.slint` gives them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Glyph {
@@ -190,5 +215,23 @@ mod tests {
         assert_eq!(Dock::Left.front(&layout), "git");
         layout.left.front = Some("gone".into());
         assert_eq!(Dock::Left.front(&layout), "project");
+    }
+
+    /// VS Code's Toggle Terminal: from a closed dock or another panel the
+    /// terminal comes forward with the keys; in front without them it takes
+    /// them; with them, the dock goes.
+    #[test]
+    fn ctrl_backquote_shows_focuses_or_hides_the_terminal() {
+        use TerminalToggle::*;
+        assert_eq!(toggle_terminal(false, "terminal", false), Show);
+        assert_eq!(toggle_terminal(false, "output", false), Show);
+        assert_eq!(
+            toggle_terminal(false, "terminal", true),
+            Show,
+            "a closed dock's terminal has no keys to give back"
+        );
+        assert_eq!(toggle_terminal(true, "output", false), Show);
+        assert_eq!(toggle_terminal(true, "terminal", false), Focus);
+        assert_eq!(toggle_terminal(true, "terminal", true), Hide);
     }
 }

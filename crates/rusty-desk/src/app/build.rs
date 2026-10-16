@@ -117,9 +117,13 @@ impl App {
                 },
                 move |app, planned| match planned {
                     Ok((firmware, chip, wrote, plans)) => {
-                        app.runner.clear();
-                        app.state.borrow_mut().build_log = BuildLog::default();
-                        app.sync_problems();
+                        // A fresh dock and Problems, once: what a flash or
+                        // a board's debug goes on to do after this build
+                        // is the same run.
+                        if !app.begin_run(Kind::Build) {
+                            then(app, false);
+                            return;
+                        }
                         app.begin(Kind::Build, None);
                         if let Some(file) = wrote {
                             app.runner

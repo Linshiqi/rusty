@@ -139,6 +139,9 @@ pub const ALL: &[Action] = &[
     action("dock.left", "desk.dock-left", Some("Ctrl+B")),
     action("dock.bottom", "desk.dock-bottom", Some("Ctrl+J")),
     action("dock.right", "desk.dock-right", Some("Ctrl+Alt+B")),
+    // VS Code's View: Toggle Terminal, and never a key the shell is sent
+    // (`SKIPS_SHELL`).
+    action("terminal.toggle", "desk.terminal-toggle", Some("Ctrl+`")),
     action("view.zoom-in", "desk.zoom-in", Some("Ctrl+=")),
     action("view.zoom-out", "desk.zoom-out", Some("Ctrl+-")),
     action("view.zoom-reset", "desk.zoom-reset", Some("Ctrl+0")),
@@ -243,6 +246,13 @@ pub const ALL: &[Action] = &[
 pub fn by_id(id: &str) -> Option<&'static Action> {
     ALL.iter().find(|a| a.id == id)
 }
+
+/// The actions whose keys the terminal hands to the window rather than to
+/// the shell, VS Code's `terminal.integrated.commandsToSkipShell`: Ctrl+`
+/// pressed in the terminal is the terminal put away, never a backquote
+/// typed at the prompt. Whatever key such an action is rebound to goes the
+/// same way.
+pub const SKIPS_SHELL: &[&str] = &["terminal.toggle"];
 
 /// The most strokes a chord takes: VS Code's `Ctrl+K Ctrl+S`.
 pub const STROKES: usize = 2;
@@ -551,6 +561,20 @@ mod tests {
         assert_eq!(keys.bound_to("F1").map(|a| a.id), Some("palette.open"));
         keys.set("run.build", "F1".into());
         assert_eq!(keys.bound_to("F1").map(|a| a.id), Some("run.build"));
+    }
+
+    /// Ctrl+` is the backquote key with Ctrl, spelled as a press of it
+    /// spells it, and it is the terminal's toggle out of the box — an
+    /// action the shell never hears.
+    #[test]
+    fn ctrl_backquote_toggles_the_terminal() {
+        let keys = Keymap::default();
+        let pressed = crate::keys::chord("`", true, false, false, false);
+        assert_eq!(pressed.as_deref(), Some("Ctrl+`"));
+        let action = keys.bound_to(&pressed.unwrap()).map(|a| a.id);
+        assert_eq!(action, Some("terminal.toggle"));
+        assert!(SKIPS_SHELL.iter().all(|id| by_id(id).is_some()));
+        assert!(SKIPS_SHELL.contains(&"terminal.toggle"));
     }
 
     /// Every name is a key the catalogue has, or the palette shows a key.

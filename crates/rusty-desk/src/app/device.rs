@@ -427,6 +427,12 @@ impl App {
                     FlashAction::Monitor => Kind::Monitor,
                     _ => Kind::Flash,
                 };
+                // A monitor is a run of its own; a flash's write is the
+                // second step of the run its build began, and the build's
+                // lines stay above it.
+                if kind == Kind::Monitor && !app.begin_run(kind) {
+                    return;
+                }
                 app.begin(kind, Some(target));
                 let started = app.run(&plan, Some(dir), |app, ended| app.board_ended(ended));
                 if !started {
@@ -441,6 +447,11 @@ impl App {
         const BAUD: u32 = 115_200;
         match rusty_embed::serial::open(&port, BAUD) {
             Ok(link) => {
+                // A port that would not open is a note, and the dock is
+                // left as it was; one that did is a run of its own.
+                if !self.begin_run(Kind::Link) {
+                    return;
+                }
                 let (tx, rx) = std::sync::mpsc::channel();
                 let (input, stopper) = (link.input(), link.stopper());
                 std::thread::Builder::new()
