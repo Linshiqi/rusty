@@ -38,6 +38,7 @@ mod preview;
 mod problems;
 
 pub use problems::is_problem;
+mod reach;
 mod resting;
 mod rows;
 mod shade;
@@ -222,6 +223,9 @@ pub struct Surface {
     painting: Rc<RefCell<HashSet<String>>>,
     drag: Cell<Option<Drag>>,
     press: Cell<Option<Press>>,
+    /// The caret is being moved by the pointer, or by an edit nobody typed
+    /// (a format, the disk): it is shown, and given no room (`reveal`).
+    unkeyed: Cell<bool>,
     /// The last line copied with nothing selected, which pastes as a line.
     copied_line: RefCell<Option<String>>,
     /// The lines drawn with marks, to redraw when the cursors leave them.
@@ -359,6 +363,7 @@ impl Surface {
             painting,
             drag: Cell::new(None),
             press: Cell::new(None),
+            unkeyed: Cell::new(false),
             copied_line: RefCell::default(),
             marked: RefCell::new(0..0),
             widest: Cell::new(0.0),
@@ -585,7 +590,10 @@ impl Surface {
     /// redrawn as a key's edit is; off screen it is painted and said.
     fn edited(&self, doc: &Rc<RefCell<Document>>, change: Change) {
         if self.doc().is_some_and(|current| Rc::ptr_eq(&current, doc)) {
+            // Nobody typed it, so the caret is not shown with room.
+            let was = self.unkeyed.replace(true);
             self.after_edit(doc, change);
+            self.unkeyed.set(was);
         } else {
             self.paint(doc);
             let path = doc.borrow().path.clone();
@@ -1632,11 +1640,16 @@ impl Surface {
         if kind == 0 {
             self.link_away();
         }
+        // A press or a drag shows the caret where it is put and no more: a
+        // click on the view's last row that scrolled it would put the
+        // second click of a double-click on another line.
+        self.unkeyed.set(true);
         match kind {
             0 => self.press(&doc, line, x, at, shift, alt),
             1 => self.drag_to(&doc, at),
             _ => self.drag.set(None),
         }
+        self.unkeyed.set(false);
     }
 
     fn press(
@@ -1877,13 +1890,27 @@ impl Surface {
         };
         let code = window.global::<Code>();
         let row = code.get_row_height();
-        let screen = self.doc().map_or(line, |doc| doc.borrow().row_of(line));
-        let top = screen as f32 * row;
-        let (view, scrolled) = (code.get_view_height(), -code.get_scroll_y());
-        if top < scrolled {
+        let (screen, rows) = self.doc().map_or((line, line + 1), |doc| {
+            let d = doc.borrow();
+            (d.row_of(line), d.rows())
+        });
+        // With room round it when a key moved it; on screen and no more
+        // when the pointer did, or an edit nobody typed.
+        let room = if self.unkeyed.get() {
+            0
+        } else {
+            reach::ROOM_ROWS
+        };
+        let view = code.get_view_height();
+        if let Some(top) = reach::reveal(
+            -code.get_scroll_y(),
+            screen as f32 * row,
+            row,
+            view,
+            room,
+            reach::deepest(rows, row, view),
+        ) {
             code.set_scroll_y(-top);
-        } else if view > 0.0 && top + row > scrolled + view {
-            code.set_scroll_y(-(top + row - view));
         }
         // Sideways: keep the caret a few characters in from either edge,
         // past the gutter.

@@ -157,6 +157,7 @@ impl Surface {
             rows,
             row_px,
             0.0,
+            f64::from(super::reach::room(row_px as f32, view as f32)),
             -f64::from(code.get_scroll_y()),
             view,
             height,
@@ -243,12 +244,17 @@ impl Surface {
             rows,
             row_px,
             0.0,
+            f64::from(super::reach::room(row_px as f32, view as f32)),
             -f64::from(code.get_scroll_y()),
             view,
             view,
         );
         let top = minimap::scroll_for(f64::from(y), at, row_px, 0.0, view);
-        let most = (f64::from(rows) * row_px - view).max(0.0);
+        let most = f64::from(super::reach::deepest(
+            rows as usize,
+            row_px as f32,
+            view as f32,
+        ));
         code.set_scroll_y(-(top.min(most)) as f32);
         self.view_changed();
     }

@@ -863,6 +863,26 @@ tests green, and CLAUDE.md saying how it works.
    again three ways, filters both panels and presses Ctrl+` from the code
    and from the terminal.
 
+   Then two more from the side-by-side comparison with VS Code, for
+   v0.7.1. The code view had no room below its last line, so typing at the
+   end of a file was typing on the view's edge: it now scrolls until the
+   last line is at the top, VS Code's `scrollBeyondLastLine`, and a key
+   keeps the caret three rows off either edge, its
+   `cursorSurroundingLines` — a click does not, nor an edit nobody typed.
+   Slint's ListView scrolls a view past its last row back, so the code's
+   list is `ui/listview.slint`, a ListView by the name the compiler looks
+   for: the standard scroll view and bars over the rows and the room, and
+   the runtime told to fill only the rows that are left. The room is space,
+   never a row; how far down is `lowest` there and `editor/reach.rs` in
+   Rust, the minimap counting the room as blank rows. And the hover card's
+   documentation is drawn as the Markdown page draws blocks, read as
+   rustdoc reads a doc comment (`markdown::doc_blocks`: links only to the
+   web, an intra-doc name as its text) — `StyledText` alone refused the
+   headings and lists every std doc has and showed the source. The probe's
+   `RUSTY_PROBE_ROOM` scrolls past the end of a long file, types a dozen
+   lines at its very end, walks the arrows down it, clicks the view's last
+   row, and photographs the card on `true` and on `sqrt`.
+
 ## Decided
 
 - **Shipping is our own, not a packager's.** `cargo-packager` was the

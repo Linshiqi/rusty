@@ -26,7 +26,7 @@ use std::{
 
 use rusty_i18n::t;
 use rusty_lsp::{CodeActionFix, CodeActions, FileDiagnostic, HoverInfo};
-use slint::{Model, ModelRc, StyledText, Timer, TimerMode, VecModel};
+use slint::{Model, ModelRc, Timer, TimerMode, VecModel};
 
 use super::{Surface, asks::Asks, is_problem, rows};
 use crate::{Code, HoverFix, HoverProblem, Row, language};
@@ -100,13 +100,18 @@ pub fn problems_at<'a>(
     found
 }
 
-/// A hover's Markdown taken apart: its code blocks, with the language each
-/// is fenced as, and the prose between them.
+/// A hover's Markdown taken apart: the code blocks it opens with — the
+/// signature, with the language each is fenced as — and the rest, its
+/// documentation, as the server wrote it: the headings, lists and examples
+/// of a doc comment, drawn as Markdown (`markdown::doc_blocks`). An example
+/// is the documentation's, not the signature's; a hover that opens with
+/// words, as clangd's does, is documentation from its first line.
 pub fn split(markdown: &str) -> (Vec<(String, String)>, String) {
     let mut code = Vec::new();
-    let mut prose = String::new();
     let mut fence: Option<(String, String)> = None;
-    for line in markdown.lines() {
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut docs = lines.len();
+    for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
         match &mut fence {
             Some(_) if trimmed.starts_with("```") => {
@@ -123,22 +128,26 @@ pub fn split(markdown: &str) -> (Vec<(String, String)>, String) {
                     String::new(),
                 ));
             }
+            // rust-analyzer rules the signature off from the docs with `---`.
+            None if trimmed.is_empty() || trimmed == "---" => {}
             None => {
-                prose.push_str(line);
-                prose.push('\n');
+                docs = index;
+                break;
             }
         }
     }
     if let Some((lang, body)) = fence {
         code.push((lang, body.trim_end_matches('\n').to_string()));
     }
-    // rust-analyzer rules the signature off from the docs with `---`.
-    let prose = prose
-        .lines()
-        .filter(|line| line.trim() != "---")
-        .collect::<Vec<_>>()
-        .join("\n");
-    (code, prose.trim().to_string())
+    let mut prose: Vec<&str> = lines[docs..].to_vec();
+    // A rule closing the last section rules off nothing.
+    while prose
+        .last()
+        .is_some_and(|l| l.trim().is_empty() || l.trim() == "---")
+    {
+        prose.pop();
+    }
+    (code, prose.join("\n").trim().to_string())
 }
 
 impl Surface {
@@ -399,6 +408,8 @@ impl Surface {
             }))
             .collect();
         let (blocks, prose) = said.map(split).unwrap_or_default();
+        // A block fenced as nothing is the document's own language.
+        let own = language::of(&doc.borrow().path).map_or("text", |l| l.name);
         let metrics = self.metrics.borrow();
         // A message as wide as its widest line, beside the icon's column,
         // so `left` and `right` are not wrapped apart.
@@ -409,12 +420,7 @@ impl Surface {
             .fold(0.0, f32::max);
         let mut code_rows: Vec<Row> = Vec::new();
         for (lang, body) in &blocks {
-            // A block fenced as nothing is the document's own language.
-            let lang = if lang.is_empty() {
-                language::of(&doc.borrow().path).map_or("text", |l| l.name)
-            } else {
-                lang.as_str()
-            };
+            let lang = if lang.is_empty() { own } else { lang.as_str() };
             for line in self
                 .files
                 .highlight_snippet(lang, body)
@@ -426,11 +432,13 @@ impl Surface {
                 code_rows.push(rows::painted_row(&metrics, &line));
             }
         }
+        // Read as the Markdown page reads its blocks: `StyledText` alone
+        // refuses a heading or a list, which every std doc has, and the
+        // card then showed the source.
         let docs = if prose.is_empty() {
-            StyledText::default()
+            ModelRc::default()
         } else {
-            StyledText::from_markdown(&prose)
-                .unwrap_or_else(|_| StyledText::from_plain_text(&prose))
+            crate::app::doc_blocks(&self.files, &prose, own)
         };
         let (line_text_x, has_any, row) = {
             let d = doc.borrow();
@@ -678,5 +686,31 @@ mod tests {
         let (code, prose) = split("just words");
         assert!(code.is_empty());
         assert_eq!(prose, "just words");
+    }
+
+    /// The signature is the code the hover opens with; an example in the
+    /// documentation is the documentation's, and so are its headings and
+    /// its later rules — drawn as Markdown, not lifted to the top.
+    #[test]
+    fn an_example_stays_in_the_documentation() {
+        let said = "```rust\nalloc::vec::Vec\n```\n\n```rust\npub const fn new() -> Vec<T>\n```\n\n---\n\n\
+                    Constructs a new, empty `Vec<T>`.\n\n# Examples\n\n```\nlet v: Vec<i32> = Vec::new();\n```\n\n---\n";
+        let (code, prose) = split(said);
+        assert_eq!(code.len(), 2, "{code:?}");
+        assert_eq!(code[1].1, "pub const fn new() -> Vec<T>");
+        assert_eq!(
+            prose,
+            "Constructs a new, empty `Vec<T>`.\n\n# Examples\n\n```\nlet v: Vec<i32> = Vec::new();\n```"
+        );
+    }
+
+    /// clangd opens with words and ends with the declaration: all of it is
+    /// documentation, in the order it was written, as VS Code shows it.
+    #[test]
+    fn a_hover_that_opens_with_words_is_all_documentation() {
+        let said = "### function `blink`\n\n---\n→ `void`\n\n---\n```cpp\nvoid blink(int pin)\n```";
+        let (code, prose) = split(said);
+        assert!(code.is_empty());
+        assert_eq!(prose, said);
     }
 }

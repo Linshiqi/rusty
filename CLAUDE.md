@@ -1162,6 +1162,33 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   for Quaternion {}` offering *Implement missing members* is the case it is
   for; the probe's (`RUSTY_PROBE_MARKS`) is a struct literal missing two
   fields and *Fill struct fields*.
+- **The card's documentation is a Markdown page's blocks, not one
+  `StyledText`.** `StyledText::from_markdown` refuses a heading or a list,
+  which every std doc has, and the fallback showed the source — `##
+  Control structures`, `**true**`, `[`bool`](https://…)` — in the user's
+  screenshot of the card on `true`. The docs are read by the page's reader
+  (`markdown::doc_blocks`) and drawn by its `MarkdownView`
+  (`app/markdown_view.rs`'s `doc_blocks`): headings, paragraphs, lists,
+  examples in the editor's colours, a fence named nothing in the file's own
+  language. **Read as rustdoc reads a doc comment**: a link is one only to
+  the web — rust-analyzer resolves intra-doc links to docs.rs and
+  doc.rust-lang.org — and a click opens it in the browser through the
+  page's `Shell.open-link`, which a torn window wires too; an intra-doc
+  link left as a name, `` [`Vec`] `` or `[crate::Gain]`, is its text,
+  brackets gone, while `v[0]` and `[sic]` stay what they are. **The
+  signature is only the code the hover opens with** (`hover::split`): an
+  example in the docs was once lifted into the code rows at the top, and
+  a hover that opens with words, as clangd's does, is documentation from
+  its first line, in its own order. **The card is meant to scroll under
+  the wheel when what it holds is taller than 360 px, and does not yet**:
+  the card's column measures the docs short when their paragraphs wrap —
+  the card on `true` came out 203 px for some 350 px of text, its
+  `preferred-height` and `min-height` alike, while each block inside is
+  drawn at its wrapped height — so long docs are cut at the card's foot
+  rather than scrolled. Which measure undercounts (a `StyledText`'s height
+  for its width, read through `MarkdownView`'s repeated blocks before
+  their widths settle, is the suspect) is not yet found; the probe's
+  `RUSTY_PROBE_ROOM` photographs it.
 - **A key puts the card away, and what the check found follows the
   edits.** The card is about the text as it was when it was asked for, and
   nothing closed it but the pointer: a `;` typed for a `,` and mended under
@@ -1727,6 +1754,55 @@ cursor — VS Code's, each but the cursors switchable in Settings ▸ Editor
   the input method land at. Text typed or composed goes in at every cursor;
   a paste with one line per cursor gives each its line in document order, as
   VS Code's does; Ctrl+D takes the next occurrence and wraps.
+
+## Room below the last line, and the caret off the view's edge
+
+Reported against VS Code side by side: no room below the last line, so
+typing at the bottom of a file was typing on the view's edge and scrolling
+by hand after every line.
+
+- **The view scrolls until the last line is at its top**, VS Code's
+  `editor.scrollBeyondLastLine`. **The room is space, never a row**: the
+  rows model is the document's rows and nothing else, so the numbers, the
+  folds, the minimap's rows, the sticky lines and every overlay count
+  nothing in it. Slint's own `ListView` cannot do this — it fills its view
+  with rows and scrolls a view past the last one back to fill it (1.18.1,
+  `model/repeater.rs`, `update_visible_instances`) — so `ui/listview.slint`
+  is a ListView *by name*: the compiler hands the runtime's row layout to a
+  `for` inside any element whose type is called `ListView` and has
+  `content-x`/`-y`/`-width`/`-height` and `visible-width`/`-height`
+  (`object_tree.rs`). It wraps the standard `ScrollView`, whose bars and
+  wheel travel the rows and the room together (`extent + room`), and tells
+  the runtime to fill `visible-height`: the view less the room it is
+  scrolled into, which is exactly the rows left — half a pixel short, so a
+  rounding in their sum never reads as a row missing, which the runtime
+  would scroll back to fill. Both groups' views and a window a tab was
+  moved into are that one list; `shade::within` still puts back an offset
+  the list moved above the top.
+- **How far down is one rule, said twice and held equal**: `lowest` in
+  `listview.slint` for the wheel and the bars, `editor/reach.rs`'s
+  `deepest` for Rust's clamps (Ctrl+D/U, a press on the minimap), both the
+  rows plus `room` — the view less one row — less the view. Every row is
+  `Code.row-height`, so `extent` is the rows times it, not the runtime's
+  estimate, which after a zoom still knows the old height. The minimap
+  counts the room as blank rows, VS Code's `extraLinesAtTheBottom`
+  (`rusty_edit::minimap::frame`'s `beyond`), so its slider reaches its foot
+  only when the last line is at the top.
+- **A press in the room is a press at the end of the last line**, as in
+  VS Code; a drag from it selects up into the text, the wheel there
+  scrolls, and the list's scroll bars stay out of it.
+- **A key keeps the caret three rows off either edge** (`reach::reveal`,
+  `ROOM_ROWS`: VS Code's `editor.cursorSurroundingLines`, capped at what
+  leaves the caret's row the middle of a short view): typing, Enter, the
+  arrows, Page Down, a jump. Typing at the very end of a file is what the
+  room is for — the view follows line by line into it. **The pointer gets
+  no room** (`Surface::unkeyed`, VS Code's `cursorSurroundingLinesStyle:
+  default`): a click on the view's last row that scrolled it would put the
+  second press of a double-click on another line. **Nor does an edit
+  nobody typed** — a format's answer, the disk's text, a draft put back
+  (`Surface::edited`) — which shows the caret, as before, and no more. An
+  answer from a server still places the caret and never moves the view
+  (`place_caret`).
 
 ## The Git panel
 

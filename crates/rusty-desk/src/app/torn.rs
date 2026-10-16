@@ -283,6 +283,11 @@ impl App {
                 app.content_zoom("editor", delta);
             }
         });
+        // A link in the hover card's documentation goes to the browser, as
+        // one on a page does.
+        window
+            .global::<Shell>()
+            .on_open_link(|link| super::markdown_view::open_link(&link));
         let weak = Rc::downgrade(self);
         window.on_close_tab(move || {
             if let Some(app) = weak.upgrade() {

@@ -321,14 +321,15 @@ impl Surface {
         self.view_changed();
     }
 
-    /// The view scrolled by `rows`, as far as there is text to show.
+    /// The view scrolled by `rows`, as far as there is text to show — the
+    /// last line at the top at most.
     fn scroll_rows(&self, rows: f32) {
         let (Some(window), Some(doc)) = (self.window.upgrade(), self.doc()) else {
             return;
         };
         let code = window.global::<Code>();
         let row_height = code.get_row_height();
-        let most = (doc.borrow().rows() as f32 * row_height - code.get_view_height()).max(0.0);
+        let most = super::reach::deepest(doc.borrow().rows(), row_height, code.get_view_height());
         let top = (-code.get_scroll_y() + rows * row_height).clamp(0.0, most);
         code.set_scroll_y(-top);
         self.view_changed();

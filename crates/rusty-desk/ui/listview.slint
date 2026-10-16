@@ -1,0 +1,50 @@
+// The code view's rows: Slint's own ListView — only the rows on screen
+// exist — with room below the last of them, VS Code's
+// `editor.scrollBeyondLastLine`: the view scrolls until the last line is at
+// its top, so typing at the end of a file is not typing at the view's edge.
+//
+// Slint's ListView fills its view with rows, and a view scrolled further
+// than its last row reaches is scrolled back (1.18.1, `model/repeater.rs`,
+// `update_visible_instances`). The runtime lays out the rows of a `for`
+// inside any element whose type is called `ListView` and has these five
+// lengths — content-x, -y, -width, -height and visible-height and -width —
+// so this one is a ListView by name. The scroll view and its bars are the
+// standard one's, scrolled over the rows and the room together; what it
+// tells the runtime to fill, `visible-height`, is the view less the room it
+// is scrolled into, which is exactly the rows that are left. The room is
+// space, never a row: nothing counts it but the scroll.
+
+import { ScrollView } from "std-widgets.slint";
+
+export component ListView {
+    // How tall the rows are together — every row being one height, the
+    // caller's count of them, not the runtime's estimate, which just after
+    // a zoom still knows the old height.
+    in property <length> extent;
+    // How far past the last row the view can be scrolled.
+    in property <length> room;
+
+    // What the runtime reads and writes.
+    in-out property <length> content-x <=> view.content-x;
+    in-out property <length> content-y <=> view.content-y;
+    in-out property <length> content-width <=> view.content-width;
+    in-out property <length> content-height;
+    out property <length> visible-width: view.visible-width;
+    // The rows the runtime is to lay out, from the first on screen: the
+    // view, or where the last row ends when that is sooner — half a pixel
+    // short of it, so a rounding in the sum of the rows can never read as
+    // a row missing, which the runtime would scroll back to fill. Never
+    // less than the view less the room, which is how far it may scroll.
+    out property <length> visible-height: max(view.visible-height - root.room, min(view.visible-height, root.extent + view.content-y - 0.5px));
+
+    // The view itself, room and all, and the furthest down it scrolls.
+    out property <length> view-height: view.visible-height;
+    out property <length> lowest: min(0px, view.visible-height - root.extent - root.room);
+
+    view := ScrollView {
+        width: 100%;
+        height: 100%;
+        content-height: root.extent + root.room;
+        @children
+    }
+}

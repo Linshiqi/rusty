@@ -139,6 +139,21 @@ pub(super) fn blocks(files: &Files, text: &str, _place: Option<(&Path, &str)>) -
     ModelRc::new(VecModel::from(rows))
 }
 
+/// A doc comment's blocks as the hover card draws them: read as rustdoc
+/// reads one (`markdown::doc_blocks`, a link only to the web) and drawn as
+/// the assistant's answers are, a block fenced as nothing being in `lang`,
+/// the language of the file the name is in — rustdoc's own rule for Rust.
+pub(crate) fn doc_blocks(files: &Files, text: &str, lang: &str) -> ModelRc<MdBlock> {
+    let rows: Vec<MdBlock> = markdown::doc_blocks(text)
+        .iter()
+        .map(|block| match block {
+            Block::Code { lang: none, lines } if none.is_empty() => code(files, lang, lines),
+            block => plain(files, block),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
 /// A block drawn without the page's formulas, pictures or flowing lines.
 fn plain(files: &Files, block: &Block) -> MdBlock {
     match block {
