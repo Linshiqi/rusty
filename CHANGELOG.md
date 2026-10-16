@@ -9,6 +9,66 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.1
+
+**The editor.** The code scrolls past its last line, and the caret keeps
+three lines of room above and below it as you type, so writing at the end
+of a file no longer means scrolling by hand. The hover card draws its
+documentation as formatted text — headings, lists, code in the editor's
+colours, links you can click — where it used to show the Markdown source,
+and long documentation scrolls inside the card instead of being cut off.
+A Rust file that no `mod` line declares is greyed in the tree and on its
+tab and its code drawn faint, as VS Code shows code that is not used, so
+an editor that answers nothing in it says why; the quick fix on its hover
+card adds the `mod` line. A file cut in the tree is now its row faded, so
+the two never look alike.
+
+**Go to symbol.** In Ctrl+P, `@` lists the symbols of the file in front
+(also Ctrl+Shift+O) and `#` searches the project's (also Ctrl+T). Moving
+through `@`'s list shows each symbol in the editor; `@:` groups them by
+kind.
+
+**A failed test says where.** After a test fails, its line gets the red
+underline every error gets and the first line of the panic after the
+code; the hover card there shows the whole message. Typing on the line or
+running the test again takes it away. A test run under Debug shows its
+panic too. A test's ▶ Run in a member of a workspace whose root is a
+package of its own now runs that member's test, where it ran nothing, and
+a path in Output — a compiler error or a panic — opens the right file
+when the project opened is a workspace member. Test in the title bar runs
+every member of the workspace, and goes on past a failing one. A test
+under Debug runs in its package's folder, as `cargo test` runs it, so a
+test that reads a file beside it finds it; Debug starts sooner where a
+copy of CodeLLDB is installed.
+
+**Tabs drag.** Drag a tab along its strip to reorder it, onto the other
+group to move it there, onto the right half of the code to split the
+window, or out of the window into one of its own — and from there back
+in. With the two groups pushed close together neither draws over the
+other any more, and the edges of the side and bottom panels can be
+grabbed anywhere along their grip, where half of it used to belong to the
+panel beside.
+
+**Output and the terminal.** Every run — Build, Run, Flash, Monitor, a
+test, an example — starts on an empty Output, and Problems drops the last
+build's errors once you have fixed them, where before they stayed listed
+after a test or an example run. Output and Problems have a filter box,
+with switches for errors, warnings and the rest; Ctrl+F in either goes to
+it. Ctrl+\` opens and closes the terminal, and in the terminal Ctrl+P,
+Ctrl+Shift+P, Ctrl+Shift+B, F5 and the debugger's keys reach rusty rather
+than the shell, as in VS Code.
+
+**The History page.** Every divider on it drags and stays where you left
+it. The commit's message and either side of its diff can be selected and
+copied — the text alone, without line numbers or `+`/`-` — and the page
+fits a narrow editor group.
+
+**The device button.** It names the device it will run on again
+(simulator, a serial port, a probe or a USB bootloader), and its list
+opens at once, filling in as each kind of device answers, where it used
+to wait for every one. probe-rs probes are listed now; a mistake in
+reading `probe-rs list` had kept them out.
+
 ## v0.7.0
 
 **A new window.** rusty is now drawn with [Slint](https://slint.dev)
