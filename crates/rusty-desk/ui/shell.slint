@@ -16,6 +16,8 @@ export struct DocTab {
     dirty: bool,
     // `file`, or the page it is: `welcome`, `settings`, …
     kind: string,
+    // A Rust file no `mod` declares: its name greyed, and why on the pointer.
+    unlinked: bool,
 }
 
 // A row of the project tree: an entry, or the box a name is typed in
@@ -31,6 +33,9 @@ export struct TreeRow {
     cut: bool,
     // Inside the folder a drag would drop into.
     drop: bool,
+    // A Rust file no `mod` declares, so in no crate: greyed, as VS Code
+    // greys what the build leaves out, with the reason on the pointer.
+    unlinked: bool,
 }
 
 export struct PickRow {

@@ -81,6 +81,10 @@ impl App {
         }
         if batch.tree {
             self.reread_project();
+        } else if super::unlinked::touches_rust(&batch.changed) {
+            // A `mod` line may have come or gone; the tree's read does the
+            // same when it is read again.
+            self.scan_unlinked();
         }
         self.follow_changed(batch.changed);
         if self.state.borrow().git.loaded {

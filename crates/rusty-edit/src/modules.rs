@@ -17,8 +17,10 @@
 //!   scan is lexical; over-counting declarations loses a dim, and
 //!   under-counting invents one.
 //! - Every entry point cargo knows is a root, declared by nobody:
-//!   `src/main.rs`, `src/lib.rs`, `build.rs`, and anything directly under
-//!   `src/bin`, `examples`, `tests` and `benches`.
+//!   `src/main.rs`, `src/lib.rs`, `build.rs`, anything directly under
+//!   `src/bin`, `examples`, `tests` and `benches`, and every target a
+//!   manifest names by `path` (`[lib] path = "src/core.rs"`). A manifest
+//!   that does not parse leaves its crate unjudged.
 //! - A file outside a crate's `src` — the root of `tests/` or `examples/`
 //!   and the trees below them — is left alone, because a `tests/thing/mod.rs`
 //!   is reached from a sibling integration test whose own rules differ.
@@ -28,13 +30,88 @@
 //! creating a file and is exactly what "rust-analyzer offers nothing here"
 //! means.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// One file as the scan sees it: its project-relative path (`/` separators)
 /// and its text.
 pub struct SourceFile<'a> {
     pub path: &'a str,
     pub text: &'a str,
+}
+
+/// What a scan of a project said, kept with where it is entitled to say
+/// anything: the crates it found, and of the files under their `src/` the
+/// ones nothing declares — or that it refused the whole project.
+///
+/// The crates travel with the answer because the answer is about them
+/// alone. A file outside every crate's `src/` — an integration test's
+/// helper, a `src/bin/<name>/` tree — is one the scan never judged, so
+/// asked about it the reading has no opinion, and somebody else's verdict
+/// stands there.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reading {
+    crates: Vec<String>,
+    unlinked: Option<Vec<String>>,
+}
+
+impl Reading {
+    /// A reading of `files` in the crates at `manifests`, with the targets
+    /// their manifests name by path as `roots`: [`unlinked_rooted`]'s
+    /// answer, kept with what it was about.
+    pub fn of(files: &[SourceFile<'_>], manifests: &[String], roots: &[String]) -> Reading {
+        Reading {
+            crates: manifests.to_vec(),
+            unlinked: unlinked_rooted(files, manifests, roots),
+        }
+    }
+
+    /// The files nothing declares, sorted, or `None` for a refusal.
+    pub fn unlinked(&self) -> Option<&[String]> {
+        self.unlinked.as_deref()
+    }
+
+    /// What the reading says about one file: `Some(true)` that nothing
+    /// declares it, `Some(false)` that something does (or that it is a root
+    /// cargo compiles), and `None` that it has no opinion — the whole
+    /// project refused, or the file is not one it judges.
+    pub fn about(&self, path: &str) -> Option<bool> {
+        let unlinked = self.unlinked.as_ref()?;
+        if !in_a_crates_src(path, &self.crates) {
+            return None;
+        }
+        Some(unlinked.binary_search_by(|p| p.as_str().cmp(path)).is_ok())
+    }
+}
+
+/// The files to draw dimmed: the reading's verdict wherever it has one, and
+/// the language server's (`server`, the files rust-analyzer last called
+/// `unlinked-file`) only where it has none — a refusal, a file the reading
+/// does not judge, or no reading at all (`None`: not scanned yet, or not a
+/// Cargo project).
+///
+/// **One wins; they are never or-ed.** The two disagree in one ordinary
+/// moment: a `mod` line has just been added, the scan has read it, and the
+/// server's diagnostic still stands, because it stays until the server
+/// analyses *that* file again and nothing is going to make it. Or-ed, the
+/// file stays dim under a declaration that reaches it — a fact that can be
+/// asserted and never taken back. The scan has just read the files; where
+/// it speaks, it is the newer word.
+pub fn dimmed<'a>(
+    reading: Option<&Reading>,
+    server: impl IntoIterator<Item = &'a str>,
+) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = reading
+        .and_then(Reading::unlinked)
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+    for path in server {
+        if reading.and_then(|r| r.about(path)).is_none() {
+            out.insert(path.to_string());
+        }
+    }
+    out
 }
 
 /// The project-relative paths of `.rs` files under a crate's `src/` that no
@@ -51,6 +128,17 @@ pub struct SourceFile<'a> {
 /// declare a file in another. Pure over its inputs, so the rules above are
 /// tests rather than something discovered on somebody's checkout.
 pub fn unlinked(files: &[SourceFile<'_>], manifests: &[String]) -> Option<Vec<String>> {
+    unlinked_rooted(files, manifests, &[])
+}
+
+/// [`unlinked`], with `roots` — the project-relative paths of targets a
+/// manifest names by `path` ([`manifest_roots`]) — compiled by cargo and so
+/// declared by nobody, wherever they sit.
+pub fn unlinked_rooted(
+    files: &[SourceFile<'_>],
+    manifests: &[String],
+    roots: &[String],
+) -> Option<Vec<String>> {
     // `#[path]` anywhere in the project takes the whole answer away. It is
     // rare, and being silent about a project that uses it costs nothing;
     // dimming a file it pulls in would be a lie.
@@ -68,7 +156,7 @@ pub fn unlinked(files: &[SourceFile<'_>], manifests: &[String]) -> Option<Vec<St
     let mut out: Vec<String> = files
         .iter()
         .filter(|file| in_a_crates_src(file.path, manifests))
-        .filter(|file| !is_root(file.path))
+        .filter(|file| !is_root(file.path) && !roots.iter().any(|root| root == file.path))
         .filter(|file| !declared.contains(module_name(file.path)))
         .map(|file| file.path.to_string())
         .collect();
@@ -120,6 +208,63 @@ fn mod_names(text: &str) -> Vec<&str> {
         }
     }
     names
+}
+
+/// The targets a manifest names by `path`, as project-relative paths — the
+/// library, every binary, example, test and bench, and a build script
+/// moved by `package.build` — or `None` when the manifest does not parse,
+/// which leaves its crate unjudged: a root this reading could not see is a
+/// file it would call unlinked. `dir` is the manifest's directory (`""` the
+/// project's root).
+///
+/// Cargo's own spelling is followed: a path relative to the manifest, with
+/// `./`, `..` and either separator. A target outside the project is no file
+/// of the project's, and is left out.
+pub fn manifest_roots(dir: &str, text: &str) -> Option<Vec<String>> {
+    let manifest: toml::Table = text.parse().ok()?;
+    let mut named: Vec<&str> = Vec::new();
+    fn path_of(target: &toml::Value) -> Option<&str> {
+        target.get("path").and_then(toml::Value::as_str)
+    }
+    if let Some(path) = manifest.get("lib").and_then(path_of) {
+        named.push(path);
+    }
+    for kind in ["bin", "example", "test", "bench"] {
+        if let Some(targets) = manifest.get(kind).and_then(toml::Value::as_array) {
+            named.extend(targets.iter().filter_map(path_of));
+        }
+    }
+    if let Some(build) = manifest
+        .get("package")
+        .and_then(|package| package.get("build"))
+        .and_then(toml::Value::as_str)
+    {
+        named.push(build);
+    }
+    Some(
+        named
+            .into_iter()
+            .filter_map(|path| beside(dir, path))
+            .collect(),
+    )
+}
+
+/// `path` relative to the directory `dir`, as a project-relative path with
+/// `/` separators and no `.` or `..` in it — or `None` when it climbs out
+/// of the project.
+fn beside(dir: &str, path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    let joined = format!("{dir}/{}", path.replace('\\', "/"));
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
 }
 
 /// The name a `mod` declaration would use for this file: its stem, or the
@@ -191,13 +336,22 @@ fn in_a_crates_src(path: &str, manifests: &[String]) -> bool {
 
 /// Walk the project and answer [`unlinked`] for it.
 ///
-/// The same walk the tree uses, so a file the tree does not show cannot be
-/// dimmed in it, and `target/` costs nothing. Reads only `.rs` files and only
-/// the ones under a crate's `src/`, plus every `.rs` in the project for the
-/// `mod` declarations — a declaration can sit anywhere, and a `src/lib.rs`
-/// that was not read is a crate whose whole module tree reads as unlinked.
+/// [`read`]'s answer without the crates it was about.
 pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
+    read(root).unlinked
+}
+
+/// Walk the project and read it: [`Reading::of`] over every `.rs` file and
+/// every crate.
+///
+/// The same walk the tree uses, so a file the tree does not show cannot be
+/// dimmed in it, and `target/` costs nothing. Reads every `.rs` in the
+/// project for the `mod` declarations — a declaration can sit anywhere, and a
+/// `src/lib.rs` that was not read is a crate whose whole module tree reads as
+/// unlinked — and every manifest, for the targets it names by path.
+pub fn read(root: &std::path::Path) -> Reading {
     let mut manifests: Vec<String> = Vec::new();
+    let mut roots: Vec<String> = Vec::new();
     let mut sources: Vec<(String, String)> = Vec::new();
 
     let walk = crate::hidden::project_walk(root).build();
@@ -211,7 +365,15 @@ pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
         match name.as_deref() {
             Some("Cargo.toml") => {
                 let dir = relative.strip_suffix("Cargo.toml").unwrap_or_default();
-                manifests.push(dir.trim_end_matches('/').to_string());
+                let dir = dir.trim_end_matches('/');
+                // A manifest that cannot be read leaves its crate unjudged.
+                let named = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| manifest_roots(dir, &text));
+                if let Some(named) = named {
+                    manifests.push(dir.to_string());
+                    roots.extend(named);
+                }
             }
             Some(name) if name.ends_with(".rs") => {
                 // A file too large to be a module declaration list is still
@@ -228,7 +390,7 @@ pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
         .iter()
         .map(|(path, text)| SourceFile { path, text })
         .collect();
-    unlinked(&files, &manifests)
+    Reading::of(&files, &manifests, &roots)
 }
 
 #[cfg(test)]
@@ -347,6 +509,164 @@ mod tests {
             ("mysrc/orphan.rs", ""),
         ];
         assert!(scan(&files, &[""]).is_empty());
+    }
+
+    fn reading<'a>(files: &'a [(&'a str, &'a str)], manifests: &[&str]) -> Reading {
+        let files: Vec<SourceFile<'_>> = files
+            .iter()
+            .map(|(path, text)| SourceFile { path, text })
+            .collect();
+        let manifests: Vec<String> = manifests.iter().map(|m| (*m).to_string()).collect();
+        Reading::of(&files, &manifests, &[])
+    }
+
+    fn dim(reading: Option<&Reading>, server: &[&str]) -> Vec<String> {
+        dimmed(reading, server.iter().copied())
+            .into_iter()
+            .collect()
+    }
+
+    /// The reading speaks for the files under a crate's `src/` and for no
+    /// others: a root is linked, an undeclared file is not, and an
+    /// integration test's helper or a binary's own tree is nobody's word of
+    /// its.
+    #[test]
+    fn a_reading_has_an_opinion_only_where_it_judged() {
+        let files = [
+            ("src/main.rs", "mod engine;\n"),
+            ("src/engine.rs", ""),
+            ("src/orphan.rs", ""),
+            ("tests/common/helper.rs", ""),
+            ("src/bin/tool/helper.rs", ""),
+        ];
+        let read = reading(&files, &[""]);
+        assert_eq!(read.about("src/orphan.rs"), Some(true));
+        assert_eq!(read.about("src/engine.rs"), Some(false));
+        assert_eq!(read.about("src/main.rs"), Some(false), "a root is linked");
+        assert_eq!(read.about("tests/common/helper.rs"), None);
+        assert_eq!(read.about("src/bin/tool/helper.rs"), None);
+    }
+
+    /// The case the rule is for: the `mod` line has just been added, the scan
+    /// has read it, and rust-analyzer's `unlinked-file` still stands for the
+    /// file, as it will until the server looks at that file again. Or-ed,
+    /// the file would stay dim under the declaration that reaches it.
+    #[test]
+    fn where_the_scan_speaks_the_server_is_not_heard() {
+        let declared = [("src/main.rs", "mod orphan;\n"), ("src/orphan.rs", "")];
+        let read = reading(&declared, &[""]);
+        assert!(
+            dim(Some(&read), &["src/orphan.rs"]).is_empty(),
+            "the scan says linked, and it wins over the server's stale word"
+        );
+        let undeclared = [("src/main.rs", "\n"), ("src/orphan.rs", "")];
+        let read = reading(&undeclared, &[""]);
+        assert_eq!(
+            dim(Some(&read), &[]),
+            ["src/orphan.rs"],
+            "dimmed before the server has been told of the file at all"
+        );
+    }
+
+    /// A refusal is not a clean bill: where the scan refused — `#[path]`
+    /// somewhere — the server's verdict is the only one, and it is shown.
+    #[test]
+    fn a_refusal_leaves_the_server_to_answer() {
+        let files = [
+            ("src/lib.rs", "#[path = \"x.rs\"]\nmod thing;\n"),
+            ("src/orphan.rs", ""),
+        ];
+        let read = reading(&files, &[""]);
+        assert_eq!(read.unlinked(), None);
+        assert_eq!(read.about("src/orphan.rs"), None);
+        assert_eq!(dim(Some(&read), &["src/orphan.rs"]), ["src/orphan.rs"]);
+        assert!(
+            dim(Some(&read), &[]).is_empty(),
+            "and with the server silent, nothing is claimed"
+        );
+    }
+
+    /// No reading at all — not scanned yet, or not a Cargo project — and a
+    /// file the reading does not judge are the server's alone.
+    #[test]
+    fn where_the_scan_is_silent_the_server_answers() {
+        assert_eq!(dim(None, &["src/orphan.rs"]), ["src/orphan.rs"]);
+        let files = [("src/lib.rs", "\n"), ("tests/common/helper.rs", "")];
+        let read = reading(&files, &[""]);
+        assert_eq!(
+            dim(Some(&read), &["tests/common/helper.rs"]),
+            ["tests/common/helper.rs"]
+        );
+    }
+
+    /// A target a manifest names by path is an entry point cargo compiles,
+    /// declared by nobody: `[lib] path = "src/core.rs"` is the crate's root,
+    /// not a file in no crate — and the module it declares is linked.
+    #[test]
+    fn a_target_named_by_path_is_a_root() {
+        let manifest = r#"
+            [package]
+            name = "flight"
+            build = "tools/build.rs"
+
+            [lib]
+            path = "src/core.rs"
+
+            [[bin]]
+            name = "tool"
+            path = "./src/tools/run.rs"
+
+            [[example]]
+            name = "far"
+            path = "../shared/src/far.rs"
+
+            [dependencies]
+            other = { path = "../other" }
+        "#;
+        let roots = manifest_roots("flight", manifest).expect("the manifest parses");
+        assert_eq!(
+            roots,
+            [
+                "flight/src/core.rs",
+                "flight/src/tools/run.rs",
+                "shared/src/far.rs",
+                "flight/tools/build.rs"
+            ],
+            "every target's path, the manifest's own spelling resolved, and no dependency's"
+        );
+        let files = [
+            ("flight/src/core.rs", "mod attitude;\n"),
+            ("flight/src/attitude.rs", ""),
+            ("flight/src/tools/run.rs", ""),
+            ("flight/src/orphan.rs", ""),
+        ];
+        let files: Vec<SourceFile<'_>> = files
+            .iter()
+            .map(|(path, text)| SourceFile { path, text })
+            .collect();
+        let read = Reading::of(&files, &["flight".to_string()], &roots);
+        assert_eq!(
+            read.unlinked(),
+            Some(&["flight/src/orphan.rs".to_string()][..])
+        );
+        assert_eq!(read.about("flight/src/core.rs"), Some(false));
+    }
+
+    /// A manifest that does not parse cannot say where its targets are, and
+    /// a root it hides would read as a file in no crate: its crate is left
+    /// unjudged. And a target outside the project is nobody's file here.
+    #[test]
+    fn a_manifest_that_does_not_parse_names_nothing() {
+        assert_eq!(manifest_roots("", "[package\nname = "), None);
+        assert_eq!(
+            manifest_roots("", "[[bin]]\nname = \"x\"\npath = \"../../x.rs\"\n"),
+            Some(vec![])
+        );
+        assert_eq!(
+            manifest_roots("", "[package]\nname = \"plain\"\n"),
+            Some(vec![]),
+            "no target named by path is no root, not a refusal"
+        );
     }
 
     /// `module` and `mods` are not `mod`.

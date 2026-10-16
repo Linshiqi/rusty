@@ -152,6 +152,8 @@ impl App {
                 app.sync_part();
                 app.sync_problems();
                 app.sync_tree();
+                // A file came or went: what is declared may have too.
+                app.scan_unlinked();
             },
         );
     }

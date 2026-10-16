@@ -104,6 +104,15 @@
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below).
+//! With `RUSTY_PROBE_UNLINKED`, on a copy of a Cargo project opened on a file
+//! under `src/` that no `mod` declares, it waits for the scan, photographs
+//! the file greyed in the tree and on its tab and its code faint, rests the
+//! pointer on its row and on its tab for the reason, moves it into a window
+//! of its own and photographs it faint there, brings it back, waits for
+//! rust-analyzer's `unlinked-file` on the hover card, applies its
+//! `Insert mod …;` by its click and photographs the file no longer dim once
+//! the parent's edit has landed — on a copy, since the fix writes the
+//! parent.
 
 use std::{
     cell::{Cell, RefCell},
@@ -226,6 +235,7 @@ pub fn start(window: &AppWindow) {
     let photos: Rc<RefCell<Vec<image::RgbaImage>>> = Rc::default();
     let frames: Rc<RefCell<Vec<(String, image::RgbaImage)>>> = Rc::default();
     let reading_book = std::env::var_os("RUSTY_PROBE_BOOK").is_some();
+    let unlinking = std::env::var_os("RUSTY_PROBE_UNLINKED").is_some();
     let chapter: Rc<RefCell<String>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
@@ -452,6 +462,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if reading_book {
                     step.set(6400);
+                }
+                if unlinking {
+                    step.set(7100);
                 }
             }
             // Ctrl and the wheel over the code, a page and the terminal; and
@@ -2893,6 +2906,236 @@ pub fn start(window: &AppWindow) {
                 );
             }
             3685 if tearing => app.act("app.exit"),
+            // A Rust file no `mod` declares: greyed in the tree and on its
+            // tab, its code faint in the main window and in a window of its
+            // own, the reason on the pointer, and rust-analyzer's own fix on
+            // the hover card, after which it is drawn as any other file.
+            7100 if unlinking => {
+                let (_, _, scans, _) = app.unlinked_now();
+                if shell.get_active_kind() != "file" || scans == 0 {
+                    step.set(7100);
+                    return;
+                }
+                shell.invoke_show_panel("left".into(), "project".into());
+                // The welcome page away, so the file's tab is the strip's
+                // first and the pointer knows where it is.
+                shell.invoke_close_tab("page:welcome".into());
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+            }
+            7102 if unlinking => {
+                let (dimmed, server, scans, took) = app.unlinked_now();
+                eprintln!(
+                    "unlinked: {scans} scan(s), the last {took:.1?}; dimmed {dimmed:?}; the server says {server:?}"
+                );
+                eprintln!(
+                    "unlinked: {:?} open, its code faint: {} | tabs {} | tree {}",
+                    start_path.borrow(),
+                    app.editor().dimmed_now(),
+                    tabs_said(&shell),
+                    tree_said(&shell)
+                );
+                snapshot(&window, &dir.join("unlinked-open.png"));
+                let path = start_path.borrow().clone();
+                match app.tree_row_of(&path) {
+                    Some(row) => pointer(
+                        &window,
+                        WindowEvent::PointerMoved {
+                            position: LogicalPosition::new(90.0, tree_row_y(row)),
+                        },
+                    ),
+                    None => eprintln!("unlinked: {path} is not on a row of the tree"),
+                }
+                waited.set(0);
+            }
+            7103 if unlinking => {
+                let tip = window.global::<crate::Tip>();
+                if !tip.get_shown() && waited.get() < 50 {
+                    waited.set(waited.get() + 1);
+                    step.set(7103);
+                    return;
+                }
+                eprintln!(
+                    "unlinked: resting on its row, the tip {} {:?}",
+                    if tip.get_shown() { "says" } else { "is not up:" },
+                    tip.get_text()
+                );
+                snapshot(&window, &dir.join("unlinked-tree-tip.png"));
+                // Off the row, then onto the tab, the first on the strip.
+                let (left, _) = editor_span(&window, &shell);
+                pointer(
+                    &window,
+                    WindowEvent::PointerMoved {
+                        position: LogicalPosition::new(left + 400.0, 300.0),
+                    },
+                );
+                pointer(
+                    &window,
+                    WindowEvent::PointerMoved {
+                        position: LogicalPosition::new(left + 30.0, STRIP_Y),
+                    },
+                );
+                waited.set(0);
+            }
+            7104 if unlinking => {
+                let tip = window.global::<crate::Tip>();
+                if !tip.get_shown() && waited.get() < 50 {
+                    waited.set(waited.get() + 1);
+                    step.set(7104);
+                    return;
+                }
+                eprintln!(
+                    "unlinked: resting on its tab, the tip {} {:?}",
+                    if tip.get_shown() { "says" } else { "is not up:" },
+                    tip.get_text()
+                );
+                snapshot(&window, &dir.join("unlinked-tab-tip.png"));
+                let (left, _) = editor_span(&window, &shell);
+                pointer(
+                    &window,
+                    WindowEvent::PointerMoved {
+                        position: LogicalPosition::new(left + 400.0, 300.0),
+                    },
+                );
+                app.act("editor.detach");
+            }
+            7106 if unlinking => {
+                let torn = app.torn_windows();
+                let Some((torn, _)) = torn.first() else {
+                    eprintln!("unlinked: no window of its own");
+                    step.set(7108);
+                    return;
+                };
+                eprintln!(
+                    "unlinked: in a window of its own, {:?} greyed {} and its code faint {}",
+                    torn.get_name(),
+                    torn.get_unlinked(),
+                    torn.global::<Code>().get_dim()
+                );
+                snapshot_of(torn.window(), &dir.join("unlinked-torn.png"));
+                torn.invoke_move_back();
+            }
+            7108 if unlinking => {
+                eprintln!(
+                    "unlinked: back in the main window: {} window(s) of its own | tabs {} | faint {}",
+                    app.torn_windows().len(),
+                    tabs_said(&shell),
+                    app.editor().dimmed_now()
+                );
+                shell.set_theme_choice("light".into());
+            }
+            7110 if unlinking => {
+                snapshot(&window, &dir.join("unlinked-light.png"));
+                shell.set_theme_choice("dark".into());
+                window.invoke_focus_code();
+                app.editor().go_to(1, Some(1));
+                waited.set(0);
+            }
+            7119 if unlinking => {
+                // rust-analyzer's word on the file, which it gives only for
+                // one it has been told of: the warning `unlinked-file` is.
+                let path = start_path.borrow().clone();
+                let (_, server, ..) = app.unlinked_now();
+                if !server.contains(&path) && waited.get() < 3000 {
+                    waited.set(waited.get() + 1);
+                    step.set(7119);
+                    return;
+                }
+                eprintln!(
+                    "unlinked: rust-analyzer said unlinked-file after {} ticks: {server:?}",
+                    waited.get()
+                );
+                app.editor().go_to(1, Some(1));
+                app.act("editor.show-hover");
+                waited.set(0);
+            }
+            7120 if unlinking => {
+                let fixes = app.editor().card_fixes();
+                if !fixes.iter().any(|f| f.contains("mod ")) && waited.get() < 750 {
+                    waited.set(waited.get() + 1);
+                    if waited.get().is_multiple_of(100) {
+                        app.act("editor.show-hover");
+                    }
+                    step.set(7120);
+                    return;
+                }
+                let problems: Vec<String> = code
+                    .get_hover_problems()
+                    .iter()
+                    .map(|p| p.text.to_string())
+                    .collect();
+                eprintln!(
+                    "unlinked: the card says {problems:?} and offers {fixes:?} after {} ticks, the code faint {}",
+                    waited.get(),
+                    app.editor().dimmed_now()
+                );
+                snapshot(&window, &dir.join("unlinked-card.png"));
+                match fixes.iter().position(|f| f.contains("mod ")) {
+                    Some(pick) => code.invoke_hover_fix(pick as i32),
+                    None => eprintln!("unlinked: no `mod` fix on the card"),
+                }
+                waited.set(0);
+            }
+            7121 if unlinking => {
+                let path = start_path.borrow().clone();
+                let (dimmed, ..) = app.unlinked_now();
+                if dimmed.contains(&path) && waited.get() < 500 {
+                    waited.set(waited.get() + 1);
+                    step.set(7121);
+                    return;
+                }
+                let (dimmed, server, scans, took) = app.unlinked_now();
+                let parent = app.root_path().map(|root| {
+                    ["src/lib.rs", "src/main.rs"]
+                        .iter()
+                        .filter_map(|p| std::fs::read_to_string(root.join(p)).ok())
+                        .flat_map(|text| {
+                            text.lines()
+                                .filter(|l| l.trim_start().starts_with("mod "))
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                });
+                eprintln!(
+                    "unlinked: after {} ticks the parent on disk declares {parent:?}; dimmed {dimmed:?}; the server says {server:?}; {scans} scan(s), the last {took:.1?}",
+                    waited.get()
+                );
+                eprintln!(
+                    "unlinked: its code faint {} | tabs {} | tree {}",
+                    app.editor().dimmed_now(),
+                    tabs_said(&shell),
+                    tree_said(&shell)
+                );
+                // The card away, so the file is seen as it is drawn.
+                key(Key::Escape.into());
+            }
+            7123 if unlinking => {
+                snapshot(&window, &dir.join("unlinked-fixed.png"));
+                waited.set(0);
+            }
+            // The server's own word on the file, stale until it looks at
+            // the file again: how long its squiggle outlives the dim.
+            7124 if unlinking => {
+                let path = start_path.borrow().clone();
+                let (_, server, ..) = app.unlinked_now();
+                if server.contains(&path) && waited.get() < 1500 {
+                    waited.set(waited.get() + 1);
+                    step.set(7124);
+                    return;
+                }
+                eprintln!(
+                    "unlinked: rust-analyzer {} after {} more ticks: {server:?}; warnings {}",
+                    if server.contains(&path) {
+                        "still calls it unlinked-file"
+                    } else {
+                        "took back its unlinked-file"
+                    },
+                    waited.get(),
+                    shell.get_warnings()
+                );
+                snapshot(&window, &dir.join("unlinked-settled.png"));
+            }
+            7125 if unlinking => app.act("app.exit"),
             // Where the caret rests: the brace beside it and its partner
             // outlined; the name under it washed where else it occurs, and
             // the washes gone at the next key; a problem's fixes listed on
@@ -4998,6 +5241,9 @@ fn tree_said(shell: &Shell) -> String {
             if r.drop {
                 marks.push_str(" [drop]");
             }
+            if r.unlinked {
+                marks.push_str(" [unlinked]");
+            }
             let name = if r.naming {
                 format!("[box {:?}]", shell.get_tree_name().as_str())
             } else {
@@ -5009,6 +5255,22 @@ fn tree_said(shell: &Shell) -> String {
                 _ => "",
             };
             format!("{}{chevron}{name}{marks}", "  ".repeat(r.depth as usize))
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// The main window's tabs as the strip draws them, a greyed one marked.
+fn tabs_said(shell: &Shell) -> String {
+    shell
+        .get_tabs()
+        .iter()
+        .map(|tab| {
+            if tab.unlinked {
+                format!("{} [unlinked]", tab.title)
+            } else {
+                tab.title.to_string()
+            }
         })
         .collect::<Vec<_>>()
         .join(" | ")

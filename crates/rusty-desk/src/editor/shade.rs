@@ -51,11 +51,13 @@ impl Surface {
         let widest = doc
             .as_ref()
             .map(|doc| self.metrics.borrow().widest(&doc.borrow()));
+        let faint = doc.is_some() && path.is_some_and(|path| self.dimmed.borrow().contains(path));
         *self.shade.doc.borrow_mut() = doc;
         self.shade.rows.reset();
         if let Some(Strong::Main(window)) = self.window.upgrade() {
             let shade = window.global::<crate::Shade>();
             shade.set_has_document(widest.is_some());
+            shade.set_dim(faint);
             shade.set_content_width(widest.unwrap_or(0.0) + 200.0);
             shade.set_scroll_y(within(scroll.0));
             shade.set_scroll_x(scroll.1);

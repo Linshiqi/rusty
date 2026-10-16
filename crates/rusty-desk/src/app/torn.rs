@@ -585,6 +585,7 @@ impl App {
             window.set_name(name.into());
             window.set_hint(hint.into());
             window.set_dirty(self.editor.is_dirty(&each.path));
+            window.set_unlinked(self.state.borrow().unlinked.is_dimmed(&each.path));
             let caret = each
                 .surface
                 .status()

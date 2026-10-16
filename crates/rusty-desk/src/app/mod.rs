@@ -62,6 +62,7 @@ mod terminal;
 mod testing;
 mod torn;
 mod tree;
+mod unlinked;
 mod updating;
 mod watch;
 mod waves;
@@ -231,6 +232,8 @@ struct State {
     keys: shortcuts::Keys,
     /// The project tree's selection, clipboard, naming box and drag.
     tree: tree::Tree,
+    /// The Rust files no `mod` declares, drawn dimmed.
+    unlinked: unlinked::Unlinked,
 }
 
 pub struct App {
@@ -1016,10 +1019,12 @@ impl App {
             state.project = Some(project);
             // A hierarchy is about the project it was asked in.
             state.calls.forget();
+            state.unlinked = state.unlinked.next();
             if !state.layout.left.open {
                 state.layout.left.open = true;
             }
         }
+        self.editor.set_dimmed(Default::default());
         self.sync_all();
         self.sync_problems();
         self.sync_calls();
@@ -1036,6 +1041,7 @@ impl App {
         }
         self.start_servers();
         self.watch_project();
+        self.scan_unlinked();
         self.probe_environment();
         self.load_board(None);
         self.bring_back(opened);
@@ -1901,6 +1907,7 @@ impl App {
                     hint: hint.into(),
                     dirty: matches!(tab, Tab::File(path) if self.editor.is_dirty(path)),
                     kind: tab.kind().into(),
+                    unlinked: matches!(tab, Tab::File(path) if state.unlinked.is_dimmed(path)),
                 })
                 .collect()
         };

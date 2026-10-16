@@ -28,10 +28,24 @@ fn main() {
         }
     }
 
+    // What one scan costs, as the window runs it after every structural
+    // change and every save of a `.rs` file: the walk, the reads and the
+    // reading, timed together, the first time and then at its quickest.
+    let mut times = Vec::new();
+    let mut answer = None;
+    for _ in 0..5 {
+        let began = std::time::Instant::now();
+        answer = Some(rusty_edit::scan_unlinked(root));
+        times.push(began.elapsed());
+    }
+    let first = times[0];
+    let warm = times[1..].iter().min().copied().unwrap_or(first);
+    println!("\none scan: {first:.1?} the first time, {warm:.1?} after");
+
     // A refusal and a clean project are different answers, and the whole
     // point of the `Option` is that they are not both "nothing dimmed": an
     // empty list would read as a clean bill of health the scan never gave.
-    match rusty_edit::scan_unlinked(root) {
+    match answer.flatten() {
         None => println!(
             "\n{seen} files read — REFUSED: a `#[path]` attribute somewhere means \
              this reading cannot say which files are reachable, so nothing is dimmed \

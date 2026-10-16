@@ -153,7 +153,8 @@ cargo run -p rusty-edit --release --example highlight_cost -- <file>
 # read to decide -- the check for a report of a file wrongly dim, or one
 # that should be and is not. `rusty_edit::modules` refuses wherever it
 # cannot be sure, so "nothing dimmed" is also what a refusal looks like and
-# the probe says so.
+# the probe says so. And what one scan costs, which the window pays after
+# every structural change and every save of a `.rs` file.
 cargo run -p rusty-edit --example unlinked_probe -- <project>
 
 # What EasyEDA actually answers for a part, record by record, beside what
@@ -1062,22 +1063,44 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   of notifications and hundreds of diagnostic computations — so
   `rusty_edit::modules` reads every `.rs` file's `mod` lines itself and names
   the files under a crate's `src/` that nothing declares (`unlinked_probe`
-  prints its answer). The Slint window does not draw the dim yet; when it
-  does, it is the name greyed in the tree, its tab and the header, the
-  sentence as the tooltip, and the fix where every other fix is. A
-  full-width notice with a sentence and a button was tried once, and the
-  user's verdict was exact: "a pile of warning text", where VS Code says the
-  same thing by greying the name. VS Code does not dim the *code* — read off
-  the wire, `unlinked-file` is severity 4 over `0:0–0:2` with **no `tags`**,
-  so there is no `DiagnosticTag.Unnecessary` to act on — and rusty, which
-  knows before the file is opened, may.
+  prints its answer and what one scan costs). The window draws it
+  (`app/unlinked.rs`): the name greyed in the tree and on its tab — the
+  other group's strip and a window of its own included — the sentence on the
+  pointer (`files.unlinked`), and nothing else; there is no editor header to
+  grey. A full-width notice with a sentence and a button was tried once, and
+  the user's verdict was exact: "a pile of warning text", where VS Code says
+  the same thing by greying the name. VS Code does not dim the *code* — read
+  off the wire, `unlinked-file` is severity 4 over `0:0–0:2` with **no
+  `tags`**, so there is no `DiagnosticTag.Unnecessary` to act on — and
+  rusty, which knows before the file is opened, does: every view of the file
+  draws its text and hints at half their ink (`Code.dim`, `Shade.dim`,
+  `Theme.dimmed`), and what is drawn over the text — the hover card and its
+  fixes, the popups, the squiggle — keeps its strength. The fix is where
+  every other fix is, on the card, and applying it undims the file once the
+  parent's edit lands. **The scan runs off the UI thread whenever the tree
+  is read** — the project opening, a structural watcher batch, a tree verb —
+  **and after a `.rs` file is saved, changes on disk or is written by a fix**,
+  since a `mod` line added or taken away changes the answer; one at a time,
+  with at most one more asked for after it. Measured with `unlinked_probe`
+  (2026-10-16, every core busy compiling): this repository's 539 files
+  140–220 ms a scan (it refuses — a `#[path]` is in it — and costs the same
+  to find that out), `examples/` 10 ms, `draw-vectors` 3 ms. **The first
+  scan of a checkout costs whatever the system's first read of each file
+  costs**, which on this desk was 33–38 s for the repository: reading another
+  checkout's 498 `.rs` files from PowerShell took 22 s cold and 0.3 s after,
+  the antivirus seeing each file once. rust-analyzer pays the same reads at
+  the same moment; the window waits for neither, and the grey arrives when
+  the scan does.
 - **The scan is arranged to fail towards "linked", and every rule in it is
   that decision**: a `#[path]` attribute anywhere in the project takes the
   whole answer away, a `mod` in a comment counts as a declaration, every
-  entry point cargo knows is a root, and nothing outside a crate's `src/` is
-  claimed about at all. Dimming a file the compiler builds is the confident
-  wrong answer in miniature; being silent about an exotic project costs
-  nothing.
+  entry point cargo knows is a root — a target its manifest names by `path`
+  too (`modules::manifest_roots`: `[lib] path = "src/core.rs"` was, until
+  the window drew the dim, a crate root it would have greyed), and a
+  manifest that does not parse leaves its crate unjudged — and nothing
+  outside a crate's `src/` is claimed about at all. Dimming a file the
+  compiler builds is the confident wrong answer in miniature; being silent
+  about an exotic project costs nothing.
 - **Two sources for one fact need a rule about which wins, not an `or`.**
   The scan `||` rust-analyzer's `unlinked-file` could assert and never
   retract: adding the `mod` line left the file dimmed, because the server's
@@ -1087,7 +1110,15 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   the refusal has to be sayable**, so `modules::unlinked` and `modules::scan`
   return `Option<Vec<String>>`: an empty list is "every file is declared" and
   `None` is "ask somebody else". They were the same value, and a refusal
-  read as a clean bill of health.
+  read as a clean bill of health. **And the opinion is per file**: the
+  window keeps a `modules::Reading`, the answer with the crates it judged, so
+  a file outside every crate's `src/` — an integration test's helper, a
+  `src/bin/<name>/` tree — is the server's even on a project the scan read.
+  `modules::dimmed` is the rule, and its tests name the case it is for: a
+  `mod` line just added, read by the scan, under a server's `unlinked-file`
+  that still stands. `RUSTY_PROBE_UNLINKED` saw exactly that: the card's
+  `Insert mod orphan;` written into `lib.rs`, the file undimmed two ticks
+  later, and rust-analyzer's `unlinked-file` standing for another second.
 - **rust-analyzer offers no `Insert mod …;` when the parent module file does
   not exist.** `src/vector.rs` beside a `main.rs` gets three fixes;
   `src/math/matrix.rs` with no `src/math/mod.rs` gets none, because the fix

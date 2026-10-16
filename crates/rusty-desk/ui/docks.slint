@@ -3,7 +3,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
-import { IconButton, RowButton, Caption, Field } from "widgets.slint";
+import { IconButton, RowButton, Caption, Field, Tip } from "widgets.slint";
 import { ListView } from "std-widgets.slint";
 import { Shell, PanelTab, TreeRow, ProblemRow } from "shell.slint";
 import { BoardPanel } from "board.slint";
@@ -132,10 +132,22 @@ component TreeItem inherits Rectangle {
         }
         Text {
             text: root.entry.name;
-            color: root.entry.cut ? Theme.label-4 : root.entry.dir ? Theme.label : Theme.label-2;
+            color: root.entry.cut || root.entry.unlinked ? Theme.label-4 : root.entry.dir ? Theme.label : Theme.label-2;
             font-size: Theme.body;
             vertical-alignment: center;
             overflow: elide;
+        }
+    }
+    // Why a name is grey, once the pointer rests on it: the shade is the
+    // whole of the message until somebody asks.
+    Timer {
+        interval: 600ms;
+        running: touch.has-hover && root.entry.unlinked && !root.held && !Tip.shown;
+        triggered => {
+            Tip.text = @tr("files.unlinked");
+            Tip.x = root.absolute-position.x + root.indent;
+            Tip.y = root.absolute-position.y + root.height + 4px;
+            Tip.shown = true;
         }
     }
     // The box: what is typed is judged once an input method has committed
@@ -203,8 +215,14 @@ component TreeItem inherits Rectangle {
     }
     touch := TouchArea {
         enabled: !root.entry.naming;
+        changed has-hover => {
+            if (!self.has-hover && root.entry.unlinked) {
+                Tip.shown = false;
+            }
+        }
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down) {
+                Tip.shown = false;
                 root.carried = false;
                 root.held = event.button == PointerEventButton.left;
                 root.press-x = self.mouse-x;

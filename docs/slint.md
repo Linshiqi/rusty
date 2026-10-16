@@ -602,6 +602,30 @@ tests green, and CLAUDE.md saying how it works.
    a link is drawn and followed, Ctrl+K Ctrl+S opens Keyboard Shortcuts in
    the main window, Alt+Left walks back, and Ctrl and the wheel there size
    the text in both windows.
+
+   A Rust file no `mod` declares is drawn dimmed, for v0.7.1: the name
+   greyed in the tree and on its tab, in both strips and in a window of its
+   own, the reason one sentence on the pointer, and the text of every view
+   of it at half its ink, while the hover card, the popups and the squiggle
+   over it keep theirs. The library's half was there (`rusty_edit::modules`,
+   which reads the `mod` lines and refuses wherever it cannot be sure); the
+   window runs it off the UI thread whenever the tree is read and after a
+   `.rs` file is saved or changes, one scan at a time (`app/unlinked.rs`).
+   Two sources say the one fact, the scan and rust-analyzer's
+   `unlinked-file`, and one wins: the scan wherever it judged the file — it
+   keeps the crates it judged beside its answer (`modules::Reading`) — and
+   the server only where it did not, because or-ed, a file stayed dim under
+   the `mod` line that reached it. `RUSTY_PROBE_UNLINKED` opens a copy of
+   `draw-vectors` on an orphan `src/orphan.rs`, photographs it greyed and
+   faint in both themes, rests the pointer on its row and its tab for the
+   sentence, moves it into a window of its own and back, and applies
+   rust-analyzer's ``Insert `mod orphan;` `` from the hover card: the file
+   is drawn as any other two ticks after the edit lands in `lib.rs`, while
+   the server's `unlinked-file` stands for another second. Found on the
+   way, by reading rather than on screen: the scan would have greyed a
+   crate's root wherever its manifest names it (`[lib] path =
+   "src/core.rs"`), so it reads every manifest's targets now
+   (`modules::manifest_roots`).
 9. **Shipping**: installers and the updater without Tauri, the bundled
    tools, the release workflow.
 

@@ -117,6 +117,10 @@ impl App {
             },
             move |app, written| {
                 let mut failed = false;
+                let paths: Vec<String> = written.iter().map(|(path, ..)| path.clone()).collect();
+                if super::unlinked::touches_rust(&paths) {
+                    app.scan_unlinked();
+                }
                 for (path, text, result) in written {
                     match result {
                         Ok(()) => {
@@ -159,6 +163,10 @@ impl App {
                     // Gone if nothing was typed while it was written; kept
                     // anew if something was.
                     app.back_up(&path);
+                    // A `mod` line saved, or taken away.
+                    if super::unlinked::touches_rust(std::slice::from_ref(&path)) {
+                        app.scan_unlinked();
+                    }
                     app.sync_tabs();
                     match after {
                         After::Close => app.close_tab(&Tab::File(path).id()),
