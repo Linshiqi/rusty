@@ -923,13 +923,20 @@ pub fn room(n: u32, run: &Run) {
             run.snapshot("room-split.png");
             app.act("tab.close");
         }
-        // The card on `true`, and on a method of std's, rendered.
+        // The card on `true`, and on a method of std's, rendered; then the
+        // wheel over each. A card holding all of its documentation lets the
+        // wheel through to the code, as VS Code's does; one that does not
+        // (`sqrt`'s, two notches and thirty) scrolls to the end of it and
+        // the code under it stays put.
         7630 => {
             if hover_on("true") {
                 run.snapshot("room-hover-true.png");
             }
         }
+        7631 => card_wheel(run, &code, 3),
         7632 => {
+            card_wheeled(&code, "true");
+            run.snapshot("room-hover-true-end.png");
             app.editor().hide_hover();
             run.waited.set(0);
         }
@@ -938,26 +945,49 @@ pub fn room(n: u32, run: &Run) {
                 run.snapshot("room-hover-sqrt.png");
             }
         }
-        // The card taller than it may be scrolls under the wheel: three
-        // notches over it, thirty pixels above the line it is about, where
-        // it stands when there is room above (the code begins under the
-        // title bar's forty pixels and the tab strip's thirty-six).
-        7634 => {
-            let line_top =
-                code.get_hover_line() as f32 * code.get_row_height() + code.get_scroll_y();
-            let x = left + code.get_gutter() + code.get_hover_x() + code.get_scroll_x() + 60.0;
-            for _ in 0..3 {
-                run.wheel(x, 76.0 + line_top - 30.0, -120.0, false);
-            }
+        7634 => card_wheel(run, &code, 2),
+        7635 => {
+            run.snapshot("room-hover-sqrt-scrolling.png");
+            card_wheel(run, &code, 30);
         }
         7636 => {
-            eprintln!(
-                "room: the card after the wheel over it: open {}",
-                code.get_hover_open()
-            );
-            run.snapshot("room-hover-scrolled.png");
+            card_wheeled(&code, "sqrt");
+            run.snapshot("room-hover-sqrt-end.png");
         }
         7638 => app.act("app.exit"),
         _ => {}
     }
+}
+
+thread_local! {
+    /// Where the code view stood before the wheel turned over the card.
+    static CODE_TOP: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// The wheel turned `notches` down over the hover card, thirty pixels above
+/// the line it is about: the view first put so the line stands three
+/// quarters of the way down, where more room is above it than the card may
+/// take, so the card is above it (the code begins under the title bar's
+/// forty pixels and the tab strip's thirty-six).
+fn card_wheel(run: &Run, code: &Code, notches: usize) {
+    let row = code.get_row_height();
+    let low = (code.get_hover_line() as f32 * row - code.get_view_height() * 0.75).max(0.0);
+    code.set_scroll_y(-low);
+    CODE_TOP.with(|top| top.set(code.get_scroll_y()));
+    let left = run.editor_left();
+    let line_top = code.get_hover_line() as f32 * row + code.get_scroll_y();
+    let x = left + code.get_gutter() + code.get_hover_x() + code.get_scroll_x() + 60.0;
+    for _ in 0..notches {
+        run.wheel(x, 76.0 + line_top - 30.0, -120.0, false);
+    }
+}
+
+/// What the wheel over the card did to the code under it.
+fn card_wheeled(code: &Code, name: &str) {
+    let before = CODE_TOP.with(std::cell::Cell::get);
+    eprintln!(
+        "room: the wheel over the card on `{name}`: the card open {}, the code under it moved {:.1} pixels",
+        code.get_hover_open(),
+        code.get_scroll_y() - before
+    );
 }

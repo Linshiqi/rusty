@@ -106,10 +106,10 @@ pub fn blocks(text: &str) -> Vec<Block> {
 /// a web address — rust-analyzer resolves an intra-doc link to one where it
 /// can — and an intra-doc link left as a name, `` [`Vec`] `` or
 /// `[crate::Gain]`, is its text, with neither brackets nor a target that
-/// would go nowhere.
+/// would go nowhere. A heading is bold, which is how the card sets it off.
 pub fn doc_blocks(text: &str) -> Vec<Block> {
     let mut reader = Reader {
-        web_links_only: true,
+        doc_comment: true,
         ..Reader::default()
     };
     for event in Parser::new_with_broken_link_callback(text, OPTIONS, Some(doc_name)) {
@@ -163,13 +163,14 @@ struct Reader {
     heading: Option<u32>,
     code: Option<(String, String)>,
     /// The styles open: how deep in each, and the links, innermost last —
-    /// `None` for one read as its text (`web_links_only`).
+    /// `None` for one read as its text (`doc_comment`).
     strong: u32,
     emphasis: u32,
     strike: u32,
     links: Vec<Option<String>>,
-    /// A link is drawn only when it goes to the web (`doc_blocks`).
-    web_links_only: bool,
+    /// Read as a hover card's doc comment (`doc_blocks`): a link is drawn
+    /// only when it goes to the web, and a heading is bold.
+    doc_comment: bool,
     /// Inline tags styling as Markdown would: `<code>` and `<kbd>` open.
     html_code: u32,
     table: Option<Vec<Vec<Cell>>>,
@@ -201,7 +202,7 @@ impl Reader {
     /// A link opened, to `url` — or, read as rustdoc reads one, its text
     /// when `url` is no address on the web.
     fn link(&mut self, url: &str) {
-        let shown = !self.web_links_only || is_web(url);
+        let shown = !self.doc_comment || is_web(url);
         self.links.push(shown.then(|| url.to_string()));
     }
 
@@ -296,6 +297,11 @@ impl Reader {
             Tag::Paragraph => {}
             Tag::Heading { level, .. } => {
                 self.flush();
+                // A card's heading is set off by its weight, VS Code's hover,
+                // not by a size a narrow card has no room for.
+                if self.doc_comment {
+                    self.strong += 1;
+                }
                 self.heading = Some(match level {
                     HeadingLevel::H1 => 1,
                     HeadingLevel::H2 => 2,
@@ -375,6 +381,9 @@ impl Reader {
         match tag {
             TagEnd::Paragraph => self.flush(),
             TagEnd::Heading(_) => {
+                if self.doc_comment {
+                    self.strong = self.strong.saturating_sub(1);
+                }
                 let runs = std::mem::take(&mut self.runs);
                 if let Some(level) = self.heading.take() {
                     let (inline, flow) = written(runs);
@@ -826,7 +835,7 @@ mod tests {
             "The boolean type, [`bool`](https://doc.rust-lang.org/nightly/std/primitive.bool.html)."
         );
         assert!(
-            matches!(&read[1], Block::Heading { level: 2, inline, .. } if inline == "Control structures")
+            matches!(&read[1], Block::Heading { level: 2, inline, .. } if inline == "**Control structures**")
         );
         assert_eq!(text_of(&read[2]), "**true** is the condition of:");
         let items: Vec<&str> = read[3..].iter().map(text_of).collect();
