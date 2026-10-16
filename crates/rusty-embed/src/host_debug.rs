@@ -222,11 +222,14 @@ pub fn host_gdb() -> Option<PathBuf> {
 /// returned the first name it found would pick it and stop. The caller tries
 /// each in turn and keeps the one that talks.
 ///
-/// `lldb-dap` first because it is LLDB's own and is what Linux and macOS
-/// carry. `codelldb` after it: CodeLLDB ships a standalone adapter, and
-/// where it was installed as a VS Code extension it is the one adapter on a
-/// stock Windows machine that works. Reading that directory is a read of a
-/// known path, nothing more — rusty neither drives nor needs the editor.
+/// CodeLLDB first, wherever it is — rusty's own copy, one on the tool
+/// ladder, the VS Code extension's — because it is the adapter VS Code's
+/// Rust users debug with and the one that works on a stock Windows
+/// machine; `lldb-dap` last, LLDB's own, which Linux and macOS carry. Tried
+/// first, the Windows build that answers nothing cost every Debug its
+/// connect timeout before CodeLLDB was reached. Reading the extension's
+/// directory is a read of a known path, nothing more — rusty neither drives
+/// nor needs the editor.
 pub fn host_adapters() -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     // rusty's own copy first, the way the tool ladder puts it first for every
@@ -234,12 +237,9 @@ pub fn host_adapters() -> Vec<PathBuf> {
     // `<family>/bin/<exe>` and a `.vsix` unpacks its adapter beside the LLDB
     // it loads, so this one knows its own shape.
     found.extend(installed_codelldb());
-    found.extend(
-        ["lldb-dap", "codelldb"]
-            .iter()
-            .filter_map(|name| crate::tools::find(name)),
-    );
+    found.extend(crate::tools::find("codelldb"));
     found.extend(codelldb_extensions());
+    found.extend(crate::tools::find("lldb-dap"));
     found.dedup();
     found
 }

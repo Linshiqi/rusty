@@ -180,6 +180,9 @@ impl std::error::Error for Refusal {}
 /// title bar's Test, and the run said it had passed. A member cargo
 /// `exclude`s, the firmware crate, stays out with `--workspace` as without.
 /// A manifest that cannot be read is tested plainly, and cargo says why.
+/// Either way with `--no-fail-fast`, as CI runs it: one failing test
+/// binary stopped the rest, and the root's tests after a failing member's
+/// were never run nor said not to have been.
 pub fn suite_args(root: &Path) -> Vec<String> {
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
     suite_args_for(&manifest)
@@ -194,6 +197,7 @@ pub fn suite_args_for(manifest: &str) -> Vec<String> {
     if workspace {
         args.push("--workspace".to_string());
     }
+    args.push("--no-fail-fast".to_string());
     args
 }
 
@@ -643,32 +647,32 @@ mod tests {
     #[test]
     fn the_suite_is_the_workspace_wherever_the_root_declares_one() {
         let package = "[package]\nname = \"a\"\nversion = \"0.1.0\"\n";
-        assert_eq!(suite_args_for(package), ["test"]);
+        assert_eq!(suite_args_for(package), ["test", "--no-fail-fast"]);
         assert_eq!(
             suite_args_for(&format!("[workspace]\nmembers = [\"core\"]\n\n{package}")),
-            ["test", "--workspace"]
+            ["test", "--workspace", "--no-fail-fast"]
         );
         assert_eq!(
             suite_args_for("[workspace]\nmembers = [\"a\"]\nresolver = \"2\"\n"),
-            ["test", "--workspace"]
+            ["test", "--workspace", "--no-fail-fast"]
         );
         assert_eq!(
             suite_args_for(&format!(
                 "{package}\n[workspace.dependencies]\nlog = \"0.4\"\n"
             )),
-            ["test", "--workspace"]
+            ["test", "--workspace", "--no-fail-fast"]
         );
         assert_eq!(
             suite_args_for("[package]\nname = \"core\"\nversion.workspace = true\n"),
-            ["test"],
+            ["test", "--no-fail-fast"],
             "a member's inherited key is not a workspace",
         );
         assert_eq!(
             suite_args_for("[package\nname ="),
-            ["test"],
+            ["test", "--no-fail-fast"],
             "cargo says what is wrong"
         );
-        assert_eq!(suite_args_for(""), ["test"]);
+        assert_eq!(suite_args_for(""), ["test", "--no-fail-fast"]);
     }
 
     /// Against cargo itself: a root package whose members are a glob, one
@@ -721,7 +725,7 @@ mod tests {
             String::from_utf8_lossy(&output.stdout).into_owned()
         };
         let suite = suite_args(root);
-        assert_eq!(suite, ["test", "--workspace"]);
+        assert_eq!(suite, ["test", "--workspace", "--no-fail-fast"]);
         let all = run(&suite);
         assert!(all.contains("test tests::top_holds ... ok"), "{all}");
         assert!(

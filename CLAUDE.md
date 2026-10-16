@@ -3165,7 +3165,9 @@ where anyone looks for it, and the margin had no room to say "Debug".
   tested the root alone and passed. A crate the workspace `exclude`s — the
   firmware — stays out, as cargo keeps it out; the test that holds it puts
   a `compile_error!` in an excluded glob member and fails without the
-  `exclude`.
+  `exclude`. And with `--no-fail-fast`, as CI runs it: a failing
+  member's binary stopped the suite, and the root's tests after it were
+  neither run nor said not to have been.
 - **A host program is run, not attached to.** `Target::Host` sends
   `-exec-arguments` instead of `-target-select`, is `attached` from the start
   (pushed at once, so the window places its breakpoints *before* the first
@@ -4457,7 +4459,9 @@ is no browser storage, and what the window remembers between runs is
   LLVM 19.1.0's Windows `lldb-dap` starts, stays alive, and answers nothing —
   not stdio, not a socket. So discovery returns a *list*, the caller tries
   each, and the connect timeout is short because a working adapter listens at
-  once. `cargo run -p rusty-dbg --example dap_probe -- <project> <exe> <file>
+  once. CodeLLDB is tried first, wherever it is, and `lldb-dap` last
+  (`host_adapters`): first, the build that answers nothing cost every
+  Debug its timeout before the adapter that works was reached. `cargo run -p rusty-dbg --example dap_probe -- <project> <exe> <file>
   <line> [args…]` is the check that a machine can debug at all — and that
   it goes on: it answers every stop (`DAP_PROBE_STEPS`, `continue` once the
   list runs out) until the program exits, and fails on stops or an exit
