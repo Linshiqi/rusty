@@ -124,6 +124,11 @@
 //! a build, a test's lens, an example's ▶ Run — and says what the dock and
 //! Problems kept of the first run; then filters both and presses Ctrl+`
 //! from the code and from the terminal (`probe_output.rs`).
+//! With `RUSTY_PROBE_TESTFAIL[=<test>]`, on a file with a failing
+//! `assert_eq!` test, it runs the test from its lens and photographs its
+//! message on the line where it failed, on the hover card, in a window of
+//! its own, gone once the line is typed on, and gone with the test mended
+//! (`probe_testfail.rs`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -250,6 +255,7 @@ pub fn start(window: &AppWindow) {
     let frames: Rc<RefCell<Vec<(String, image::RgbaImage)>>> = Rc::default();
     let reading_book = std::env::var_os("RUSTY_PROBE_BOOK").is_some();
     let unlinking = std::env::var_os("RUSTY_PROBE_UNLINKED").is_some();
+    let failing = std::env::var_os("RUSTY_PROBE_TESTFAIL").is_some();
     let chapter: Rc<RefCell<String>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
@@ -489,6 +495,9 @@ pub fn start(window: &AppWindow) {
                 if tab_dragging {
                     step.set(7400);
                 }
+                if failing {
+                    step.set(7300);
+                }
             }
             // Output and Problems across runs, their filter, and Ctrl+`
             // (`probe_output.rs`).
@@ -496,6 +505,8 @@ pub fn start(window: &AppWindow) {
             7530..=7699 if outputs => crate::probe_output::filter_and_terminal(n, &surfaces),
             // Tabs dragged the ways VS Code drags them (`probe_tabs.rs`).
             7400..=7599 if tab_dragging => crate::probe_tabs::tab_drag(n, &surfaces),
+            // A failed test's message on its line (`probe_testfail.rs`).
+            7300..=7499 if failing => crate::probe_testfail::run(n, &surfaces),
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),

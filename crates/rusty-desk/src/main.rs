@@ -25,6 +25,7 @@ mod probe_output;
 mod probe_surfaces;
 mod probe_symbols;
 mod probe_tabs;
+mod probe_testfail;
 mod project;
 mod reveal;
 mod run;

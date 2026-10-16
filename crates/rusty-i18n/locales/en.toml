@@ -393,6 +393,8 @@ lens-run = "Run"
 lens-debug = "Debug"
 # On the pointer over a greyed Rust file in the tree and on its tab.
 unlinked = "No mod line declares this file, so it is in no crate and rust-analyzer answers nothing in it."
+# Under a failed test's message on the hover card: which test said it.
+lens-failed = "Test {name} failed"
 
 [toolbar]
 build = "Build — with the project's own build system (cargo, PlatformIO or CMake), output in the dock"

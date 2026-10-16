@@ -371,6 +371,7 @@ lens-run-tests = "运行全部测试"
 lens-run = "运行"
 lens-debug = "调试"
 unlinked = "没有哪一行 mod 声明这个文件，它不属于任何 crate，rust-analyzer 在里面什么也答不出。"
+lens-failed = "测试 {name} 未通过"
 
 [toolbar]
 build = "构建 —— 用工程自己的构建系统（cargo、PlatformIO 或 CMake），输出在下方面板"

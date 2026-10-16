@@ -8,6 +8,13 @@
 //! as it goes (`rusty_edit::testrun`) and each lens carries a tick or a
 //! cross until the next run of it.
 //!
+//! A failed test's panic is marked where it happened (`editor/failed.rs`):
+//! the place as rustc printed it, resolved against the workspace's root —
+//! which cargo is asked for as the run starts, since rustc runs there and
+//! names every member's file from there — and then made the project's.
+//! A place that is not one of the project's files is not marked; a run
+//! whose workspace cargo could not name marks nothing.
+//!
 //! Debug builds the test binaries visibly, asks each binary which holds the
 //! test (`rusty_embed::host_debug` says why the path cannot), and runs that
 //! one under gdb — or LLDB's debug adapter where the debug information is a
@@ -16,13 +23,13 @@
 use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use rusty_dbg::{AnySession, DapLaunch, DapSession, Debugger, Events, Launch, Target};
-use rusty_edit::testrun::{Heard, Reader, Verdict};
+use rusty_edit::testrun::{Failure, Heard, Reader, Verdict};
 use rusty_edit::{Runnable, RunnableKind};
 use rusty_embed::{CommandPlan, activity::Kind, host_debug};
 use rusty_i18n::t;
 
 use super::App;
-use crate::{run::Ended, work};
+use crate::{editor::Failed, run::Ended, work};
 
 #[derive(Default)]
 pub(super) struct Testing {
@@ -30,6 +37,17 @@ pub(super) struct Testing {
     reader: Option<Reader>,
     /// Every test's last verdict, by the harness's name for it.
     results: HashMap<String, Verdict>,
+    /// Which run is being read: cargo's answer about the workspace is for
+    /// one run, and an answer for another is dropped.
+    run: u64,
+    /// The directory rustc ran in for that run — the workspace's root —
+    /// once cargo has said it; `Some(None)` when it could not.
+    base: Option<Option<PathBuf>>,
+    /// Failures heard before cargo said it.
+    pending: Vec<Failure>,
+    /// The debug session a test is being run under, by its epoch: what
+    /// the program prints is read as a test run's output is.
+    debugged: Option<u64>,
 }
 
 impl App {
@@ -79,9 +97,90 @@ impl App {
             if !app.begin_run(Kind::Test) {
                 return;
             }
-            app.state.borrow_mut().testing.reader = Some(Reader::default());
+            app.tests_begin(&root);
             app.run(&plan, Some(root), |app, _| app.test_ended());
         });
+    }
+
+    /// A run of tests begins, from what is on disk now: its output read
+    /// afresh, and cargo asked where the workspace's root is — beside the
+    /// run, which is building meanwhile — so a panic's place can be named.
+    fn tests_begin(self: &Rc<Self>, root: &std::path::Path) {
+        let run = {
+            let mut state = self.state.borrow_mut();
+            let testing = &mut state.testing;
+            testing.run += 1;
+            testing.base = None;
+            testing.pending.clear();
+            testing.reader = Some(Reader::default());
+            // The reader is this run's: a test still being debugged is
+            // read no more.
+            testing.debugged = None;
+            testing.run
+        };
+        self.editor.tests_began();
+        let dir = root.to_path_buf();
+        work::spawn(
+            move || host_debug::workspace_root(&dir).ok(),
+            move |app, base| {
+                {
+                    let mut state = app.state.borrow_mut();
+                    if state.testing.run != run {
+                        return;
+                    }
+                    state.testing.base = Some(base);
+                }
+                app.tests_place();
+            },
+        );
+    }
+
+    /// Every failure heard and not yet marked, marked now that the
+    /// workspace's root is known: where its place is one of the project's
+    /// files, and nowhere when it is not, or when cargo named no root.
+    fn tests_place(&self) {
+        let (base, pending) = {
+            let mut state = self.state.borrow_mut();
+            let Some(base) = state.testing.base.clone() else {
+                return;
+            };
+            (base, std::mem::take(&mut state.testing.pending))
+        };
+        let (Some(base), Some(root)) = (base, self.root()) else {
+            return;
+        };
+        let (base, root) = (base.to_string_lossy(), root.to_string_lossy());
+        for failure in pending {
+            let Some((printed, line, col)) = failure.at else {
+                continue;
+            };
+            let Some(path) = rusty_edit::testrun::file_in(&printed, &base, &root) else {
+                continue;
+            };
+            self.editor.test_failed(Failed {
+                test: failure.test,
+                path,
+                line,
+                col,
+                message: failure.message,
+            });
+        }
+    }
+
+    /// Another project: the verdicts and the marks were about this one's
+    /// files, and an answer still coming for its run is dropped.
+    pub(super) fn forget_tests(&self) {
+        {
+            let mut state = self.state.borrow_mut();
+            let testing = &mut state.testing;
+            testing.run += 1;
+            testing.reader = None;
+            testing.results.clear();
+            testing.base = None;
+            testing.pending.clear();
+            testing.debugged = None;
+        }
+        self.editor.forget_tests();
     }
 
     fn run_example(self: &Rc<Self>, name: String) {
@@ -112,6 +211,32 @@ impl App {
         self.test_heard(heard);
     }
 
+    /// What a debugged test printed: read as a run's lines are, when the
+    /// session is the one a test's Debug started.
+    pub(super) fn testing_debug_heard(&self, epoch: u64, lines: &[String]) {
+        if self.state.borrow().testing.debugged != Some(epoch) {
+            return;
+        }
+        for text in lines {
+            self.testing_heard(text);
+        }
+    }
+
+    /// That session ended: the run with it.
+    pub(super) fn testing_debug_ended(self: &Rc<Self>, epoch: u64) {
+        let ours = {
+            let mut state = self.state.borrow_mut();
+            let ours = state.testing.debugged == Some(epoch);
+            if ours {
+                state.testing.debugged = None;
+            }
+            ours
+        };
+        if ours {
+            self.test_ended();
+        }
+    }
+
     fn test_ended(self: &Rc<Self>) {
         let heard = self
             .state
@@ -125,19 +250,34 @@ impl App {
     }
 
     fn test_heard(&self, heard: Vec<Heard>) {
-        let mut changed = false;
+        let mut verdicts = Vec::new();
+        let mut failed = false;
         {
             let mut state = self.state.borrow_mut();
             for item in heard {
-                if let Heard::Verdict(name, verdict) = item {
-                    state.testing.results.insert(name, verdict);
-                    changed = true;
+                match item {
+                    Heard::Verdict(name, verdict) => {
+                        state.testing.results.insert(name.clone(), verdict);
+                        verdicts.push(name);
+                    }
+                    Heard::Failure(failure) => {
+                        state.testing.pending.push(failure);
+                        failed = true;
+                    }
                 }
             }
         }
-        if changed {
+        if !verdicts.is_empty() {
+            // A verdict takes away what an earlier run marked for the test
+            // — a test that passes now is marked no more.
+            for name in &verdicts {
+                self.editor.test_verdict(name);
+            }
             let results = self.state.borrow().testing.results.clone();
             self.editor.set_verdicts(results);
+        }
+        if failed {
+            self.tests_place();
         }
     }
 
@@ -182,10 +322,20 @@ impl App {
                             return;
                         }
                         let breakpoints = app.editor.gutter().borrow().all();
+                        let read_in = root.clone();
                         work::spawn(
                             move || start_host(&root, &filter, backend, breakpoints),
-                            |app, started| match started {
-                                Ok((session, events)) => app.debug_own(session, events),
+                            move |app, started| match started {
+                                Ok((session, events)) => {
+                                    // Read as a run of the test is: its
+                                    // verdict on the lens, its panic on
+                                    // its line, where the program prints
+                                    // them.
+                                    app.tests_begin(&read_in);
+                                    app.debug_own(session, events);
+                                    let epoch = app.debug_epoch();
+                                    app.state.borrow_mut().testing.debugged = Some(epoch);
+                                }
                                 Err(why) => app.note(2, why),
                             },
                         );

@@ -61,6 +61,10 @@ export struct Row {
     lens: int,
     lens-x: length,
     verdict: int,
+    // A failed test's message, its first line, after everything else on
+    // the line where it panicked; and where it starts.
+    message: string,
+    message-x: length,
 }
 
 // A row of the completion popup: what it inserts, the note beside it, its
@@ -79,6 +83,9 @@ export struct HoverProblem {
     kind: int,
     text: string,
     detail: string,
+    // A failed test's message, in the code's font: an `assert_eq!`'s
+    // `left` and `right` line up as the harness printed them.
+    mono: bool,
 }
 
 // A fix on the hover card: what it does, and the other files it changes.
@@ -352,10 +359,17 @@ component HoverCard inherits Rectangle {
                 }
                 VerticalLayout {
                     spacing: 2px;
-                    Text {
+                    if !problem.mono: Text {
                         text: problem.text;
                         color: Theme.label;
                         font-size: Theme.small;
+                        wrap: word-wrap;
+                    }
+                    if problem.mono: Text {
+                        text: problem.text;
+                        color: Theme.label;
+                        font-family: Theme.mono;
+                        font-size: Code.font-size;
                         wrap: word-wrap;
                     }
                     if problem.detail != "": Text {
@@ -860,6 +874,18 @@ component RowPaint inherits Rectangle {
         font-size: Code.font-size;
         vertical-alignment: center;
     }
+    // Where a test failed, what it said, dim, after the line: VS Code's
+    // test message. Placed by the Rust, in the code's font, so nothing
+    // on the line moves for it.
+    if root.line.message != "": Text {
+        x: root.gutter + root.line.message-x;
+        height: parent.height;
+        text: root.line.message;
+        color: Theme.test-message;
+        font-family: Theme.mono;
+        font-size: Code.font-size;
+        vertical-alignment: center;
+    }
     // The hints, in the room the pieces left them.
     for hint in root.line.hints: Rectangle {
         x: root.gutter + hint.x;
@@ -1141,11 +1167,16 @@ export component CodeView inherits Rectangle {
                 width: self.preferred-width;
                 height: parent.height;
                 spacing: 4px;
-                if row.verdict > 0: Text {
-                    text: row.verdict == 1 ? "✓" : "✗";
-                    color: row.verdict == 1 ? Theme.patina : Theme.crimson;
-                    font-size: Code.font-size * 0.85;
-                    vertical-alignment: center;
+                // Drawn, not typed: `✓` and `✗` were boxes in the font a
+                // Chinese window falls back to.
+                if row.verdict > 0: Rectangle {
+                    width: min(12px, Code.row-height - 6px);
+                    Icon {
+                        y: (parent.height - self.height) / 2;
+                        path: row.verdict == 1 ? Icons.check : Icons.close;
+                        size: parent.width;
+                        color: row.verdict == 1 ? Theme.patina : Theme.crimson;
+                    }
                 }
                 Text {
                     text: row.lens == 2 ? @tr("files.lens-run") : row.lens == 3 ? @tr("files.lens-run-tests") : @tr("files.lens-run-test");
