@@ -168,12 +168,45 @@ export component AppWindow inherits Window {
                 height: 1px;
                 background: Theme.line;
             }
-            HorizontalLayout {
-                if Shell.left-open: LeftDock {
-                    width: Shell.left-size;
+            // The docks around the editor area. The layout keeps a hairline
+            // where each divider is; the dividers are drawn over the layout,
+            // after it, as the editor groups' is. Inside it, the pane after
+            // each divider lay over the half of its 7 px hold beyond the
+            // line and took the press, so only the near half could be taken
+            // hold of.
+            Rectangle {
+                HorizontalLayout {
+                    if Shell.left-open: LeftDock {
+                        width: Shell.left-size;
+                    }
+                    left-line := Rectangle {
+                        width: Shell.left-open ? 1px : 0px;
+                        background: Theme.line;
+                    }
+                    column := VerticalLayout {
+                        area := EditorArea { }
+                        bottom-line := Rectangle {
+                            height: Shell.bottom-open ? 1px : 0px;
+                            background: Theme.line;
+                        }
+                        if Shell.bottom-open: BottomDock {
+                            height: Shell.bottom-size;
+                        }
+                    }
+                    right-line := Rectangle {
+                        width: Shell.right-open ? 1px : 0px;
+                        background: Theme.line;
+                    }
+                    if Shell.right-open: RightDock {
+                        width: Shell.right-size;
+                    }
                 }
                 if Shell.left-open: Splitter {
                     property <length> start;
+                    x: left-line.x;
+                    y: 0px;
+                    width: 1px;
+                    height: parent.height;
                     pressed => {
                         self.start = Shell.left-size;
                     }
@@ -184,27 +217,29 @@ export component AppWindow inherits Window {
                         Shell.dock-resized("left", Shell.left-size);
                     }
                 }
-                VerticalLayout {
-                    area := EditorArea { }
-                    if Shell.bottom-open: Splitter {
-                        property <length> start;
-                        vertical: false;
-                        pressed => {
-                            self.start = Shell.bottom-size;
-                        }
-                        dragged(travel) => {
-                            Shell.bottom-size = clamp(self.start - travel, 100px, 800px);
-                        }
-                        released => {
-                            Shell.dock-resized("bottom", Shell.bottom-size);
-                        }
+                if Shell.bottom-open: Splitter {
+                    property <length> start;
+                    vertical: false;
+                    x: column.x;
+                    y: column.y + bottom-line.y;
+                    width: column.width;
+                    height: 1px;
+                    pressed => {
+                        self.start = Shell.bottom-size;
                     }
-                    if Shell.bottom-open: BottomDock {
-                        height: Shell.bottom-size;
+                    dragged(travel) => {
+                        Shell.bottom-size = clamp(self.start - travel, 100px, 800px);
+                    }
+                    released => {
+                        Shell.dock-resized("bottom", Shell.bottom-size);
                     }
                 }
                 if Shell.right-open: Splitter {
                     property <length> start;
+                    x: right-line.x;
+                    y: 0px;
+                    width: 1px;
+                    height: parent.height;
                     pressed => {
                         self.start = Shell.right-size;
                     }
@@ -214,9 +249,6 @@ export component AppWindow inherits Window {
                     released => {
                         Shell.dock-resized("right", Shell.right-size);
                     }
-                }
-                if Shell.right-open: RightDock {
-                    width: Shell.right-size;
                 }
             }
             StatusBar { }

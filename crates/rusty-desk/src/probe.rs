@@ -122,6 +122,10 @@
 //! it, opening nothing) and the simulator again, photographing the button's
 //! label with each. `RUSTY_PROBE_DEVICES=palette` opens the palette first,
 //! so the list is not the first overlay the window draws.
+//! With `RUSTY_PROBE_DIVIDERS` it opens the three docks and drags each one's
+//! divider from the half of its hold beyond the line, then from beside what
+//! takes a press in the pane after it, printing whether each dock's size
+//! moved by the drag (`dividers`).
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below).
@@ -315,6 +319,7 @@ pub fn start(window: &AppWindow) {
     let failing = std::env::var_os("RUSTY_PROBE_TESTFAIL").is_some();
     let chapter: Rc<RefCell<String>> = Rc::default();
     let picking_devices = std::env::var_os("RUSTY_PROBE_DEVICES").is_some();
+    let dividing = std::env::var_os("RUSTY_PROBE_DIVIDERS").is_some();
     let device_probe: Rc<RefCell<DeviceProbe>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
@@ -591,6 +596,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if picking_devices {
                     step.set(7800);
+                }
+                if dividing {
+                    step.set(7900);
                 }
             }
             // Output and Problems across runs, their filter, and Ctrl+`
@@ -928,6 +936,7 @@ pub fn start(window: &AppWindow) {
                 told("second: done".to_string());
                 app.act("app.exit");
             }
+            n if dividing && (7900..7950).contains(&n) => dividers(n, &window, &dir),
             n if picking_devices && (7800..7900).contains(&n) => {
                 devices(n, &window, &dir, &step, &waited, &until, &device_probe);
             }
@@ -5339,6 +5348,166 @@ fn snapshot_title_bar(window: &AppWindow, path: &Path) {
     let cropped = image::imageops::crop_imm(&picture, left, 0, wide, bar).to_image();
     cropped.save(path).expect("the snapshot is written");
     eprintln!("snapshot: {}", path.display());
+}
+
+/// A press at `from`, moved to `to` in a few steps and let go there, as a
+/// hand drags.
+fn drag(window: &AppWindow, from: (f32, f32), to: (f32, f32)) {
+    let at = |(x, y): (f32, f32)| LogicalPosition::new(x, y);
+    let button = PointerEventButton::Left;
+    pointer(window, WindowEvent::PointerMoved { position: at(from) });
+    pointer(
+        window,
+        WindowEvent::PointerPressed {
+            position: at(from),
+            button,
+        },
+    );
+    for part in 1..=4 {
+        let share = part as f32 / 4.0;
+        let position = at((
+            from.0 + (to.0 - from.0) * share,
+            from.1 + (to.1 - from.1) * share,
+        ));
+        pointer(window, WindowEvent::PointerMoved { position });
+    }
+    pointer(
+        window,
+        WindowEvent::PointerReleased {
+            position: at(to),
+            button,
+        },
+    );
+}
+
+/// `RUSTY_PROBE_DIVIDERS`: each dock's divider dragged from the half of its
+/// 7 px hold beyond the line — the half the pane after it once lay over and
+/// took the press — and the dock's size read back: it moves by the drag when
+/// the whole hold is the divider's, and not at all when it is not. The left
+/// one is dragged from its near half as well, which always worked.
+fn dividers(n: u32, window: &AppWindow, dir: &Path) {
+    let shell = window.global::<Shell>();
+    let app = work::app();
+    let (width, height) = (window.get_laid_width(), window.get_laid_height());
+    // The docks lie between the title bar and its line, and the status bar.
+    let (top, foot) = (41.0, height - 24.0);
+    let left_line = shell.get_left_size();
+    let right_line = width - shell.get_right_size() - 1.0;
+    let bottom_line = foot - shell.get_bottom_size() - 1.0;
+    let middle_y = (top + bottom_line) / 2.0;
+    let middle_x = (left_line + right_line) / 2.0;
+    let said = |what: &str, before: f32, after: f32, wanted: f32| {
+        eprintln!(
+            "dividers: {what}: {before} -> {after} ({})",
+            if (after - before - wanted).abs() < 0.5 {
+                "moved by the drag".to_string()
+            } else {
+                format!("wanted {wanted:+}, the press went elsewhere")
+            }
+        );
+    };
+    thread_local! {
+        static BEFORE: Cell<f32> = const { Cell::new(0.0) };
+    }
+    match n {
+        7900 => {
+            for (open, dock) in [
+                (shell.get_left_open(), "dock.left"),
+                (shell.get_bottom_open(), "dock.bottom"),
+                (shell.get_right_open(), "dock.right"),
+            ] {
+                if !open {
+                    app.act(dock);
+                }
+            }
+        }
+        7903 => {
+            snapshot(window, &dir.join("docks.png"));
+            BEFORE.set(shell.get_left_size());
+            drag(
+                window,
+                (left_line + 2.5, middle_y),
+                (left_line + 42.5, middle_y),
+            );
+        }
+        7905 => {
+            said(
+                "left, from beyond the line",
+                BEFORE.get(),
+                shell.get_left_size(),
+                40.0,
+            );
+            BEFORE.set(shell.get_bottom_size());
+            drag(
+                window,
+                (middle_x, bottom_line + 2.5),
+                (middle_x, bottom_line - 27.5),
+            );
+        }
+        7907 => {
+            said(
+                "bottom, from beyond the line",
+                BEFORE.get(),
+                shell.get_bottom_size(),
+                30.0,
+            );
+            BEFORE.set(shell.get_right_size());
+            drag(
+                window,
+                (right_line + 2.5, middle_y),
+                (right_line - 37.5, middle_y),
+            );
+        }
+        7909 => {
+            said(
+                "right, from beyond the line",
+                BEFORE.get(),
+                shell.get_right_size(),
+                40.0,
+            );
+            BEFORE.set(shell.get_left_size());
+            drag(
+                window,
+                (left_line - 2.0, middle_y),
+                (left_line - 22.0, middle_y),
+            );
+        }
+        7911 => {
+            said(
+                "left, from before the line",
+                BEFORE.get(),
+                shell.get_left_size(),
+                -20.0,
+            );
+            // Beside what takes a press in the pane after: the bottom dock's
+            // first tab, and the editor's tab strip.
+            BEFORE.set(shell.get_bottom_size());
+            let x = left_line + 24.0;
+            drag(window, (x, bottom_line + 2.5), (x, bottom_line - 17.5));
+        }
+        7913 => {
+            said(
+                "bottom, from beyond the line over its first tab",
+                BEFORE.get(),
+                shell.get_bottom_size(),
+                20.0,
+            );
+            BEFORE.set(shell.get_left_size());
+            let y = top + 18.0;
+            drag(window, (left_line + 2.5, y), (left_line + 22.5, y));
+        }
+        7915 => {
+            said(
+                "left, from beyond the line over the tab strip",
+                BEFORE.get(),
+                shell.get_left_size(),
+                20.0,
+            );
+            snapshot(window, &dir.join("docks-dragged.png"));
+            app.act("app.exit");
+        }
+        _ => {}
+    }
 }
 
 /// The device button clicked as a hand clicks it: in the run control, right
