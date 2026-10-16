@@ -602,7 +602,11 @@ tests green, and CLAUDE.md saying how it works.
    the root declares a workspace, and a debugged test runs in its
    package's directory, as `cargo test` runs it — measured on a member
    whose test reads `fixtures/data.txt`: `NotFound` from the opened root,
-   read from the member.
+   read from the member, by `dap_probe` both ways and by
+   `RUSTY_PROBE_TESTFAIL_VERB=debug` in the window, whose test then failed
+   on its assertion with the fixture's text in the message. The same probe
+   ends by pressing the title bar's Test, and the dock said `$ cargo test
+   --workspace` over the member's test.
 
    Folding, sticky scroll and the minimap next. The folds live in the
    document, carried across every edit (`document::carry`: one below an
