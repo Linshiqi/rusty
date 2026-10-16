@@ -251,8 +251,25 @@ pub fn by_id(id: &str) -> Option<&'static Action> {
 /// the shell, VS Code's `terminal.integrated.commandsToSkipShell`: Ctrl+`
 /// pressed in the terminal is the terminal put away, never a backquote
 /// typed at the prompt. Whatever key such an action is rebound to goes the
-/// same way.
-pub const SKIPS_SHELL: &[&str] = &["terminal.toggle"];
+/// same way. These are the actions of VS Code's default list that rusty
+/// has: the finder and the palette, the build, the docks, and the run and
+/// debug keys — so Ctrl+P in the terminal is the finder, as there, and not
+/// the shell's previous line.
+pub const SKIPS_SHELL: &[&str] = &[
+    "terminal.toggle",
+    "finder.open",
+    "palette.open",
+    "run.build",
+    "dock.left",
+    "dock.bottom",
+    "run.debug",
+    "run.run",
+    "run.stop",
+    "debug.pause",
+    "debug.over",
+    "debug.into",
+    "debug.out",
+];
 
 /// The most strokes a chord takes: VS Code's `Ctrl+K Ctrl+S`.
 pub const STROKES: usize = 2;

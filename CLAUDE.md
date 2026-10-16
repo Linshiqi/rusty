@@ -2410,7 +2410,10 @@ last run's errors on screen, Output had no filter, and Ctrl+` did nothing.
   with the terminal holding the keys, so that is how the toggle knows:
   `term_key` asks the keymap first, before the shell is written to and
   whether or not one is running, and an action in `actions::SKIPS_SHELL`
-  (VS Code's `commandsToSkipShell`) is the window's. The encoder sends an
+  (VS Code's `commandsToSkipShell`) is the window's — the actions of
+  VS Code's default list that rusty has: the finder and the palette, the
+  build, the docks and the run and debug keys, so Ctrl+P in the terminal
+  is the finder, as there, not the shell's previous line. The encoder sends an
   unbound Ctrl+punctuation to the shell as the character (a test holds
   that), so asked second, Ctrl+` would type a backquote — PowerShell's
   escape character — at the prompt; the probe reads the shell's screen
