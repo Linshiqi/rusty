@@ -148,6 +148,19 @@ pub fn start(window: &AppWindow) {
     let Some(dir) = std::env::var_os("RUSTY_PROBE").map(PathBuf::from) else {
         return;
     };
+    // `RUSTY_PROBE_UPDATE=restart` takes the update through Restart: the
+    // installer opens rusty again with this same environment, and the copy
+    // it opens says where it was started from and leaves, rather than find
+    // the same update and install it for ever.
+    let restarted = dir.join("restarted");
+    if restarted.exists() {
+        let _ = std::fs::remove_file(&restarted);
+        let exe = std::env::current_exe().map(|e| e.display().to_string());
+        let said = format!("relaunched {exe:?} pid {}\n", std::process::id());
+        let _ = std::fs::write(dir.join("relaunched.txt"), &said);
+        eprint!("update: {said}");
+        std::process::exit(0);
+    }
     let saves = std::env::var_os("RUSTY_PROBE_SAVES").is_some();
     let made = std::env::var_os("RUSTY_PROBE_NEW").map(PathBuf::from);
     let playground = std::env::var_os("RUSTY_PROBE_PLAYGROUND").is_some();
@@ -1929,7 +1942,13 @@ pub fn start(window: &AppWindow) {
                     shell.get_update_notes().row_count()
                 );
                 snapshot(&window, &dir.join("update.png"));
-                app.act("app.exit");
+                if state == 5 && std::env::var("RUSTY_PROBE_UPDATE").as_deref() == Ok("restart") {
+                    let _ = std::fs::write(&restarted, "");
+                    eprintln!("update: restarting into the installer");
+                    app.act("update.restart");
+                } else {
+                    app.act("app.exit");
+                }
             }
             // What came back: each strip's tabs with what they say beside
             // their names, then one more file opened, so the strip the

@@ -2420,7 +2420,17 @@ download is put in place.
   the shortcuts' folder) so it can be installed and uninstalled in a
   sandbox, with `--silent` — or through its window, whose buttons are
   accessible, so UI Automation can press Install and Done as a person
-  would.
+  would. **`RUSTY_PROBE_UPDATE=restart` takes it the whole way**: those
+  variables set, a debug `rusty.exe` packed (`rusty-release pack`) into an
+  old installer and installed by it, the same packed again with one more
+  file as the served version — the payload's file times are fixed, so a
+  replaced file cannot be told by its time — and the probe checks,
+  downloads, verifies and restarts; the installer waits for it, installs
+  into the sandbox and opens rusty again with the same environment, and
+  that copy writes `relaunched.txt` and leaves rather than update for ever.
+  Proven 2026-10-16: the extra file in the install and in `install.txt`,
+  the relaunch from the install directory, and the sandbox's uninstaller
+  then taking files, shortcuts and registry key away.
 - **An update closes no other window, and the restart says so.** The
   Tauri window's NSIS installer ended every rusty process; `rusty-setup`
   does not — a file another window holds is renamed aside (`*.old`) and
