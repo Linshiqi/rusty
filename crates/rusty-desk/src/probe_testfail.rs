@@ -239,6 +239,12 @@ pub fn run(n: u32, run: &Run) {
             send(WindowEvent::PointerMoved {
                 position: slint::LogicalPosition::new(target.0, target.1),
             });
+            // And on along the message, as a hand's pointer goes on moving:
+            // after one jump, the row it left says so after the row it
+            // reached has, and that "left" stops the card's timer.
+            send(WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(target.0 + 2.0, target.1),
+            });
             waited.set(0);
         }
         7306 => {
@@ -246,8 +252,9 @@ pub fn run(n: u32, run: &Run) {
                 return;
             }
             eprintln!(
-                "testfail: the card under the pointer after {} ticks: {:?}",
+                "testfail: the card under the pointer after {} ticks, open {}: {:?}",
                 waited.get(),
+                code.get_hover_open(),
                 card(&code)
             );
             waited.set(0);
