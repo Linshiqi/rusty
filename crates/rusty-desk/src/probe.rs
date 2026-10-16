@@ -104,6 +104,9 @@
 //! With `RUSTY_PROBE_SYMBOLS` it runs the finder's `@` and `#` in
 //! `probe_symbols.rs`: an outline shown in the editor and gone to, and a
 //! slow answer to a workspace search never shown under the name after it.
+//! With `RUSTY_PROBE_TABDRAG`, on a copy of a Cargo project, it drags tabs
+//! the ways VS Code drags them (`probe_tabs.rs`): along a strip, onto the
+//! other group, into the split, out into a window of its own and back.
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below).
@@ -210,6 +213,7 @@ pub fn start(window: &AppWindow) {
     let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
     let outputs = std::env::var_os("RUSTY_PROBE_OUTPUT").is_some();
     let symbolic = std::env::var_os("RUSTY_PROBE_SYMBOLS").is_some();
+    let tab_dragging = std::env::var_os("RUSTY_PROBE_TABDRAG").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
     // variables, so it probes itself into a directory of its own.
@@ -482,11 +486,16 @@ pub fn start(window: &AppWindow) {
                 if symbolic {
                     step.set(7200);
                 }
+                if tab_dragging {
+                    step.set(7400);
+                }
             }
             // Output and Problems across runs, their filter, and Ctrl+`
             // (`probe_output.rs`).
             7500..=7529 if outputs => crate::probe_output::reproduce(n, &surfaces),
             7530..=7699 if outputs => crate::probe_output::filter_and_terminal(n, &surfaces),
+            // Tabs dragged the ways VS Code drags them (`probe_tabs.rs`).
+            7400..=7599 if tab_dragging => crate::probe_tabs::tab_drag(n, &surfaces),
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),
@@ -5632,7 +5641,7 @@ pub(crate) fn snapshot(window: &AppWindow, path: &Path) {
 }
 
 /// [`snapshot`] of any of the process's windows.
-fn snapshot_of(window: &slint::Window, path: &Path) {
+pub(crate) fn snapshot_of(window: &slint::Window, path: &Path) {
     match window.take_snapshot() {
         Ok(buffer) => {
             let (width, height) = (buffer.width(), buffer.height());

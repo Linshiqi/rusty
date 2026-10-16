@@ -59,6 +59,7 @@ mod shortcuts;
 mod sim;
 mod strip;
 mod symbols;
+mod tab_drag;
 mod tab_menu;
 mod terminal;
 mod testing;
@@ -73,7 +74,7 @@ mod wizard;
 use saving::After;
 
 use crate::{
-    AppWindow, DocTab, Icons, Note, PanelTab, PickRow, Recent, Shell, TreeRow, actions,
+    AppWindow, Icons, Note, PanelTab, PickRow, Recent, Shell, TreeRow, actions,
     docks::{Dock, Glyph},
     editor::{
         Document, Surface,
@@ -242,6 +243,8 @@ struct State {
     tree: tree::Tree,
     /// The Rust files no `mod` declares, drawn dimmed.
     unlinked: unlinked::Unlinked,
+    /// A tab being dragged (`tab_drag.rs`).
+    tab_drag: Option<tab_drag::Drag>,
 }
 
 pub struct App {
@@ -291,6 +294,9 @@ pub struct App {
     keyed: RefCell<Option<Rc<Surface>>>,
     /// The project tree's rows, changed in place (`tree::patch`).
     tree_rows: Rc<VecModel<TreeRow>>,
+    /// The editor groups' strips, changed in place, and what their tabs'
+    /// words measure (`tab_drag.rs`).
+    strips: tab_drag::Strips,
 }
 
 impl App {
@@ -333,6 +339,7 @@ impl App {
             torn: RefCell::default(),
             keyed: RefCell::default(),
             tree_rows,
+            strips: tab_drag::Strips::new(window),
             state: RefCell::new(State {
                 layout: saved.layout.clone(),
                 view: saved.editor,
@@ -476,8 +483,12 @@ impl App {
             .dock_resized(&dock, size));
         on!(on_pick_tab, |app, id| app.pick_tab(&id));
         on!(on_close_tab, |app, id| app.close_tab(&id));
+        on!(on_tab_dragged, |app, id, other, begun, x, y| app
+            .tab_dragged(&id, other, begun, x, y));
         on!(on_tab_dropped, |app, id, other, x, y| app
             .tab_dropped(&id, other, x, y));
+        on!(on_tab_drag_again, |app| app.tab_drag_again());
+        on!(on_tab_drag_cancel, |app| app.tab_drag_cancel());
         on!(on_shade_pick, |app, id| app.shade_pick(&id));
         on!(on_shade_close, |app, id| {
             app.close_tab_in(true, &id);
@@ -1968,29 +1979,17 @@ impl App {
         let Some(window) = self.window() else { return };
         let shell = window.global::<Shell>();
         let state = self.state.borrow();
-        let strip = |tabs: &[Tab]| -> Vec<DocTab> {
-            tabs.iter()
-                .zip(strip::strip_hints(tabs))
-                .map(|(tab, hint)| DocTab {
-                    id: tab.id().into(),
-                    title: tab.title().into(),
-                    hint: hint.into(),
-                    dirty: matches!(tab, Tab::File(path) if self.editor.is_dirty(path)),
-                    kind: tab.kind().into(),
-                    unlinked: matches!(tab, Tab::File(path) if state.unlinked.is_dimmed(path)),
-                })
-                .collect()
-        };
-        let tabs = strip(&state.tabs);
+        // Changed in place, never replaced: a tab under a held pointer
+        // keeps its drag (`tab_drag.rs`).
+        self.strips
+            .show(self.doc_tabs(&state.tabs), self.doc_tabs(&state.other));
         let active = state.active.and_then(|at| state.tabs.get(at));
-        shell.set_tabs(ModelRc::new(VecModel::from(tabs)));
         let shade = state
             .other_active
             .and_then(|at| state.other.get(at))
             .filter(|_| state.split);
         shell.set_split(state.split);
         shell.set_focus_group(state.focus as i32);
-        shell.set_shade_tabs(ModelRc::new(VecModel::from(strip(&state.other))));
         shell.set_shade_active(shade.map(Tab::id).unwrap_or_default().into());
         shell.set_shade_kind(
             shade

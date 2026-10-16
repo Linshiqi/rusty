@@ -295,6 +295,25 @@ impl App {
                 app.move_back(id);
             }
         });
+        // Its tab dragged out onto the main window, let go of, given up.
+        let weak = Rc::downgrade(self);
+        window.on_tab_drag(move |begun, x, y| {
+            if let Some(app) = weak.upgrade() {
+                app.torn_tab_drag(id, begun, x, y);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        window.on_tab_dropped(move |x, y| {
+            if let Some(app) = weak.upgrade() {
+                app.torn_tab_dropped(id, x, y);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        window.on_tab_drag_cancel(move || {
+            if let Some(app) = weak.upgrade() {
+                app.tab_drag_cancel();
+            }
+        });
         let weak = Rc::downgrade(self);
         window.window().on_close_requested(move || {
             let Some(app) = weak.upgrade() else {
@@ -487,21 +506,28 @@ impl App {
         }
     }
 
-    /// A tab of a group let go of after a drag, at `x`, `y` in the main
-    /// window: beyond its edge, it moves into a window of its own there.
-    pub(super) fn tab_dropped(self: &Rc<Self>, id: &str, other: bool, x: f32, y: f32) {
-        let Some(main) = self.window() else { return };
-        let window = main.window();
-        let scale = window.scale_factor();
-        let size = window.size();
-        let (width, height) = (size.width as f32 / scale, size.height as f32 / scale);
-        if (0.0..width).contains(&x) && (0.0..height).contains(&y) {
-            return;
+    /// Its tab carried out of the window (`tab_drag.rs` follows it over the
+    /// main window).
+    fn torn_tab_drag(&self, id: usize, begun: bool, x: f32, y: f32) {
+        if let Some((_, path)) = self.torn_surface(id) {
+            self.torn_tab_dragged(id, &path, begun, x, y);
         }
-        let corner = window.position();
-        let at =
-            PhysicalPosition::new(corner.x + (x * scale) as i32, corner.y + (y * scale) as i32);
-        self.detach(Some((other, id.to_string())), Some(at));
+    }
+
+    /// Its tab let go of: onto the main window's strips or code, it goes
+    /// back in there, where its view was scrolled, and this window — its
+    /// one tab gone — closes.
+    fn torn_tab_dropped(self: &Rc<Self>, id: usize, x: f32, y: f32) {
+        let Some((surface, path)) = self.torn_surface(id) else {
+            return;
+        };
+        let landing = self.torn_tab_landing(id, &path, x, y);
+        let view = surface.scroll();
+        if self.tab_lands(&Tab::File(path), None, landing, Some(view)) {
+            self.torn_forget(id);
+            self.editor.set_scroll(view);
+            self.bring_forward();
+        }
     }
 
     /// `from` is `to` on disk now — the tree renamed or moved it: a window

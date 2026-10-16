@@ -1313,6 +1313,15 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   right.
 - **The split never shows an empty pane**: a group left with no tabs ends
   the split.
+- **Each group draws inside its own pane and nowhere else** (`clip: true` on
+  both panes in `EditorArea`). A page laid out to a least width wider than
+  the pane it was given — the History page, with the divider dragged tight
+  — ran on past the pane's edge, and the group beside it drew its code over
+  the overflow, text printed on text. Clipped, a page that does not shrink
+  is cut at its pane's edge whatever it does; making it shrink is the
+  page's own business. The divider's 220 px least holds while it is
+  dragged and when `workbench.toml` gives a share back, because both go
+  through the one `clamp` the panes are placed by.
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
   split comes back with them (`app/strip.rs`).
 - **The divider is dragged, and where it was left is kept** with the docks'
@@ -1331,6 +1340,42 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   front is brought into view whenever it changes or the lane is resized —
   from a timer a millisecond on, because a new tab's place is not laid out
   while the tab is being made, and asked for it then is a binding loop.
+- **A tab is dragged as VS Code drags one** (`crate::tab_drag`, pure and
+  tested; `app/tab_drag.rs` is the drag as the window reports it). Carried
+  more than four pixels from its press — a click still picks it and a middle
+  click still closes it — it goes along its strip to the gap the marker
+  shows, onto the other group's strip at a gap or onto its code, onto the
+  right half of the only group's code to open the split with it there (the
+  overlay shows the half), or beyond the window's edge into a window of its
+  own. The group it lands in takes the keys with it in front, as VS Code's
+  does; the one it left keeps a tab in front; a group left empty ends the
+  split, and the split is offered only while a tab would be left. Every
+  file in front of a view afterwards is where its view had it, the moved
+  one included (`App::tab_lands`): its text, caret and history were always
+  the document's. Held near the end of a lane with more tabs that way, the
+  lane scrolls under it. Escape gives it up — in the root `FocusScope`'s
+  `capture-key-pressed`, before the code, which takes Escape for itself.
+- **The strip is measured by Rust, so where a tab lands is where it is
+  drawn.** Slint lets nothing outside a `for` read the geometry of what it
+  made, and a `changed` handler reporting it runs after the event that
+  needed it. So each tab is as wide as `App::tab_width` measures its words
+  (`DocTab.width`, through two hidden `Text`s at the strip's sizes), and the
+  rest — the panes, each lane's width and how far it is scrolled — is read
+  off the laid-out window at every move, synchronously
+  (`EditorArea.tab-geometry`). Which is why the other group's pane is
+  always made and only shown while split: an element inside an `if` cannot
+  be read from outside it.
+- **A strip's model is changed in place, never replaced** (`Strips::show`,
+  the tree's `patch` again): a new model is every tab made again, and the
+  tab under a held pointer took the drag with it — `sync_tabs` runs on any
+  edit, a watcher's batch or a git poll.
+- **A probe's pointer shares the window with the real cursor.** A window
+  shown, raised or moved under the desk's own cursor is sent a move to
+  where that cursor is, and a held tab follows it: `RUSTY_PROBE_TABDRAG`
+  once read a two-pixel carry as a drag and photographed its markers over
+  the code, while every drop — made at the probe's own place — landed
+  right. Its steps say the pointer's place again before every look and
+  every release (`probe_tabs::hold`).
 - **A tab's right-click menu is VS Code's** (`app/tab_menu.rs`): Close,
   Close others, Close to the right, Close saved, Close all; Copy path, Copy
   relative path (the system's separator, as VS Code's `auto`); Reveal in
@@ -1579,6 +1624,17 @@ Slint window holding one file (`TornWindow`, `ui/torn.slint`), and
   of from inside its own callback is dropped a turn later
   (`Timer::single_shot`). Move into Main Window, the icon on its strip, puts
   the tab back in the group with the keys, where its view was scrolled.
+- **Its tab drags back in.** Slint carries no drag from one window to
+  another, so its tab reports the pointer in its own window's coordinates
+  and the main window is hit-tested through the screen: each window's
+  client corner — winit's `inner_position`, since a window's `position`
+  counts its frame — and each window's own scale (`App::torn_point_in_main`).
+  Let go over a gap of a main window's strip, a group's code or the right
+  half of the only group's code, the file goes in there where its view was
+  scrolled and its window, its one tab gone, closes; let go over itself or
+  over no window, it stays. The main window draws the marker and the
+  overlay meanwhile. The main window is hit-tested whatever is in front of
+  it on the screen, which no Slint API can say.
 - **It follows the tree as a tab does.** A rename or a move there moves the
   document for every window at once (`Surface::moved`, the map being one),
   and the torn window takes the new name (`App::torn_moved`, from
