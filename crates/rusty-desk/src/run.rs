@@ -5,6 +5,12 @@
 //! `cargo install`s over the package cache, a build over the build
 //! directory, a flash over the port. A second run asked for while one is
 //! going waits for the first to be stopped; the caller decides whether to.
+//!
+//! Every run somebody asks for starts on an empty dock ([`starts_afresh`]),
+//! once for the whole of it: a flash's build and its write are one run, as
+//! a simulation's build and its boot are. The dock draws what the filter
+//! over it lets through ([`crate::filter`]); the lines themselves are kept
+//! whole under it.
 
 use std::{
     cell::{Cell, RefCell},
@@ -14,11 +20,17 @@ use std::{
 
 use rusty_embed::{
     CommandPlan,
+    activity::Kind,
     process::{Input, Session, Stopper},
 };
-use slint::{Model, VecModel};
+use slint::{FilterModel, MapModel, Model, ModelRc, VecModel};
 
-use crate::{OutputLine, app::App, work};
+use crate::{
+    OutputLine, OutputPiece,
+    app::App,
+    filter::{Filter, Level},
+    work,
+};
 
 /// How a run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,8 +56,24 @@ pub mod kind {
     pub const DONE: i32 = 4;
 }
 
-/// How many lines the dock keeps; the oldest go first.
+/// How many lines the dock keeps at most; the oldest go first, a tenth of
+/// them at a time.
 const KEPT: usize = 20_000;
+
+/// Whether a run of this kind starts on an empty dock, with the last
+/// build's problems gone from Problems. A run somebody asked for does — a
+/// build, a simulation and its restart, a flash, a monitor, a test, an
+/// example, a debug session: what is on screen is then what this run said,
+/// never the last one's errors over code that has since been mended. A
+/// command between runs — a git write, an install, a `cargo add` — is
+/// added below what is there, as a terminal's history is. A run's later
+/// steps are not asked about at all: a chain begins once.
+pub fn starts_afresh(kind: Kind) -> bool {
+    !matches!(kind, Kind::Install | Kind::Command)
+}
+
+/// The filter function the dock's lines pass through.
+type Passes = Box<dyn Fn(&OutputLine) -> bool>;
 
 struct Running {
     generation: u64,
@@ -56,13 +84,22 @@ struct Running {
 }
 
 pub struct Runner {
+    /// Every line, as printed.
     output: Rc<VecModel<OutputLine>>,
+    /// What the filter box and its switches say, and the lines they let
+    /// through, which is what the dock draws.
+    filter: Rc<RefCell<Filter>>,
+    shown: Rc<FilterModel<Rc<VecModel<OutputLine>>, Passes>>,
     running: RefCell<Option<Running>>,
     generation: Cell<u64>,
     /// Where the last run ran: what a relative path it printed is relative
     /// to.
     dir: RefCell<Option<PathBuf>>,
+    /// Told the counts whenever they may have moved (`on_counts`).
+    counted: RefCell<Option<Counted>>,
 }
+
+type Counted = Box<dyn Fn(usize, usize)>;
 
 /// What kind a line is, by what it says: a compiler's `error` and
 /// `warning`, and the lines a tool prints when it fails.
@@ -97,13 +134,32 @@ pub fn plain(text: &str) -> String {
     out
 }
 
+impl Default for Runner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runner {
-    pub fn new(output: Rc<VecModel<OutputLine>>) -> Runner {
+    pub fn new() -> Runner {
+        let output = Rc::new(VecModel::<OutputLine>::default());
+        let filter = Rc::new(RefCell::new(Filter::default()));
+        let passes: Passes = {
+            let filter = filter.clone();
+            Box::new(move |line: &OutputLine| {
+                filter
+                    .borrow()
+                    .shows(&line.text, Level::of_output(line.kind))
+            })
+        };
         Runner {
+            shown: Rc::new(FilterModel::new(output.clone(), passes)),
             output,
+            filter,
             running: RefCell::default(),
             generation: Cell::new(0),
             dir: RefCell::default(),
+            counted: RefCell::default(),
         }
     }
 
@@ -112,9 +168,58 @@ impl Runner {
         self.dir.borrow().clone()
     }
 
-    /// A line of the dock, as it is drawn.
+    /// What the dock draws: the lines the filter lets through, each with
+    /// what the box holds marked in it.
+    pub fn view(&self) -> ModelRc<OutputLine> {
+        let filter = self.filter.clone();
+        ModelRc::new(MapModel::new(
+            self.shown.clone(),
+            move |mut line: OutputLine| {
+                let pieces: Vec<OutputPiece> = filter
+                    .borrow()
+                    .pieces(&line.text)
+                    .into_iter()
+                    .map(|(text, hit)| OutputPiece {
+                        text: text.into(),
+                        hit,
+                    })
+                    .collect();
+                if !pieces.is_empty() {
+                    line.pieces = ModelRc::new(VecModel::from(pieces));
+                }
+                line
+            },
+        ))
+    }
+
+    /// The line drawn `index`th, with the filter as it is now.
     pub fn line(&self, index: usize) -> Option<OutputLine> {
-        self.output.row_data(index)
+        (index < self.shown.row_count())
+            .then(|| self.output.row_data(self.shown.unfiltered_row(index)))
+            .flatten()
+    }
+
+    /// Every line kept, filtered or not.
+    pub fn all_text(&self) -> String {
+        let lines: Vec<String> = self.output.iter().map(|l| l.text.to_string()).collect();
+        lines.join("\n")
+    }
+
+    /// The filter, as the box and its switches show it.
+    pub fn filter(&self) -> Filter {
+        self.filter.borrow().clone()
+    }
+
+    /// The filter changed: every line judged again.
+    pub fn set_filter(&self, change: impl FnOnce(&mut Filter)) {
+        change(&mut self.filter.borrow_mut());
+        self.shown.reset();
+        self.recount();
+    }
+
+    /// How many lines are drawn, and how many are kept.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.shown.row_count(), self.output.row_count())
     }
 
     pub fn is_running(&self) -> bool {
@@ -137,18 +242,40 @@ impl Runner {
             path: path.into(),
             line,
             col,
+            ..Default::default()
         });
         let over = self.output.row_count().saturating_sub(KEPT);
         if over > 0 {
             // From the front, in one go: one removal per line kept the
-            // model busy longer than the run that printed them.
-            let kept: Vec<OutputLine> = self.output.iter().skip(over).collect();
+            // model busy longer than the run that printed them. And a
+            // tenth more than is over, so the next trim is two thousand
+            // lines away: every trim is the whole model set again, and the
+            // filter over it judges every line again.
+            let kept: Vec<OutputLine> = self.output.iter().skip(over + KEPT / 10).collect();
             self.output.set_vec(kept);
+        }
+        // The count beside the box moves with every line while it narrows;
+        // with nothing typed it says nothing, and is not told.
+        if self.filter.borrow().narrows() {
+            self.recount();
         }
     }
 
     pub fn clear(&self) {
         self.output.set_vec(Vec::new());
+        self.recount();
+    }
+
+    /// Who hears how many lines are drawn out of how many kept.
+    pub fn on_counts(&self, heard: impl Fn(usize, usize) + 'static) {
+        self.counted.replace(Some(Box::new(heard)));
+    }
+
+    fn recount(&self) {
+        if let Some(heard) = self.counted.borrow().as_ref() {
+            let (shown, kept) = self.counts();
+            heard(shown, kept);
+        }
     }
 
     /// Run `plan` in `dir`, its lines into the dock, and hand how it ended
@@ -289,5 +416,104 @@ mod tests {
             kind::ERROR
         );
         assert_eq!(kind_of("   Compiling esp-hal v1.0.0"), kind::PLAIN);
+    }
+
+    /// Every run somebody asks for starts on an empty dock; a command
+    /// between runs is added to what is there.
+    #[test]
+    fn a_run_starts_afresh_and_a_command_does_not() {
+        for kind in [
+            Kind::Build,
+            Kind::Test,
+            Kind::Flash,
+            Kind::Monitor,
+            Kind::Simulate,
+            Kind::Debug,
+            Kind::Link,
+        ] {
+            assert!(starts_afresh(kind), "{kind:?}");
+        }
+        assert!(!starts_afresh(Kind::Install));
+        assert!(!starts_afresh(Kind::Command));
+    }
+
+    /// Past the limit the oldest go a tenth at a time, the newest kept,
+    /// and a filter in force goes on narrowing what is left.
+    #[test]
+    fn the_oldest_lines_go_a_tenth_at_a_time() {
+        let runner = Runner::new();
+        runner.set_filter(|f| f.set_text("7"));
+        for at in 0..=KEPT {
+            runner.say(&format!("line {at}"), kind::PLAIN);
+        }
+        let (shown, kept) = runner.counts();
+        assert_eq!(kept, KEPT - KEPT / 10);
+        assert_eq!(
+            runner.all_text().lines().last(),
+            Some(format!("line {KEPT}").as_str())
+        );
+        assert!(shown > 0 && shown < kept);
+        assert!(drawn(&runner).iter().all(|line| line.contains('7')));
+    }
+
+    fn drawn(runner: &Runner) -> Vec<String> {
+        (0..runner.counts().0)
+            .filter_map(|at| runner.line(at))
+            .map(|line| line.text.to_string())
+            .collect()
+    }
+
+    /// The filter decides what is drawn and keeps everything: a line that
+    /// arrives under it is judged as it arrives, a click on a drawn line
+    /// finds the line drawn, and an empty box draws them all again.
+    #[test]
+    fn the_filter_narrows_what_is_drawn_and_keeps_every_line() {
+        let runner = Runner::new();
+        runner.say("$ cargo build", kind::COMMAND);
+        runner.say_at(
+            "error[E0412]: cannot find type `Vector3d`",
+            kind::ERROR,
+            Some(("src/lib.rs".into(), 6, 11)),
+        );
+        runner.say("warning: unused import", kind::WARNING);
+        runner.set_filter(|f| f.set_text("VECTOR"));
+        assert_eq!(
+            drawn(&runner),
+            ["error[E0412]: cannot find type `Vector3d`"]
+        );
+        assert_eq!(
+            runner.line(0).map(|l| l.path.to_string()).as_deref(),
+            Some("src/lib.rs")
+        );
+        assert!(runner.line(1).is_none());
+        runner.say("error: could not compile, vector or not", kind::ERROR);
+        assert_eq!(runner.counts(), (2, 4));
+        let marked: Vec<(String, bool)> = runner
+            .view()
+            .row_data(0)
+            .unwrap()
+            .pieces
+            .iter()
+            .map(|p| (p.text.to_string(), p.hit))
+            .collect();
+        assert_eq!(
+            marked,
+            [
+                ("error[E0412]: cannot find type `".to_string(), false),
+                ("Vector".to_string(), true),
+                ("3d`".to_string(), false),
+            ]
+        );
+        runner.set_filter(|f| {
+            f.set_text("");
+            f.toggle(Level::Warning);
+        });
+        assert_eq!(drawn(&runner), ["warning: unused import"]);
+        runner.set_filter(|f| f.toggle(Level::Warning));
+        assert_eq!(runner.counts(), (4, 4));
+        assert_eq!(runner.view().row_data(0).unwrap().pieces.row_count(), 0);
+        assert!(runner.all_text().starts_with("$ cargo build\nerror[E0412]"));
+        runner.clear();
+        assert_eq!(runner.counts(), (0, 0));
     }
 }

@@ -733,6 +733,28 @@ tests green, and CLAUDE.md saying how it works.
    event loop — and a new factor is followed by the logical size it makes
    (`zoom::apply`).
 
+   Then three from v0.7.1, beside VS Code again. Every run somebody asks
+   for — Build, Run and its restart, Flash, Monitor, a test and its lens,
+   an example's ▶ Run, Debug — starts on an empty Output with the last
+   build's errors gone from Problems, once for the whole of it
+   (`App::begin_run`, `run::starts_afresh`): a flash's build and its write
+   are one run, and a command between runs is added below. Build had been
+   the one run that dropped the last build's errors: after a test's lens,
+   an example or the simulator, Problems still listed *The last build*'s
+   error in mended code, and a monitor's lines landed under the build's.
+   Output and Problems have VS Code's filter box in the dock's title row,
+   with three switches for errors, warnings and the rest (`crate::filter`;
+   Output's through Slint's `FilterModel` and a `MapModel` that marks every
+   match), judged on committed text so an input method's composition never
+   empties the panel; Ctrl+F in either goes to its box and Escape clears
+   it. And Ctrl+` is VS Code's Toggle Terminal (`docks::toggle_terminal`):
+   the terminal forward with the keys, or put away when it has them — the
+   key taken before the shell, which had been sent a backquote for it
+   (`actions::SKIPS_SHELL`). The probe's `RUSTY_PROBE_OUTPUT`
+   (`probe_output.rs`) breaks `draw-vectors`, builds, mends it and runs
+   again three ways, filters both panels and presses Ctrl+` from the code
+   and from the terminal.
+
 ## Decided
 
 - **Shipping is our own, not a packager's.** `cargo-packager` was the

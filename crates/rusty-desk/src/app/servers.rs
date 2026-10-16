@@ -360,6 +360,15 @@ impl App {
         }
         shell.set_errors(errors);
         shell.set_warnings(warnings);
+        // The filter box narrows what is listed; the counts in the status
+        // bar stay what the servers found.
+        let total = crate::filter::problem_count(&rows);
+        let rows = {
+            let state = self.state.borrow();
+            crate::filter::narrow_problems(rows, &state.problems_filter)
+        };
+        let shown = crate::filter::problem_count(&rows);
+        shell.set_problems_filter(self.problems_filter_state((shown, total)));
         shell.set_problems(ModelRc::new(VecModel::from(rows)));
     }
 

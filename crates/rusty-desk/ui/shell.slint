@@ -79,6 +79,22 @@ export struct ProblemRow {
     count: int,
 }
 
+// What a panel's filter switches say, and how many rows it lets through
+// out of how many, as words beside the box while it narrows anything.
+export struct FilterState {
+    errors: bool,
+    warnings: bool,
+    other: bool,
+    count: string,
+}
+
+// A piece of an Output line under the filter, and whether it is what the
+// filter box holds.
+export struct OutputPiece {
+    text: string,
+    hit: bool,
+}
+
 // A line of the Output dock, and how it is drawn: as printed (0), the
 // command run (1), an error (2), a warning (3), a run that ended well (4).
 export struct OutputLine {
@@ -89,6 +105,10 @@ export struct OutputLine {
     path: string,
     line: int,
     col: int,
+    // The line cut where the filter box's text is in it, the matches
+    // marked; empty while nothing is typed, and then the text is drawn
+    // whole.
+    pieces: [OutputPiece],
 }
 
 // A row of the Environment page: a group's heading, or a tool — its
@@ -1430,6 +1450,21 @@ export global Shell {
     // link — and a line typed there.
     in property <bool> output-input;
     callback output-send(string);
+
+    // The filter box over Output and over Problems, VS Code's in a panel's
+    // title row: what is typed in each (committed text only, never an
+    // input method's composition), its level switches and its count, and
+    // a tick that gives the box of the panel in front the keys.
+    in-out property <string> output-filter-text;
+    in-out property <string> problems-filter-text;
+    in property <FilterState> output-filter;
+    in property <FilterState> problems-filter;
+    in-out property <int> filter-focus;
+    callback filter-edited(string, string);
+    callback filter-level(string, string);
+    // A key in Output or Problems while it has the keys: Ctrl+F (or what
+    // Find is bound to) to its box, Escape clearing it.
+    callback panel-key(string, KeyEvent) -> bool;
 
     // What the language servers found, file by file.
     in property <[ProblemRow]> problems;

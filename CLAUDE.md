@@ -2312,6 +2312,79 @@ their board-and-port box, Xcode's destination picker and activity view,
   the RP2040's `BOOT2` and refuses a length it cannot evaluate rather than
   half-reading it; every template's own script is its test.
 
+## Output, its filter, and the terminal's key
+
+Three things v0.7.1's user found missing beside VS Code: a run left the
+last run's errors on screen, Output had no filter, and Ctrl+` did nothing.
+
+- **Every run somebody asks for starts on an empty dock, once, with the
+  last build's problems gone** (`run::starts_afresh`, `App::begin_run` in
+  `app/output.rs`): Build, the simulator's Run and its restart, Flash,
+  Monitor and the serial link, a test and its lens, an example's ▶ Run,
+  Debug. Flash builds first and Run builds then boots, and neither clears
+  between its steps — the build began the run, and its errors are what
+  somebody reads when the write never comes. A command between runs (a git
+  write, an install, a `cargo add`) is added below what is there, as a
+  terminal's history is. **It was one `runner.clear()` per entry point,
+  and the entry points disagreed.** Build alone dropped the last build's
+  errors (`BuildLog`); a test, its lens, an example's ▶ Run, the
+  simulator's Run and a test's Debug emptied the dock and left *The last
+  build* in Problems, listing an error in code that had since been mended —
+  reproduced by `RUSTY_PROBE_OUTPUT` on the window as it was before: the
+  dock fresh after a test's lens, Problems still on `mismatched types` at
+  `lib.rs` 34:27 — and Monitor and the serial link cleared nothing, so a
+  board's lines landed under the last build's. A rule spelled once at each
+  of eight doors is eight rules; it is one function now, and a door that
+  continues a run (a flash's write) says so by not calling it.
+- **A run refused before it starts clears nothing.** `begin_run` asks
+  whether another run is going *before* it empties anything: the test
+  lens's old order — clear, then run — wiped a running monitor's lines for
+  a test that `Runner::run` then refused.
+- **The filter decides what is drawn and keeps every line**
+  (`crate::filter`, pure and tested; `Runner::view`: Slint's `FilterModel`
+  over the lines and a `MapModel` over that, which cuts each line drawn
+  into pieces where the box's text is, so every match is marked as a
+  find's is). A line arriving while the filter is in force is judged as it
+  arrives; a click on a drawn line finds the line drawn
+  (`FilterModel::unfiltered_row`, `Runner::line`); Copy all copies every
+  line kept, as VS Code's does under a filter; the count beside the box
+  (`3 of 120`) is said only while it narrows. The text is found in any
+  case, by Unicode lower case, with each folded byte remembering which
+  character of the line it came from — `İ` is two characters in lower case,
+  and a mark placed by folded offsets lands a byte early. Three switches
+  beside the box narrow to errors, to warnings and to the rest, by
+  `run::kind_of`'s colour; none on is every level, so the row is quiet
+  until somebody wants it. Problems has the same box and switches
+  (`filter::narrow_problems`): a problem shows when its message or place
+  holds the text, or its file's name or folder does, and a file's heading
+  only over what is still shown, counting that. The status bar's counts
+  stay what the servers found. Ctrl+F — whatever Find is bound to — while
+  Output or Problems has the keys (a click in it gives them) goes to its
+  box (`App::panel_key`); Escape clears it, in the box or the panel.
+- **The filter judges committed text, never an input method's
+  composition** (`preedit-text` in `PanelFilter`, `ui/docks.slint`), the
+  tree box's rule: filtering on `f'l'y` on the way to 飞 would empty the
+  panel and fill it again at every syllable.
+- **Ctrl+` is VS Code's Toggle Terminal, and the shell never hears it**
+  (`terminal.toggle`, `docks::toggle_terminal`, pure and tested). From a
+  closed dock or another panel the terminal comes forward with the keys;
+  in front without them it takes them; with them the dock goes and the
+  keys return to the code. The terminal is the one place the key is heard
+  with the terminal holding the keys, so that is how the toggle knows:
+  `term_key` asks the keymap first, before the shell is written to and
+  whether or not one is running, and an action in `actions::SKIPS_SHELL`
+  (VS Code's `commandsToSkipShell`) is the window's. The encoder sends an
+  unbound Ctrl+punctuation to the shell as the character (a test holds
+  that), so asked second, Ctrl+` would type a backquote — PowerShell's
+  escape character — at the prompt; the probe reads the shell's screen
+  after the key and finds none. From
+  the code it reaches the keymap as every key the editor does not take
+  does (`Shell::invoke_key`). The key is named as Slint names it, `` ` ``
+  with Ctrl, which winit takes off the layout (`logical_key`), not off the
+  input method — the US layout a Chinese IME runs on gives the backquote
+  with Ctrl held whatever the IME's punctuation mode; a real IME was not
+  driven, only the platform's events.
+
 ## The playground
 
 Wokwi's new project, without the folder, the generator or the account: one
@@ -2859,7 +2932,7 @@ rules it settled, each the answer to something that went wrong.
   read as "Test ran a build".
 - **The keyboard reaches everything.** The palette lists every action with
   its key; the keys are VS Code's wherever a VS Code key exists (Ctrl+P,
-  Ctrl+Shift+P, Ctrl+B, Ctrl+\, F12, Ctrl+., Ctrl+Shift+N, Ctrl+K Ctrl+S),
+  Ctrl+Shift+P, Ctrl+B, Ctrl+`, Ctrl+\, F12, Ctrl+., Ctrl+Shift+N, Ctrl+K Ctrl+S),
   Arduino's for the board (Ctrl+U flashes, Ctrl+Shift+M monitors), and
   never an Alt letter, which a layout with AltGr types characters with.
   Every one can be rebound (*Keyboard shortcuts*), and what shows a key

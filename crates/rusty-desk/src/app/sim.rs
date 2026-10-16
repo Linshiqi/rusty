@@ -445,6 +445,11 @@ impl App {
                 return;
             }
         };
+        // A fresh dock and Problems for the whole run — its build, its
+        // image and its boot — and for a restart, which is a run again.
+        if !self.begin_run(Kind::Simulate) {
+            return;
+        }
         let steps: VecDeque<CommandPlan> = plan.steps.clone().into();
         // The board as this run's plan has it, beside the code.
         self.load_board(Some(plan.clone()));
@@ -462,7 +467,6 @@ impl App {
         self.sync_waves();
         self.sync_lab();
         self.board_moved();
-        self.runner.clear();
         self.begin(Kind::Simulate, None);
         self.sim_steps(steps, start, firmware);
     }

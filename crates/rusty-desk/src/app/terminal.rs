@@ -13,7 +13,11 @@ use rusty_term::{Colour, Screen, Style, Terminal};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, platform::Key};
 
 use super::App;
-use crate::{Shell, TermRow, TermSpan, Theme, work};
+use crate::{
+    Shell, TermRow, TermSpan, Theme,
+    docks::{self, Dock, TerminalToggle},
+    work,
+};
 
 /// The sixteen base colours, light and dark: a program asking for red means
 /// the theme's red, and a palette baked for a dark ground is unreadable on
@@ -202,6 +206,37 @@ fn pieces(text: &str) -> Vec<(&str, usize)> {
 }
 
 impl App {
+    /// Ctrl+`, VS Code's Toggle Terminal (`docks::toggle_terminal`):
+    /// `keys_in_terminal` when it was pressed in the terminal, which is
+    /// the one place the key is heard with the terminal holding the keys.
+    pub(super) fn toggle_terminal(self: &Rc<Self>, keys_in_terminal: bool) {
+        let (open, front) = {
+            let state = self.state.borrow();
+            (state.layout.bottom.open, Dock::Bottom.front(&state.layout))
+        };
+        match docks::toggle_terminal(open, front, keys_in_terminal) {
+            TerminalToggle::Show => {
+                // A panel made now takes the keys as it is made; one there
+                // already is told to.
+                self.show_panel("bottom", "terminal");
+                self.term_refocus();
+            }
+            TerminalToggle::Focus => self.term_refocus(),
+            TerminalToggle::Hide => {
+                self.toggle_dock(Dock::Bottom);
+                // The keys back to the code, which is where VS Code puts
+                // them; the window's own bindings otherwise.
+                if let Some(window) = self.window() {
+                    if matches!(self.active_tab(), Some(super::Tab::File(_))) {
+                        window.invoke_focus_code();
+                    } else {
+                        window.invoke_focus_window();
+                    }
+                }
+            }
+        }
+    }
+
     /// The panel shown: a shell, if there is none.
     pub(super) fn term_ensure(self: &Rc<Self>) {
         let needed = {
@@ -282,8 +317,40 @@ impl App {
         self.sync_term();
     }
 
-    /// A key while the terminal has focus. `true` when the shell took it.
-    pub(super) fn term_key(&self, text: &str, control: bool, alt: bool, shift: bool) -> bool {
+    /// A key while the terminal has focus. `true` when the shell took it —
+    /// or the window did, for an action the shell is never sent
+    /// (`actions::SKIPS_SHELL`), which is checked first: before the shell
+    /// is asked, and whether or not one is running.
+    pub(super) fn term_key(
+        self: &Rc<Self>,
+        text: &str,
+        control: bool,
+        alt: bool,
+        shift: bool,
+    ) -> bool {
+        if let Some(stroke) = crate::keys::chord(text, control, alt, shift, false) {
+            let skips = {
+                let state = self.state.borrow();
+                state
+                    .keys
+                    .map
+                    .bound_to(&stroke)
+                    .map(|action| action.id)
+                    .filter(|id| crate::actions::SKIPS_SHELL.contains(id))
+            };
+            match skips {
+                // Pressed here, so the terminal has the keys.
+                Some("terminal.toggle") => {
+                    self.toggle_terminal(true);
+                    return true;
+                }
+                Some(id) => {
+                    self.act(id);
+                    return true;
+                }
+                None => {}
+            }
+        }
         let Some(terminal) = self.state.borrow().term.terminal.clone() else {
             return false;
         };
@@ -523,6 +590,16 @@ mod tests {
         assert_eq!(encode("C", true, false), Some(vec![0x03]));
         assert_eq!(encode("[", true, false), Some(vec![0x1b]));
         assert_eq!(encode("@", true, true), Some(b"@".to_vec()));
+    }
+
+    /// Ctrl with a punctuation mark that has no control code is the mark
+    /// itself, to the encoder — so Ctrl+` would type a backquote at the
+    /// prompt, which is why `term_key` asks the keymap first and keeps an
+    /// action in `actions::SKIPS_SHELL` from the shell.
+    #[test]
+    fn ctrl_backquote_would_be_a_backquote_to_the_shell() {
+        assert_eq!(encode("`", true, false), Some(b"`".to_vec()));
+        assert!(crate::actions::SKIPS_SHELL.contains(&"terminal.toggle"));
     }
 
     /// The keys a line editor reads arrive as the sequences it expects, and

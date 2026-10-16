@@ -45,6 +45,7 @@ mod memory;
 mod menu;
 mod navigate;
 mod new_window;
+mod output;
 mod part;
 mod pictures;
 mod playground;
@@ -197,6 +198,9 @@ struct State {
     wizard: wizard::Wizard,
     activities: activity::Activities,
     build_log: build::BuildLog,
+    /// What the Problems panel's filter box and switches say; Output's is
+    /// the runner's, beside the lines it narrows.
+    problems_filter: crate::filter::Filter,
     devices: device::Devices,
     sim: sim::Sim,
     draw: draw::Drawings,
@@ -286,11 +290,8 @@ impl App {
     pub fn new(window: &AppWindow) -> Rc<App> {
         let saved = rusty_embed::config::workbench();
         let files = Arc::new(rusty_edit::Files::new());
-        let output = Rc::new(VecModel::<crate::OutputLine>::default());
-        window
-            .global::<Shell>()
-            .set_output(ModelRc::from(output.clone()));
-        let runner = Runner::new(output);
+        let runner = Runner::new();
+        window.global::<Shell>().set_output(runner.view());
         let tree_rows = Rc::new(VecModel::<TreeRow>::default());
         window
             .global::<Shell>()
@@ -337,6 +338,12 @@ impl App {
             }),
         });
         app.wire(window);
+        let weak = Rc::downgrade(&app);
+        app.runner.on_counts(move |shown, total| {
+            if let Some(app) = weak.upgrade() {
+                app.sync_output_filter((shown, total));
+            }
+        });
         app.picture_ground();
         app.editor.set_view(saved.editor);
         app.editor.set_vim(saved.vim);
@@ -509,6 +516,17 @@ impl App {
         on!(on_output_click, |app, index| app
             .output_click(index as usize));
         on!(on_output_send, |app, text| app.output_send(&text));
+        on!(on_filter_edited, |app, panel, text| app
+            .filter_edited(&panel, &text));
+        on!(on_filter_level, |app, panel, level| app
+            .filter_level(&panel, &level));
+        let weak = Rc::downgrade(self);
+        shell.on_panel_key(move |panel, event| {
+            let m = event.modifiers;
+            weak.upgrade().is_some_and(|app| {
+                app.panel_key(&panel, &event.text, (m.control, m.alt, m.shift, m.meta))
+            })
+        });
         on!(on_plot_solo, |app, name| app.plot_solo(&name));
         on!(on_waves_resized, |app, width| app.waves_resized(width));
         on!(on_draw_resized, |app, w, h| app.draw_resized(w, h));
@@ -853,6 +871,9 @@ impl App {
             "dock.left" => self.toggle_dock(Dock::Left),
             "dock.bottom" => self.toggle_dock(Dock::Bottom),
             "dock.right" => self.toggle_dock(Dock::Right),
+            // From anywhere but the terminal, which hears its own Ctrl+`
+            // first (`term_key`) — so the keys are elsewhere.
+            "terminal.toggle" => self.toggle_terminal(false),
             "problems.show" => self.show_panel("bottom", "problems"),
             "view.zoom-in" => self.set_zoom(self.zoom() + 0.1),
             "view.zoom-out" => self.set_zoom(self.zoom() - 0.1),
