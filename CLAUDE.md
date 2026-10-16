@@ -1073,9 +1073,14 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   off the wire, `unlinked-file` is severity 4 over `0:0–0:2` with **no
   `tags`**, so there is no `DiagnosticTag.Unnecessary` to act on — and
   rusty, which knows before the file is opened, does: every view of the file
-  draws its text and hints at half their ink (`Code.dim`, `Shade.dim`,
-  `Theme.dimmed`), and what is drawn over the text — the hover card and its
-  fixes, the popups, the squiggle — keeps its strength. The fix is where
+  draws its text and hints at two thirds of their ink, VS Code's
+  `editorUnnecessaryCode.opacity` (`Code.dim`, `Shade.dim`,
+  `Theme.dimmed`). The name is VS Code's solid grey for a name left out
+  (`Theme.left-out`, `gitDecoration.ignoredResourceForeground`), never the
+  faded row a cut entry is — the first version drew both in one grey, and a
+  file cut for moving could not be told from one in no crate. And what is
+  drawn over the text — the hover card and its fixes, the popups, the
+  squiggle — keeps its strength. The fix is where
   every other fix is, on the card, and applying it undims the file once the
   parent's edit lands. **The scan runs off the UI thread whenever the tree
   is read** — the project opening, a structural watcher batch, a tree verb —
@@ -1989,7 +1994,8 @@ pointer and the keys and photographs it.
 - **Paste goes into the folder right-clicked, the folder selected, or a
   selected file's folder** — the root below the rows; Paste is listed only
   when something was cut or copied, since a menu row cannot be greyed. A cut
-  is drawn faint and used up by its paste; a copy stays to be pasted again.
+  is its row at half its ink, as VS Code's explorer draws it, and used up by
+  its paste; a copy stays to be pasted again.
 - **Reveal is one function, `crate::reveal`**, the tree's and a tab's; the
   menu names the platform's file manager (`reveal::label_key`).
 - **Reveal is Explorer's `/select,"<path>"` as one raw argument** — a space

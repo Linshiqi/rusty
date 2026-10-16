@@ -61,11 +61,17 @@ export global Theme {
     // looks as it does there.
     out property <color> link: dark ? #4e94ce : #0000ff;
 
-    // How much of the code's ink a file in no crate loses: VS Code draws
-    // unnecessary code at two thirds (`editorUnnecessaryCode.opacity`);
-    // a whole file is fainter, so it reads as left out rather than as one
-    // unused name.
-    out property <float> dimmed: 0.5;
+    // How much of the code's ink a file in no crate loses: a third, so it
+    // is drawn at two thirds, VS Code's `editorUnnecessaryCode.opacity`
+    // (`#000000aa`).
+    out property <float> dimmed: 0.333;
+
+    // A file name the build leaves out — in no crate — in the tree and on
+    // its tab: VS Code's grey for a name its decorations leave out
+    // (`gitDecoration.ignoredResourceForeground`). Solid, where a cut entry
+    // is the row at half its ink, as VS Code's explorer draws one, so the
+    // two never read as the same thing.
+    out property <color> left-out: dark ? #8c8c8c : #8e8e90;
 
     // Syntax: the ANSI-and-token palette the editor and the terminal share.
     out property <color> term-1: dark ? #ef6b56 : #b3341f;

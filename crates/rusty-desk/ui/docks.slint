@@ -126,13 +126,15 @@ component TreeItem inherits Rectangle {
             if root.entry.dir: Icon {
                 path: Icons.chevron;
                 size: 11px;
-                color: Theme.label-3;
+                color: Theme.label-3.transparentize(root.entry.cut ? 0.5 : 0);
                 transform-rotation: root.entry.open ? 0deg : -90deg;
             }
         }
+        // VS Code's explorer: a cut entry is its row at half its ink, and a
+        // name in no crate is the solid grey of a name left out.
         Text {
             text: root.entry.name;
-            color: root.entry.cut || root.entry.unlinked ? Theme.label-4 : root.entry.dir ? Theme.label : Theme.label-2;
+            color: (root.entry.unlinked ? Theme.left-out : root.entry.dir ? Theme.label : Theme.label-2).transparentize(root.entry.cut ? 0.5 : 0);
             font-size: Theme.body;
             vertical-alignment: center;
             overflow: elide;

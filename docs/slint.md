@@ -604,9 +604,11 @@ tests green, and CLAUDE.md saying how it works.
    the text in both windows.
 
    A Rust file no `mod` declares is drawn dimmed, for v0.7.1: the name
-   greyed in the tree and on its tab, in both strips and in a window of its
-   own, the reason one sentence on the pointer, and the text of every view
-   of it at half its ink, while the hover card, the popups and the squiggle
+   VS Code's grey for a name left out, in the tree and on its tab, in both
+   strips and in a window of its own (a cut entry is its row faded, so the
+   two differ), the reason one sentence on the pointer, and the text of
+   every view of it at two thirds of its ink, VS Code's
+   `editorUnnecessaryCode.opacity`, while the hover card, the popups and the squiggle
    over it keep theirs. The library's half was there (`rusty_edit::modules`,
    which reads the `mod` lines and refuses wherever it cannot be sure); the
    window runs it off the UI thread whenever the tree is read and after a

@@ -130,7 +130,7 @@ component TabStrip inherits Rectangle {
                         // row in the tree is.
                         Text {
                             text: tab.title;
-                            color: tab.unlinked ? (tab.id == root.active ? Theme.label-3 : Theme.label-4) : tab.id == root.active ? Theme.label : Theme.label-2;
+                            color: tab.unlinked ? Theme.left-out : tab.id == root.active ? Theme.label : Theme.label-2;
                             font-size: Theme.small;
                             vertical-alignment: center;
                         }
