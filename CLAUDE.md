@@ -1506,8 +1506,12 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   A row is the name, its kind as an icon drawn in the colour the code draws
   that kind in (`Icons.symbol`, `Theme.token`), what it sits in, dim, and
   its line — and for `#` its file, as the project names it. `@` is in file
-  order until something is typed, then ranked by the finder's own rule
-  (`picker::rank`); `@:` groups the kinds, each headed with its count. The
+  order until something is typed, then kept and ranked by VS Code's rule
+  for its symbol pickers, the completion popup's (`symbols::rank` over
+  `rusty_lsp::complete::fuzzy_score`): a name that starts with what was
+  typed, then one matched from a word's start, so `cr` is `cross` and not
+  `Vector`, which the finder's file matching (`picker::rank`) kept for its
+  letters. `@:` groups the kinds, each headed with its count. The
   rows scroll past twelve, since an outline runs to dozens.
   **The selected `@` row is shown in the editor, as VS Code shows it**: the
   line brought into view and lit (`Code.preview-row`,

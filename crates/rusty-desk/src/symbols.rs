@@ -16,7 +16,7 @@
 use rusty_i18n::t;
 use rusty_lsp::Symbol;
 
-use crate::picker::{self, Pick};
+use crate::picker::Pick;
 
 /// What a finder query starting `@` or `#` asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,12 +132,12 @@ pub fn glyph(kind: &str) -> (i32, i32) {
 }
 
 /// The rows for the file's outline: in file order while nothing is typed,
-/// then only those whose names match, best first — the finder's own
-/// ranking (`picker::rank`). Grouped, each kind's rows together in
-/// [`KINDS`] order, the first of each carrying the kind's heading.
+/// then only those whose names match, best first ([`rank`]). Grouped, each
+/// kind's rows together in [`KINDS`] order, the first of each carrying the
+/// kind's heading.
 pub fn outline_rows(symbols: &[Symbol], filter: &str, grouped: bool) -> Vec<Row> {
     let names: Vec<String> = symbols.iter().map(|s| s.name.clone()).collect();
-    let mut order = picker::rank(filter, &names);
+    let mut order = rank(filter, &names);
     if grouped {
         // Stable, so file order — or the ranking — holds within a kind.
         order.sort_by_key(|&at| kind_rank(&symbols[at].kind));
@@ -174,6 +174,36 @@ pub fn outline_rows(symbols: &[Symbol], filter: &str, grouped: bool) -> Vec<Row>
         }
     }
     rows
+}
+
+/// Which names a typed symbol filter keeps, best first: VS Code's rule for
+/// its symbol pickers, the completion popup's (`rusty_lsp::complete`). A
+/// name that starts with what was typed comes first, the same case ahead;
+/// then a name it only matches fuzzily, its first character where a word
+/// starts — `cr` finds `cross` and `the_cross_product`, and not `Vector`,
+/// which the finder's file matching (`picker::rank`) would keep for its
+/// `c` and its `r`. Ties keep file order; nothing typed keeps everything.
+pub fn rank(filter: &str, names: &[String]) -> Vec<usize> {
+    let typed = filter.trim();
+    if typed.is_empty() {
+        return (0..names.len()).collect();
+    }
+    let lower = typed.to_lowercase();
+    let chars: Vec<char> = lower.chars().collect();
+    let mut kept: Vec<((u8, u8, u32), usize)> = names
+        .iter()
+        .enumerate()
+        .filter_map(|(at, name)| {
+            if name.to_lowercase().starts_with(&lower) {
+                Some(((0, u8::from(!name.starts_with(typed)), 0), at))
+            } else {
+                rusty_lsp::complete::fuzzy_score(&chars, name)
+                    .map(|score| ((1, 0, u32::MAX - score), at))
+            }
+        })
+        .collect();
+    kept.sort_unstable();
+    kept.into_iter().map(|(_, at)| at).collect()
 }
 
 /// The rows for the project's symbols, in the order the server ranked them:
@@ -341,7 +371,7 @@ impl Search {
             Some((answered, Err(reason))) if answered == query => View::Failed(reason),
             Some((_, Ok(symbols))) => {
                 let names: Vec<String> = symbols.iter().map(|s| s.name.clone()).collect();
-                let still: Vec<&Symbol> = picker::rank(query, &names)
+                let still: Vec<&Symbol> = rank(query, &names)
                     .into_iter()
                     .map(|at| &symbols[at])
                     .collect();
@@ -466,6 +496,26 @@ mod tests {
             ["cross", "the_cross_product_is_square_to_both"]
         );
         assert!(outline_rows(&symbols, "zzz", false).is_empty());
+    }
+
+    /// VS Code's rule, not the finder's: a typed name keeps what starts
+    /// with it and what it matches from a word's start, and nothing that
+    /// only holds its letters somewhere — `cr` is not `Vector`.
+    #[test]
+    fn a_symbol_filter_matches_from_a_word_start() {
+        let titles_for = |filter: &str| {
+            outline_rows(&outline(), filter, false)
+                .into_iter()
+                .map(|row| row.title)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            titles_for("cr"),
+            ["cross", "the_cross_product_is_square_to_both"]
+        );
+        assert_eq!(titles_for("vec"), ["Vector", "impl Vector"]);
+        assert_eq!(titles_for("V"), ["Vector", "impl Vector"]);
+        assert!(titles_for("ector").is_empty());
     }
 
     /// `@:` keeps a kind's rows together, in file order within it, and
