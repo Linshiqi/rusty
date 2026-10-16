@@ -1,5 +1,7 @@
 //! The picker: the command palette and the file finder are one list with
-//! one set of keys, and what it lists is what it was opened for.
+//! one set of keys, and what it lists is what it was opened for. The
+//! finder's `:` is a line, `@` the file's symbols and `#` the project's
+//! (`crate::symbols`).
 
 use crate::actions::{self, Action, Keymap};
 
@@ -33,6 +35,9 @@ pub enum Pick {
     Nothing,
     /// A place a server named, to jump to.
     Place(rusty_lsp::Location),
+    /// A symbol of the file in front (`@`): shown in the editor while its
+    /// row is the one selected, and jumped to when picked.
+    Outline(rusty_lsp::Location),
     /// The fix at this index of the server's answer.
     Fix(usize),
     /// The symbol at the caret renamed to this.

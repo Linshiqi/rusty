@@ -144,6 +144,12 @@ cargo run -p rusty-lsp --example save_probe -- <project> <file> [seconds]
 # the check reports it too, and leaves the mend unsaved for a while.
 cargo run -p rusty-lsp --example fix_probe -- <project> <file> <line> <from> <to> [--save]
 
+# The finder's `@` and `#` without the window: a file's outline and the
+# workspace's symbols for a name, asked every two seconds until the
+# workspace answers, beside whether rust-analyzer has said it settled —
+# the check that splits "nothing by that name" from "not loaded yet".
+cargo run -p rusty-lsp --example symbol_probe -- <project> <file> <name>
+
 # What painting a file costs: whole, after a one-line edit halfway down, and
 # after a block comment opened at the top — the check that a keystroke in a
 # long file repaints its own line and not the file (see "Large files").
@@ -1342,7 +1348,8 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   `tab_verb`.
 - **The picker is where navigation lands** (`picker.rs`, `app/navigate.rs`):
   the palette (Ctrl+Shift+P), the finder (Ctrl+P), a line (Ctrl+G opens it
-  with `:` typed — `42`, `42:7`), references (Shift+F12), implementations
+  with `:` typed — `42`, `42:7`), the file's symbols (Ctrl+Shift+O, `@`) and
+  the project's (Ctrl+T, `#`), references (Shift+F12), implementations
   (Ctrl+F12) and type definitions under a heading naming what they are,
   sorted by file and line (`navigate::Places`); one implementation or one
   type is a jump, as a definition is, and nothing found says so rather than
@@ -1350,7 +1357,7 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   arrives with its line (`rusty_lsp::Place`), because a row of `lib.rs:41`
   is a riddle. `App::jump` is the one jump, and the place it lands is a
   place of its own for Alt+Left however near (*Back and forward*, below).
-  Ctrl+P, Ctrl+G and Ctrl+\ are VS Code's chords, so hands
+  Ctrl+P, Ctrl+G, Ctrl+Shift+O, Ctrl+T and Ctrl+\ are VS Code's chords, so hands
   that know them need not learn ours; type definitions, the call hierarchy
   and a macro's expansion have no key, as in VS Code — whose Shift+Alt+H
   for the hierarchy is an Alt-letter chord, left here to AltGr.
@@ -1447,12 +1454,42 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   from that place in the picker. A function under itself says *recursive*.
   In or out is a pair of icons on the dock's row, and the next hierarchy
   reads the way the last was turned.
-- **Not in this window yet, though the client answers them**
-  (`rusty_lsp::client::navigate`): the finder's `@` (the file's outline) and
-  `#` (the workspace's symbols). What was learned building them stays true:
-  `workspace.symbol.search.kind` is `all_symbols`, since rust-analyzer's
-  default finds structs and not functions, and a symbol answer is kept with
-  its ask so a slow reply to `#gp` is never shown under `#gpio`.
+- **The finder's `@` and `#` are VS Code's Go to Symbol** (`crate::symbols`,
+  pure and tested; `app/symbols.rs`): Ctrl+Shift+O opens the finder with
+  `@`, the file in front's outline (`documentSymbol`), Ctrl+T with `#`, the
+  project's symbols (`workspace/symbol`), and either is typed into Ctrl+P.
+  A row is the name, its kind as an icon drawn in the colour the code draws
+  that kind in (`Icons.symbol`, `Theme.token`), what it sits in, dim, and
+  its line — and for `#` its file, as the project names it. `@` is in file
+  order until something is typed, then ranked by the finder's own rule
+  (`picker::rank`); `@:` groups the kinds, each headed with its count. The
+  rows scroll past twelve, since an outline runs to dozens.
+  **The selected `@` row is shown in the editor, as VS Code shows it**: the
+  line brought into view and lit (`Code.preview-row`,
+  `editor/preview.rs`) — into the middle of what the finder leaves below
+  itself, since twelve rows of it hang over the middle of a laptop's code
+  (`Shell.picker-foot` against `Code.view-top`) — the caret left where it
+  was — so Enter jumps from
+  the caret through `App::jump`, which Alt+Left comes back to, and Escape
+  puts back only the view. **`#` is asked once the typing pauses** (150 ms),
+  of the server reading the file in front or else the project's own
+  (`Servers::ask_project`). The pause is started by a new name and not by
+  the rows being made again (`Search::wants`): they are made again when the
+  server settles, which a loading server says often, and a pause started
+  each time would never run out. `workspace.symbol.search.kind` is
+  `all_symbols`, since rust-analyzer's default finds structs and not
+  functions. **An answer is kept with its ask** (`symbols::Search`): a slow
+  reply to `#gp` landing after `#gpio` was asked is dropped, and while
+  `gpio`'s own is on its way the last answer is shown only as far as `gpio`
+  still matches it, never a row the name on screen does not match. The
+  probe holds a reply back 2.5 s and types on to prove it
+  (`RUSTY_PROBE_SYMBOLS`, `probe_symbols.rs`). **Where nothing can answer,
+  the finder says which**: no project, no file in front, no server for the
+  file's language, the server not running, starting, or still loading —
+  rust-analyzer's own word for it, `LspClient::is_quiescent`, since the
+  status bar's busy includes a `cargo check`; what came back empty while it
+  loaded is asked again when it settles — and an answer of nothing is "no
+  symbols", never an empty list.
 
 ## A tab in a window of its own
 
@@ -2972,7 +3009,8 @@ rules it settled, each the answer to something that went wrong.
   read as "Test ran a build".
 - **The keyboard reaches everything.** The palette lists every action with
   its key; the keys are VS Code's wherever a VS Code key exists (Ctrl+P,
-  Ctrl+Shift+P, Ctrl+B, Ctrl+`, Ctrl+\, F12, Ctrl+., Ctrl+Shift+N, Ctrl+K Ctrl+S),
+  Ctrl+Shift+P, Ctrl+Shift+O, Ctrl+T, Ctrl+B, Ctrl+`, Ctrl+\, F12, Ctrl+.,
+  Ctrl+Shift+N, Ctrl+K Ctrl+S),
   Arduino's for the board (Ctrl+U flashes, Ctrl+Shift+M monitors), and
   never an Alt letter, which a layout with AltGr types characters with.
   Every one can be rebound (*Keyboard shortcuts*), and what shows a key

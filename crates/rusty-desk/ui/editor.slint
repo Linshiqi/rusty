@@ -91,6 +91,12 @@ export struct HoverFix {
 export global Code {
     in property <[Row]> rows;
     in property <int> caret-line;
+    // The row the finder's `@` shows a symbol on while its row is selected
+    // there, lit across the line; -1 for none.
+    in property <int> preview-row: -1;
+    // Where the code starts down the window: what hangs over it — the
+    // finder — is measured from here.
+    in-out property <length> view-top;
     in property <length> caret-x;
     // Vim's command modes: the caret is a block over the character the
     // cursor stands on, this wide.
@@ -940,6 +946,13 @@ export component ShadeView inherits Rectangle {
 
 export component CodeView inherits Rectangle {
     property <length> gutter: Code.gutter;
+    property <length> top-in-window: self.absolute-position.y;
+    changed top-in-window => {
+        Code.view-top = root.top-in-window;
+    }
+    init => {
+        Code.view-top = root.top-in-window;
+    }
 
     background: Theme.content;
 
@@ -1166,6 +1179,19 @@ export component CodeView inherits Rectangle {
                 }
             }
         }
+    }
+
+    // The symbol the finder's `@` has selected: its line lit across the
+    // code, as VS Code lights it, while the caret stays where it was. Over
+    // the text, translucent; only while the row is wholly in view, since
+    // nothing clips what is drawn here to the view.
+    if Code.preview-row >= 0: Rectangle {
+        x: root.gutter;
+        y: Code.preview-row * Code.row-height + list.content-y;
+        width: list.visible-width - root.gutter;
+        height: Code.row-height;
+        visible: self.y >= 0px && self.y + self.height <= list.visible-height;
+        background: Theme.range-highlight;
     }
 
     // Where the next key lands. Drawn here rather than by the TextInput, whose

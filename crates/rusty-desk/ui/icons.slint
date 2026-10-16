@@ -97,6 +97,62 @@ export global Icons {
     out property <string> window: "M3 4.5h14v11H3zM3 7.5h14M10 9.5v4.5M7.75 11.75h4.5";
     // A keyboard: its keys, and the space bar.
     out property <string> keyboard: "M2.5 5.5h15v9h-15zM5.5 8.3h.01M8.5 8.3h.01M11.5 8.3h.01M14.5 8.3h.01M6.5 11.5h7";
+
+    // A symbol's kind, in the finder's `@` and `#` — VS Code's shapes, drawn
+    // in this set's stroke: a function a cube, a field a slab, a variable
+    // bracketed, a struct a record of rows, an enum two cards, a variant one
+    // card, a trait a lollipop, a module its braces, a constant an equals
+    // sign in a box, an impl a box of brackets, a type its T.
+    out property <string> sym-function: "M10 3.2 16 6.6v6.8L10 16.8 4 13.4V6.6zM4 6.6l6 3.4 6-3.4M10 10v6.8";
+    out property <string> sym-field: "M3.5 8.2 10 4.8l6.5 3.4L10 11.6zM3.5 8.2v3.6l6.5 3.4 6.5-3.4V8.2";
+    out property <string> sym-variable: "M6 5.5H4.5v9H6M14 5.5h1.5v9H14M8 8l4 4M12 8l-4 4";
+    out property <string> sym-struct: "M4.5 4.5h11v11h-11zM4.5 8.2h11M4.5 11.8h11";
+    out property <string> sym-enum: "M3.5 8h7.5v7.5H3.5zM7.5 4.5h9V12H11M5.8 11.75h3";
+    out property <string> sym-variant: "M4.5 6h11v8h-11zM7.5 10h5";
+    out property <string> sym-trait: "M10.5 10a3 3 0 1 0 6 0a3 3 0 1 0-6 0M3.5 10h7";
+    out property <string> sym-module: "M7.5 4H6.5v4.5L5 10l1.5 1.5V16h1M12.5 4h1v4.5L15 10l-1.5 1.5V16h-1";
+    out property <string> sym-constant: "M4.5 5.5h11v9h-11zM7.5 8.8h5M7.5 11.2h5";
+    out property <string> sym-impl: "M4.5 4.5h11v11h-11zM8.5 7.8 6.3 10l2.2 2.2M11.5 7.8l2.2 2.2-2.2 2.2";
+    out property <string> sym-type: "M5.5 5.5h9M10 5.5v9";
+    out property <string> sym-other: "M10 7a3 3 0 1 1 0 6a3 3 0 1 1 0-6z";
+
+    // The icon for a kind by its number (`src/symbols.rs`, `glyph`).
+    public pure function symbol(kind: int) -> string {
+        if (kind == 1) {
+            return sym-function;
+        }
+        if (kind == 2) {
+            return sym-field;
+        }
+        if (kind == 3) {
+            return sym-variable;
+        }
+        if (kind == 4) {
+            return sym-struct;
+        }
+        if (kind == 5) {
+            return sym-enum;
+        }
+        if (kind == 6) {
+            return sym-variant;
+        }
+        if (kind == 7) {
+            return sym-trait;
+        }
+        if (kind == 8) {
+            return sym-module;
+        }
+        if (kind == 9) {
+            return sym-constant;
+        }
+        if (kind == 10) {
+            return sym-impl;
+        }
+        if (kind == 11) {
+            return sym-type;
+        }
+        sym-other
+    }
 }
 
 // One icon. `filled` for the few drawn as solid shapes.

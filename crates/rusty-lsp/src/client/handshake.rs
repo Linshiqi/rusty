@@ -10,6 +10,12 @@ use serde_json::{Map, Value, json};
 use super::Shared;
 use crate::{discover, error::Result, positions::Encoding, uri::path_to_uri};
 
+/// Every `SymbolKind` the protocol has, `File` to `TypeParameter`: the
+/// client names them all (`navigate::symbol_kind`).
+const SYMBOL_KINDS: [u8; 26] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+];
+
 /// What this client can do, declared as the protocol asks for it.
 fn capabilities() -> Value {
     json!({
@@ -59,8 +65,14 @@ fn capabilities() -> Value {
             "typeDefinition": {},
             "documentHighlight": {},
             // Nested, so an outline has its impl blocks' methods under
-            // them rather than beside them with a container name.
-            "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+            // them rather than beside them with a container name. Every
+            // kind is declared: a client that names none is held to the
+            // protocol's first eighteen, and clangd then sends a struct as
+            // a class and an enum's member as the enum.
+            "documentSymbol": {
+                "hierarchicalDocumentSymbolSupport": true,
+                "symbolKind": { "valueSet": SYMBOL_KINDS },
+            },
             "inlayHint": {},
             // Actions come back as literals with lazily-resolved edits;
             // both halves are declared or rust-analyzer sends commands
@@ -109,6 +121,8 @@ fn capabilities() -> Value {
             // workspace's directories open, which no rename or move of
             // one survives. See `watched.rs`.
             "didChangeWatchedFiles": { "dynamicRegistration": true },
+            // The finder's `#`, with every kind declared, as for an outline.
+            "symbol": { "symbolKind": { "valueSet": SYMBOL_KINDS } },
         },
     })
 }

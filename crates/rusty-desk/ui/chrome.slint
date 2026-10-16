@@ -201,11 +201,32 @@ export component StatusBar inherits Rectangle {
 }
 
 // The palette and the finder: a field and the rows that match it, keys on
-// the right. Up and Down move, Enter takes, Escape closes.
+// the right. Up and Down move, Enter takes, Escape closes. Twelve rows show
+// at once and the rest scroll — a file's outline, or a name's references,
+// runs to dozens.
 export component Picker inherits Rectangle {
     property <int> opened: Shell.picker-opened;
     changed opened => {
         self.focus-field();
+    }
+    // One row and the gap under it.
+    property <length> pitch: 34px;
+    // The row selected kept in view, and the app told: the finder's `@`
+    // shows in the editor where the row selected leads.
+    property <int> selected: Shell.picker-selected;
+    changed selected => {
+        let top = root.selected * root.pitch;
+        if (top < -list.content-y) {
+            list.content-y = -top;
+        } else if (top + 30px > list.height - list.content-y) {
+            list.content-y = list.height - top - 30px;
+        }
+        Shell.picker-moved(root.selected);
+    }
+    // New rows start at the top.
+    property <int> listed: Shell.picker-listed;
+    changed listed => {
+        list.content-y = 0;
     }
 
     public function focus-field() {
@@ -292,55 +313,86 @@ export component Picker inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
-            for row[i] in Shell.picker-rows: Rectangle {
-                height: 30px;
-                border-radius: 6px;
-                background: i == Shell.picker-selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
-                HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    spacing: 10px;
-                    Text {
-                        text: row.title;
-                        color: Theme.label;
-                        font-size: Theme.body;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                    Text {
-                        text: row.detail;
-                        color: Theme.label-3;
-                        font-size: Theme.small;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
-                    Text {
-                        text: row.chord;
-                        color: Theme.label-3;
-                        font-size: Theme.small;
-                        font-family: Theme.mono;
-                        vertical-alignment: center;
-                    }
-                }
-                touch := TouchArea {
-                    clicked => {
-                        Shell.picker-pick(i);
-                    }
-                }
-                // A project's row opens it in a window of its own too, by
-                // this button on the row under the pointer or the keys.
-                if row.windowed: IconButton {
-                    x: parent.width - self.width - 4px;
-                    y: (parent.height - self.height) / 2;
-                    width: 24px;
-                    height: 24px;
-                    glyph: 14px;
-                    visible: i == Shell.picker-selected || touch.has-hover || self.hovered;
-                    icon: Icons.window;
-                    tip: @tr("windows.open-new");
-                    clicked => {
-                        Shell.picker-pick-new-window(i);
+            list := Flickable {
+                height: min(rows.preferred-height, 12 * root.pitch - 4px);
+                content-width: self.width;
+                content-height: rows.preferred-height;
+                rows := VerticalLayout {
+                    width: list.width;
+                    height: self.preferred-height;
+                    spacing: 4px;
+                    for row[i] in Shell.picker-rows: Rectangle {
+                        height: 30px;
+                        border-radius: 6px;
+                        background: i == Shell.picker-selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+                        // `@:`'s kinds, each begun under a hairline.
+                        if row.group != "" && i > 0: Rectangle {
+                            y: -2.5px;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            // A symbol's kind, coloured as that kind is in
+                            // the code.
+                            if row.glyph > 0: Icon {
+                                y: (parent.height - self.height) / 2;
+                                path: Icons.symbol(row.glyph);
+                                color: Theme.token(row.tint);
+                                size: 15px;
+                            }
+                            Text {
+                                text: row.title;
+                                color: Theme.label;
+                                font-size: Theme.body;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.detail;
+                                color: Theme.label-3;
+                                font-size: Theme.small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            if row.group != "": Text {
+                                text: row.group;
+                                color: Theme.label-2;
+                                font-size: Theme.caption;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.chord;
+                                color: Theme.label-3;
+                                font-size: Theme.small;
+                                font-family: Theme.mono;
+                                vertical-alignment: center;
+                            }
+                        }
+                        touch := TouchArea {
+                            clicked => {
+                                Shell.picker-pick(i);
+                            }
+                        }
+                        // A project's row opens it in a window of its own too,
+                        // by this button on the row under the pointer or the
+                        // keys.
+                        if row.windowed: IconButton {
+                            x: parent.width - self.width - 4px;
+                            y: (parent.height - self.height) / 2;
+                            width: 24px;
+                            height: 24px;
+                            glyph: 14px;
+                            visible: i == Shell.picker-selected || touch.has-hover || self.hovered;
+                            icon: Icons.window;
+                            tip: @tr("windows.open-new");
+                            clicked => {
+                                Shell.picker-pick-new-window(i);
+                            }
+                        }
                     }
                 }
             }

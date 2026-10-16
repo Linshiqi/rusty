@@ -33,6 +33,7 @@ mod metrics;
 mod modal;
 mod overview;
 mod pairs;
+mod preview;
 mod problems;
 
 pub use problems::is_problem;

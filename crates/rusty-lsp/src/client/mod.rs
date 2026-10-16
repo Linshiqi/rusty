@@ -39,7 +39,7 @@ use std::{
     process::Child,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicI64, AtomicU64},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -175,6 +175,15 @@ impl LspClient {
     /// Which server this client is talking to.
     pub fn kind(&self) -> ServerKind {
         self.shared.kind
+    }
+
+    /// Whether the server last said it had nothing left to load —
+    /// rust-analyzer's `experimental/serverStatus`. Until then an empty
+    /// answer about the workspace may be "not yet" rather than "nothing":
+    /// its symbols, say, are those of whatever it has loaded so far. Never
+    /// true for a server that does not say, which clangd does not.
+    pub fn is_quiescent(&self) -> bool {
+        self.shared.quiescent.load(Ordering::Acquire)
     }
 
     /// Start rust-analyzer for the project at `root`.

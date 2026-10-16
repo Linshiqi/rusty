@@ -55,6 +55,9 @@ export global Theme {
     out property <color> bracket-match: dark ? #f0ebe580 : #1c1a1766;
     out property <color> bracket-fill: dark ? #f0ebe514 : #1c1a170d;
     out property <color> occurrence: dark ? #f0ebe521 : #1c1a1717;
+    // The line the finder's `@` shows in the editor while its row is the
+    // one selected, VS Code's `editor.rangeHighlightBackground`.
+    out property <color> range-highlight: dark ? #ffffff14 : #fdff0040;
 
     // A name under the pointer while Ctrl is held, which a click follows:
     // VS Code's `editorLink.activeForeground` in both themes, so the gesture
