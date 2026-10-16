@@ -87,6 +87,16 @@ component RunControl inherits Rectangle {
                     color: Shell.target-kind == "" ? Theme.amber : Theme.label;
                     y: (parent.height - self.height) / 2;
                 }
+                // What is chosen, in words: a value, so it is shown, not
+                // only hovered for — bounded, and cut short with an ellipsis.
+                if Shell.target-label != "": Text {
+                    text: Shell.target-label;
+                    color: Shell.target-kind == "" ? Theme.amber : Theme.label;
+                    font-size: Theme.body;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    max-width: 180px;
+                }
                 Icon {
                     path: Icons.chevron;
                     size: 11px;

@@ -67,7 +67,7 @@ pub enum BootKind {
 }
 
 /// How to reach the board.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Transport {
     /// Through the ROM serial bootloader. No extra hardware; Espressif only.

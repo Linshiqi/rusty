@@ -6,24 +6,38 @@
 //! (`rusty_embed::only_candidate`); with more than one, or none, the list
 //! opens and the verb waits there to run on whatever is picked.
 //!
+//! **The list opens in the frame of the click** (`crate::targets` is its
+//! pure half and says how). It shows what the last scan found, a fresh one
+//! starts as it opens — each source on a thread of its own, only those the
+//! part can use — and each fills its rows in as it answers, without moving
+//! a row already there. The window asks again in the background when it
+//! comes back to the front, so the rows it opens on are seldom stale.
+//!
 //! Flash builds first and writes the image that build made, then stays
 //! attached to what the board prints, as PlatformIO's Upload and Arduino's
 //! do. Monitor attaches without writing. A monitor holding the port is let
 //! go first, and the flash starts from its end — the one moment the port is
 //! certainly free.
 
-use std::{path::PathBuf, rc::Rc};
+use std::{
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use rusty_embed::{
-    BootDevice, BootKind, BuildSystem, CommandPlan, FlashAction, Probe, SerialPort, Transport,
-    activity::Kind, catalog::Catalog,
+    BuildSystem, CommandPlan, FlashAction, Transport, activity::Kind, catalog::Catalog,
 };
 use rusty_i18n::t;
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, VecModel};
 
 use super::{App, part::Target};
+pub(super) use crate::targets::Chosen;
 use crate::{
+    PickRow, Shell,
     picker::{Mode, Pick},
     run::Ended,
+    targets::{self, Answer, Found, Line, Row, Source},
     work,
 };
 
@@ -36,53 +50,97 @@ pub(super) enum Verb {
     Monitor,
 }
 
-/// Where Run goes when somebody chose.
-#[derive(Clone, Debug)]
-pub(super) enum Chosen {
-    Simulator,
-    Board(Transport),
-}
+/// How long a source may take before the list stops saying it is still
+/// asking: a `probe-rs list` that hangs on a confused USB device is a row
+/// that never comes, not a list that never settles. Its answer is still
+/// taken whenever it arrives.
+const PATIENCE: Duration = Duration::from_secs(8);
+
+/// How long Flash or Monitor with nothing chosen waits for every source
+/// before it asks instead: deciding on what half the sources said would be
+/// a guess.
+const DECIDE_WITHIN: Duration = Duration::from_secs(3);
+
+/// How long a scan is fresh enough that the window coming to the front
+/// does not ask again.
+const FRESH_FOR: Duration = Duration::from_secs(10);
 
 /// What is plugged in, as last scanned, and what was chosen.
 #[derive(Default)]
 pub(super) struct Devices {
     pub(super) chosen: Option<Chosen>,
-    ports: Vec<SerialPort>,
-    probes: Vec<Probe>,
-    boot: Vec<BootDevice>,
-    /// The rows of the list on screen, by index.
-    listed: Vec<Chosen>,
+    /// What each source last answered.
+    found: Found,
+    /// The sources being asked: which, since when, and the ticket their
+    /// answer carries — a source asked again after its patience ran out
+    /// has two answers on the way, and only the newer one is waited for.
+    asking: Vec<(Source, Instant, u64)>,
+    next_ticket: u64,
+    /// When a scan last began.
+    last_scan: Option<Instant>,
+    /// The list's rows, kept in place for as long as it is open.
+    rows: Vec<Row>,
     /// The verb waiting for a pick from the list.
     pub(super) pending: Option<Verb>,
+    /// Flash or Monitor, waiting for the sources to answer before it
+    /// decides which board — and its ticket, for the timer that gives up.
+    deciding: Option<(Verb, u64)>,
     /// The verb waiting for the run it stopped to end.
     after_stop: Option<Verb>,
 }
 
-/// A device as a word: the port, the probe, the drive.
-pub(super) fn label(transport: &Transport, probes: &[Probe]) -> String {
-    match transport {
-        Transport::Serial { port } => port.clone(),
-        Transport::Probe {
-            identifier: Some(id),
-        } => probes
+impl Devices {
+    /// Whether `source` is still being asked, within its patience.
+    fn asking(&self, source: Source) -> bool {
+        self.asking
             .iter()
-            .find(|probe| &probe.identifier == id)
-            .map_or_else(|| id.clone(), |probe| probe.description.clone()),
-        Transport::Probe { identifier: None } => t!("device.probe"),
-        Transport::Uf2 { drive } => drive.clone(),
-        Transport::Dfu { device, .. } => device.clone(),
+            .any(|(asked, since, _)| *asked == source && since.elapsed() < PATIENCE)
+    }
+
+    /// The sources still being asked, of `sources`.
+    fn still_asking(&self, sources: &[Source]) -> Vec<Source> {
+        sources
+            .iter()
+            .copied()
+            .filter(|source| self.asking(*source))
+            .collect()
     }
 }
 
-/// What is plugged in, asked of the machine: ports, probes and bootloaders.
-/// Probes are asked of `probe-rs` and `wlink`, which takes seconds.
-fn scan(root: PathBuf) -> (Vec<SerialPort>, Vec<Probe>, Vec<BootDevice>) {
-    let catalog = Catalog::load(Some(&root));
-    (
-        rusty_embed::device::list_serial_ports(&catalog),
-        rusty_embed::device::list_probes(),
-        rusty_embed::device::list_boot_devices(),
-    )
+/// A device as a word: the port, the probe, the drive.
+fn label(transport: &Transport, found: &Found) -> String {
+    targets::board_words(transport, found).0
+}
+
+/// One source asked on its own thread. A source that panics answers that
+/// it found nothing rather than never answering: a list waiting for ever on
+/// one source is the thing this is shaped to prevent.
+fn ask(source: Source, root: PathBuf) -> Answer {
+    let asked = std::panic::catch_unwind(move || match source {
+        Source::Ports => Answer::Ports(rusty_embed::device::list_serial_ports(&Catalog::load(
+            Some(&root),
+        ))),
+        Source::ProbeRs => Answer::Probes(rusty_embed::device::list_probe_rs_probes()),
+        Source::Wlink => Answer::Probes(rusty_embed::device::list_wlink_probes()),
+        Source::Uf2 => Answer::Boot(rusty_embed::device::list_uf2_drives()),
+        Source::Dfu => Answer::Boot(rusty_embed::device::list_dfu_devices()),
+    });
+    asked.unwrap_or_else(|_| match source {
+        Source::Ports => Answer::Ports(Vec::new()),
+        Source::ProbeRs | Source::Wlink => Answer::Probes(Vec::new()),
+        Source::Uf2 | Source::Dfu => Answer::Boot(Vec::new()),
+    })
+}
+
+/// What a source still being asked is called at the list's foot.
+fn source_name(source: Source) -> String {
+    match source {
+        Source::Ports => t!("device.serial-port"),
+        Source::ProbeRs => "probe-rs".to_string(),
+        Source::Wlink => "wlink".to_string(),
+        Source::Uf2 => t!("device.uf2-drive"),
+        Source::Dfu => "dfu-util".to_string(),
+    }
 }
 
 /// The command that does `action` on `transport`, planned against the
@@ -146,6 +204,11 @@ impl App {
         state.project.as_ref().and_then(|p| p.chip.clone())
     }
 
+    /// The sources worth asking for the open project's part.
+    fn device_sources(&self) -> Vec<Source> {
+        targets::sources_for(self.part().as_ref())
+    }
+
     /// Where Run goes: what was chosen, or what the part makes of it.
     pub(super) fn run_target(&self) -> Option<Chosen> {
         let state = self.state.borrow();
@@ -160,14 +223,17 @@ impl App {
         }
     }
 
-    /// The title bar's target: the word in its tooltip and its icon's kind,
-    /// when somebody chose one.
-    pub(super) fn chosen_target(&self) -> Option<(String, &'static str)> {
+    /// What somebody chose, for the title bar's button: the simulator, or a
+    /// board's label and tooltip.
+    pub(super) fn chosen_target(&self) -> Option<super::part::Picked> {
         let state = self.state.borrow();
-        match state.devices.chosen.as_ref()? {
-            Chosen::Simulator => Some((t!("desk.simulator"), "simulator")),
-            Chosen::Board(transport) => Some((label(transport, &state.devices.probes), "board")),
-        }
+        Some(match state.devices.chosen.as_ref()? {
+            Chosen::Simulator => super::part::Picked::Simulator,
+            Chosen::Board(transport) => {
+                let (label, tip) = targets::board_words(transport, &state.devices.found);
+                super::part::Picked::Board { label, tip }
+            }
+        })
     }
 
     /// Run, the title bar's one verb: the simulator, or the board.
@@ -178,25 +244,126 @@ impl App {
         }
     }
 
-    /// The list of places to run, asked of the machine first. `pending` is
-    /// the verb that runs on the one picked.
-    pub(super) fn choose_target(self: &Rc<Self>, pending: Option<Verb>) {
+    /// Ask `sources` what is plugged in, each on a thread of its own; a
+    /// source already being asked is not asked twice. Each answer is put in
+    /// the list on screen as it comes.
+    fn scan(self: &Rc<Self>, sources: &[Source]) {
         let Some(root) = self.root() else { return };
-        self.state.borrow_mut().devices.pending = pending;
-        work::spawn(
-            move || scan(root),
-            |app, (ports, probes, boot)| {
-                {
-                    let mut state = app.state.borrow_mut();
-                    state.devices.ports = ports;
-                    state.devices.probes = probes;
-                    state.devices.boot = boot;
+        let asked: Vec<(Source, u64)> = {
+            let mut state = self.state.borrow_mut();
+            let devices = &mut state.devices;
+            devices
+                .asking
+                .retain(|(_, since, _)| since.elapsed() < PATIENCE);
+            let now = Instant::now();
+            devices.last_scan = Some(now);
+            let mut asked = Vec::new();
+            for source in sources {
+                if devices.asking(*source) {
+                    continue;
                 }
-                app.show_targets();
-            },
-        );
+                devices.next_ticket += 1;
+                let ticket = devices.next_ticket;
+                devices.asking.push((*source, now, ticket));
+                asked.push((*source, ticket));
+            }
+            asked
+        };
+        if asked.is_empty() {
+            return;
+        }
+        for (source, ticket) in asked {
+            let root = root.clone();
+            work::spawn(
+                move || ask(source, root),
+                move |app, answer| app.answered(source, ticket, answer),
+            );
+        }
+        // A source still silent when its patience runs out stops holding
+        // the list's foot at "looking".
+        let weak = Rc::downgrade(self);
+        Timer::single_shot(PATIENCE + Duration::from_millis(50), move || {
+            if let Some(app) = weak.upgrade() {
+                app.targets_changed(None);
+                app.decide();
+            }
+        });
     }
 
+    /// One source answered: known from now on, in the list if it is open,
+    /// and for a verb waiting to decide.
+    fn answered(self: &Rc<Self>, source: Source, ticket: u64, answer: Answer) {
+        {
+            let mut state = self.state.borrow_mut();
+            let devices = &mut state.devices;
+            devices
+                .asking
+                .retain(|(asked, _, held)| !(*asked == source && *held == ticket));
+            devices.found.set(source, answer);
+        }
+        self.targets_changed(Some(source));
+        // The button's tooltip knows more of the board now.
+        self.sync_part();
+        self.decide();
+    }
+
+    /// Ask again in the background: when the window comes back to the
+    /// front, and as a project opens — not again within a few seconds, and
+    /// not while something runs, since a flash or a monitor has the port
+    /// and a listing beside a probe session is nobody's question then.
+    pub(super) fn scan_in_background(self: &Rc<Self>) {
+        if self.root().is_none() || self.runner.is_running() {
+            return;
+        }
+        let fresh = self
+            .state
+            .borrow()
+            .devices
+            .last_scan
+            .is_some_and(|at| at.elapsed() < FRESH_FOR);
+        if !fresh {
+            let sources = self.device_sources();
+            self.scan(&sources);
+        }
+    }
+
+    /// The window coming to the front asks what is plugged in, so the list
+    /// opens on what is on the desk now — somebody plugging a board in has
+    /// usually just been looking at something else. winit's own event, the
+    /// one way Slint lets a window hear its focus.
+    pub(super) fn watch_focus(self: &Rc<Self>, window: &crate::AppWindow) {
+        use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
+        let weak = Rc::downgrade(self);
+        window.window().on_winit_window_event(move |_, event| {
+            if let WindowEvent::Focused(true) = event {
+                let weak = weak.clone();
+                // After the event, never inside it: the state may be borrowed.
+                Timer::single_shot(Duration::ZERO, move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.scan_in_background();
+                    }
+                });
+            }
+            EventResult::Propagate
+        });
+    }
+
+    /// The list of places to run, open at once on what is known, and asked
+    /// of the machine afresh while it shows. `pending` is the verb that runs
+    /// on the one picked.
+    pub(super) fn choose_target(self: &Rc<Self>, pending: Option<Verb>) {
+        if self.root().is_none() {
+            return;
+        }
+        self.state.borrow_mut().devices.pending = pending;
+        // Before the list, so its foot says the scan is going.
+        let sources = self.device_sources();
+        self.scan(&sources);
+        self.show_targets();
+    }
+
+    /// The list opened afresh: the simulator where it is offered, and every
+    /// device the last scan found.
     fn show_targets(self: &Rc<Self>) {
         // A board verb waiting for its board is not offered the simulator:
         // there is nothing to flash there.
@@ -212,71 +379,13 @@ impl App {
                 Some(Target::Simulator)
             );
         let chip = self.part();
-        let mut rows: Vec<(String, String, Pick)> = Vec::new();
-        let mut listed: Vec<Chosen> = Vec::new();
+        let sources = targets::sources_for(chip.as_ref());
         {
-            let state = self.state.borrow();
-            let devices = &state.devices;
-            let mut row = |title: String, detail: String, chosen: Chosen| {
-                rows.push((title, detail, Pick::Target(listed.len())));
-                listed.push(chosen);
-            };
-            if simulates {
-                row(t!("desk.simulator"), String::new(), Chosen::Simulator);
-            }
-            for port in &devices.ports {
-                let mut detail = vec![t!("device.serial-port")];
-                if !port.boards.is_empty() {
-                    detail.push(port.boards.join(", "));
-                } else if let Some(bridge) = &port.bridge {
-                    detail.push(bridge.clone());
-                }
-                if !port.likely_board {
-                    detail.push(t!("device.not-a-board"));
-                }
-                row(
-                    port.name.clone(),
-                    detail.join(" · "),
-                    Chosen::Board(Transport::Serial {
-                        port: port.name.clone(),
-                    }),
-                );
-            }
-            for probe in &devices.probes {
-                row(
-                    probe.description.clone(),
-                    format!("{} · {}", t!("device.debug-probe"), probe.identifier),
-                    Chosen::Board(Transport::Probe {
-                        identifier: Some(probe.identifier.clone()),
-                    }),
-                );
-            }
-            for device in rusty_embed::usable_boot(chip.as_ref(), &devices.boot) {
-                let kind = match device.kind {
-                    BootKind::Uf2 => t!("device.uf2-drive"),
-                    BootKind::Dfu => t!("device.dfu-device"),
-                };
-                row(
-                    device.label.clone(),
-                    format!("{kind} · {}", device.id),
-                    Chosen::Board(rusty_embed::boot_transport(&device)),
-                );
-            }
+            let mut state = self.state.borrow_mut();
+            let devices = &mut state.devices;
+            devices.rows = targets::rows(simulates, &devices.found, chip.as_ref(), &sources);
         }
-        let boards = listed.len() - usize::from(simulates);
-        if boards == 0 {
-            rows.push((
-                t!("device.none-found"),
-                t!("device.none-found-hint"),
-                Pick::Nothing,
-            ));
-        }
-        rows.push((
-            t!("device.rescan"),
-            String::new(),
-            Pick::Action("run.rescan"),
-        ));
-        self.state.borrow_mut().devices.listed = listed;
+        let rows = self.target_rows();
         let heading = match self.state.borrow().devices.pending {
             Some(Verb::Flash) => t!("device.pick-to-flash"),
             Some(Verb::Monitor) => t!("device.pick-to-monitor"),
@@ -285,12 +394,132 @@ impl App {
         self.open_list(Mode::Targets, heading, rows);
     }
 
+    /// The list's rows as the picker shows them: each row, then its foot.
+    fn target_rows(&self) -> Vec<(String, String, Pick)> {
+        let sources = self.device_sources();
+        let state = self.state.borrow();
+        let devices = &state.devices;
+        let asking = devices.still_asking(&sources);
+        targets::lines(&devices.rows, !asking.is_empty())
+            .into_iter()
+            .map(|line| match line {
+                Line::Row(at) => {
+                    let row = &devices.rows[at];
+                    if row.gone {
+                        (row.title.clone(), t!("device.gone"), Pick::Nothing)
+                    } else {
+                        (row.title.clone(), row.detail.clone(), Pick::Target(at))
+                    }
+                }
+                Line::Scanning => (
+                    t!("device.scanning"),
+                    asking
+                        .iter()
+                        .map(|source| source_name(*source))
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                    Pick::Nothing,
+                ),
+                Line::NoneFound => (
+                    t!("device.none-found"),
+                    t!("device.none-found-hint"),
+                    Pick::Nothing,
+                ),
+                Line::Rescan => (
+                    t!("device.rescan"),
+                    String::new(),
+                    Pick::Action("run.rescan"),
+                ),
+            })
+            .collect()
+    }
+
+    /// What `source` answered, in the list on screen if it is open — and
+    /// with no source, only its foot again.
+    fn targets_changed(self: &Rc<Self>, source: Option<Source>) {
+        let open = matches!(self.state.borrow().picker, Some((Mode::Targets, _)));
+        if !open {
+            return;
+        }
+        let chip = self.part();
+        let sources = targets::sources_for(chip.as_ref());
+        if let Some(source) = source.filter(|source| sources.contains(source)) {
+            let mut state = self.state.borrow_mut();
+            let devices = &mut state.devices;
+            let fresh = targets::rows_of(source, &devices.found, chip.as_ref());
+            targets::merge(&mut devices.rows, source, fresh);
+        }
+        let rows = self.target_rows();
+        self.refresh_list(rows);
+    }
+
+    /// The list on screen given its rows again while it stays open: each
+    /// row changed in place and new ones added at the end, so the element
+    /// under the pointer — and a press already on it — is the one it was,
+    /// and the keyboard's row stays where it was.
+    fn refresh_list(self: &Rc<Self>, rows: Vec<(String, String, Pick)>) {
+        let Some(window) = self.window() else { return };
+        let shell = window.global::<Shell>();
+        let query = shell.get_picker_text();
+        let titles: Vec<String> = rows
+            .iter()
+            .map(|(title, detail, _)| format!("{title} {detail}"))
+            .collect();
+        let found: Vec<(String, String, Pick)> = crate::picker::rank(&query, &titles)
+            .into_iter()
+            .map(|at| rows[at].clone())
+            .collect();
+        {
+            let mut state = self.state.borrow_mut();
+            state.listed = rows;
+            state.picker = Some((
+                Mode::Targets,
+                found.iter().map(|(.., pick)| pick.clone()).collect(),
+            ));
+        }
+        let shown: Vec<PickRow> = found
+            .iter()
+            .map(|(title, detail, _)| PickRow {
+                title: title.into(),
+                detail: detail.into(),
+                chord: SharedString::new(),
+                windowed: false,
+                glyph: 0,
+                tint: 0,
+                group: SharedString::new(),
+            })
+            .collect();
+        let model = shell.get_picker_rows();
+        match model.as_any().downcast_ref::<VecModel<PickRow>>() {
+            Some(on_screen) => {
+                for (at, row) in shown.iter().enumerate() {
+                    if at >= on_screen.row_count() {
+                        on_screen.push(row.clone());
+                    } else if on_screen.row_data(at).as_ref() != Some(row) {
+                        on_screen.set_row_data(at, row.clone());
+                    }
+                }
+                while on_screen.row_count() > shown.len() {
+                    on_screen.remove(on_screen.row_count() - 1);
+                }
+            }
+            None => shell.set_picker_rows(ModelRc::new(VecModel::from(shown.clone()))),
+        }
+        let last = i32::try_from(shown.len()).unwrap_or(i32::MAX) - 1;
+        shell.set_picker_selected(shell.get_picker_selected().clamp(0, last.max(0)));
+    }
+
     /// A row of the list picked: the target from now on, and the verb that
     /// was waiting for it, run there.
     pub(super) fn pick_target(self: &Rc<Self>, index: usize) {
         let (chosen, pending) = {
             let mut state = self.state.borrow_mut();
-            let chosen = state.devices.listed.get(index).cloned();
+            let chosen = state
+                .devices
+                .rows
+                .get(index)
+                .filter(|row| !row.gone)
+                .map(|row| row.chosen.clone());
             (chosen, state.devices.pending.take())
         };
         let Some(chosen) = chosen else { return };
@@ -304,7 +533,9 @@ impl App {
     }
 
     /// Flash or Monitor, on the chosen board — or the only one plugged in,
-    /// or after asking which.
+    /// or after asking which. Every source the part can use is asked again
+    /// first, all at once, and the board decided as soon as what is known
+    /// is enough (`decide`).
     pub(super) fn device_action(self: &Rc<Self>, verb: Verb) {
         if self.runner.is_running() {
             // A monitor holds the port a flash needs: let it go first, and
@@ -318,62 +549,90 @@ impl App {
             }
             return;
         }
-        let Some(root) = self.root() else { return };
-        work::spawn(
-            move || scan(root),
-            move |app, (ports, probes, boot)| {
-                let chip = app.part();
-                let transport = {
-                    let mut state = app.state.borrow_mut();
-                    state.devices.ports = ports;
-                    state.devices.probes = probes;
-                    state.devices.boot = boot;
-                    let devices = &state.devices;
-                    // The board chosen, while it is still plugged in.
-                    let chosen = match &devices.chosen {
-                        Some(Chosen::Board(transport)) => {
-                            let present = match transport {
-                                Transport::Serial { port } => {
-                                    devices.ports.iter().any(|p| &p.name == port)
-                                }
-                                Transport::Probe {
-                                    identifier: Some(id),
-                                } => devices.probes.iter().any(|p| &p.identifier == id),
-                                Transport::Probe { identifier: None } => true,
-                                Transport::Uf2 { drive } => {
-                                    devices.boot.iter().any(|b| &b.id == drive)
-                                }
-                                Transport::Dfu { device, .. } => {
-                                    devices.boot.iter().any(|b| &b.id == device)
-                                }
-                            };
-                            present.then(|| transport.clone())
-                        }
-                        _ => None,
-                    };
-                    chosen.or_else(|| {
-                        // Nothing runs in a bootloader to watch.
-                        let boot = match verb {
-                            Verb::Monitor => Vec::new(),
-                            Verb::Flash => rusty_embed::usable_boot(chip.as_ref(), &devices.boot),
-                        };
-                        rusty_embed::only_candidate(
-                            &devices.ports,
-                            &devices.probes,
-                            &boot,
-                            rusty_embed::serial_capable(chip.as_ref()),
-                        )
-                    })
-                };
-                match transport {
-                    Some(transport) => app.perform(verb, transport),
-                    None => {
-                        app.state.borrow_mut().devices.pending = Some(verb);
-                        app.show_targets();
+        if self.root().is_none() {
+            return;
+        }
+        let ticket = {
+            let mut state = self.state.borrow_mut();
+            let devices = &mut state.devices;
+            devices.next_ticket += 1;
+            devices.deciding = Some((verb, devices.next_ticket));
+            devices.next_ticket
+        };
+        let sources = self.device_sources();
+        self.scan(&sources);
+        // A source that will not answer is not waited for: the list opens
+        // with the verb waiting on it rather than a board being guessed.
+        let weak = Rc::downgrade(self);
+        Timer::single_shot(DECIDE_WITHIN, move || {
+            let Some(app) = weak.upgrade() else { return };
+            let gave_up = {
+                let mut state = app.state.borrow_mut();
+                let devices = &mut state.devices;
+                match devices.deciding {
+                    Some((verb, held)) if held == ticket => {
+                        devices.deciding = None;
+                        devices.pending = Some(verb);
+                        true
                     }
+                    _ => false,
                 }
-            },
-        );
+            };
+            if gave_up {
+                app.show_targets();
+            }
+        });
+        self.decide();
+    }
+
+    /// The verb waiting to decide which board, decided once what is known
+    /// is enough: the board chosen, as soon as its own source has said it is
+    /// still plugged in; otherwise the one board plugged in, once every
+    /// source has answered; otherwise the list, with the verb waiting.
+    fn decide(self: &Rc<Self>) {
+        let Some((verb, _)) = self.state.borrow().devices.deciding else {
+            return;
+        };
+        let chip = self.part();
+        let sources = targets::sources_for(chip.as_ref());
+        let decided: Option<Option<Transport>> = {
+            let state = self.state.borrow();
+            let devices = &state.devices;
+            let present = match &devices.chosen {
+                Some(Chosen::Board(transport))
+                    if !devices.asking(Source::of(transport)) && devices.found.has(transport) =>
+                {
+                    Some(transport.clone())
+                }
+                _ => None,
+            };
+            if present.is_some() {
+                Some(present)
+            } else if !devices.still_asking(&sources).is_empty() {
+                None
+            } else {
+                // Nothing runs in a bootloader to watch.
+                let boot = match verb {
+                    Verb::Monitor => Vec::new(),
+                    Verb::Flash => rusty_embed::usable_boot(chip.as_ref(), &devices.found.boot()),
+                };
+                Some(rusty_embed::only_candidate(
+                    &devices.found.ports,
+                    &devices.found.probes(),
+                    &boot,
+                    rusty_embed::serial_capable(chip.as_ref()),
+                ))
+            }
+        };
+        let Some(transport) = decided else { return };
+        self.state.borrow_mut().devices.deciding = None;
+        match transport {
+            Some(transport) => self.perform(verb, transport),
+            None => {
+                self.state.borrow_mut().devices.pending = Some(verb);
+                self.show_targets();
+            }
+        }
     }
 
     fn perform(self: &Rc<Self>, verb: Verb, transport: Transport) {
@@ -406,7 +665,7 @@ impl App {
         let Some(root) = self.root() else { return };
         let target = {
             let state = self.state.borrow();
-            label(&transport, &state.devices.probes)
+            label(&transport, &state.devices.found)
         };
         work::spawn(
             move || plan_for(root, transport, action),

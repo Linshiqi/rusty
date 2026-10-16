@@ -105,13 +105,23 @@
 //! `<dir>/second` — the welcome page, that project opened, this window's
 //! project refused — and writes what it saw to `said.txt`, which this
 //! window prints once the second has gone, with its own project and the
-//! recents both windows wrote.
+//! recents both windows wrote — and how long after the key the second's
+//! `main` began and its first frame was drawn, with where its start spent
+//! the time (`mark`, `startup_report`).
 //! With `RUSTY_PROBE_SYMBOLS` it runs the finder's `@` and `#` in
 //! `probe_symbols.rs`: an outline shown in the editor and gone to, and a
 //! slow answer to a workspace search never shown under the name after it.
 //! With `RUSTY_PROBE_TABDRAG`, on a copy of a Cargo project, it drags tabs
 //! the ways VS Code drags them (`probe_tabs.rs`): along a strip, onto the
 //! other group, into the split, out into a window of its own and back.
+//! With `RUSTY_PROBE_DEVICES` it clicks the title bar's device button as a
+//! pointer does and prints how long the click's own code took and the time
+//! from the click to the frame that shows the list, photographs the list as
+//! it opens and once every source has answered, printing each change of its
+//! rows and when; picks a serial port when the machine has one (choosing
+//! it, opening nothing) and the simulator again, photographing the button's
+//! label with each. `RUSTY_PROBE_DEVICES=palette` opens the palette first,
+//! so the list is not the first overlay the window draws.
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below).
@@ -152,6 +162,42 @@ use slint::{
 };
 
 use crate::{AppWindow, Code, Find, Shell, work};
+
+/// When this process began its `main`, by both clocks: the wall clock so a
+/// window that started this one can say how long after its click the start
+/// came, the monotonic one for the steps since.
+static BEGAN: std::sync::OnceLock<(Instant, std::time::SystemTime)> = std::sync::OnceLock::new();
+
+/// The steps of the start, each with how long after `main` it was done.
+static MARKS: std::sync::Mutex<Vec<(&'static str, Duration)>> = std::sync::Mutex::new(Vec::new());
+
+/// A step of the start done: kept for the probe to say where the time
+/// went before the first frame. Cheap enough to be left in an ordinary run.
+pub fn mark(step: &'static str) {
+    let (began, _) = BEGAN.get_or_init(|| (Instant::now(), std::time::SystemTime::now()));
+    let since = began.elapsed();
+    if let Ok(mut marks) = MARKS.lock() {
+        marks.push((step, since));
+    }
+}
+
+/// The wall-clock milliseconds since the epoch: what two processes on one
+/// machine can compare.
+fn unix_ms(at: std::time::SystemTime) -> u128 {
+    at.duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis())
+}
+
+/// The start as the probe says it: when `main` began, and each step after.
+pub fn startup_report() -> String {
+    let began = BEGAN.get().map_or(0, |(_, wall)| unix_ms(*wall));
+    let marks = MARKS.lock().map(|marks| marks.clone()).unwrap_or_default();
+    let steps: Vec<String> = marks
+        .iter()
+        .map(|(step, at)| format!("{step} {:.1}", at.as_secs_f64() * 1000.0))
+        .collect();
+    format!("main at {began} ms; {}", steps.join(", "))
+}
 
 /// The sheet file as the editor last wrote it.
 fn sheet_file(app: &crate::app::App) -> String {
@@ -268,6 +314,8 @@ pub fn start(window: &AppWindow) {
     let unlinking = std::env::var_os("RUSTY_PROBE_UNLINKED").is_some();
     let failing = std::env::var_os("RUSTY_PROBE_TESTFAIL").is_some();
     let chapter: Rc<RefCell<String>> = Rc::default();
+    let picking_devices = std::env::var_os("RUSTY_PROBE_DEVICES").is_some();
+    let device_probe: Rc<RefCell<DeviceProbe>> = Rc::default();
     // The line the marks probe is looking at.
     let spot = Rc::new(Cell::new(0usize));
     // Started with no project: the last one comes back with its strip.
@@ -285,14 +333,30 @@ pub fn start(window: &AppWindow) {
     std::fs::create_dir_all(&dir).expect("the probe's directory");
     let waiting: Rc<Cell<Option<Instant>>> = Rc::default();
     let latencies: Rc<RefCell<Vec<Duration>>> = Rc::default();
+    // A frame waited for by what it shows rather than by being the next:
+    // the first frame drawn once the condition holds, and how long after
+    // `since` it was.
+    let until: Until = Rc::default();
     {
         let (waiting, latencies) = (waiting.clone(), latencies.clone());
+        let until = until.clone();
         let named = Cell::new(false);
         // The software renderer reports no frames; the probe still runs,
         // without the times.
+        let began = Cell::new(false);
         if let Err(error) = window.window().set_rendering_notifier(move |state, api| {
+            if let RenderingState::RenderingSetup = state {
+                mark("renderer set up");
+            }
+            if let RenderingState::BeforeRendering = state {
+                if !began.replace(true) {
+                    mark("first render begins");
+                }
+                until.borrow_mut().drawing = Some(Instant::now());
+            }
             if let RenderingState::AfterRendering = state {
                 if !named.replace(true) {
+                    mark("first frame");
                     let api = match api {
                         slint::GraphicsAPI::NativeOpenGL { .. } => "OpenGL",
                         slint::GraphicsAPI::WebGL { .. } => "WebGL",
@@ -302,6 +366,16 @@ pub fn start(window: &AppWindow) {
                 }
                 if let Some(sent) = waiting.take() {
                     latencies.borrow_mut().push(sent.elapsed());
+                }
+                let pending = until.borrow_mut().wanted.take();
+                if let Some((since, holds)) = pending {
+                    if holds() {
+                        let mut until = until.borrow_mut();
+                        until.reached = Some(since.elapsed());
+                        until.drawn = until.drawing.map(|began| began.elapsed());
+                    } else {
+                        until.borrow_mut().wanted = Some((since, holds));
+                    }
                 }
             }
         }) {
@@ -515,6 +589,9 @@ pub fn start(window: &AppWindow) {
                 if room {
                     step.set(7600);
                 }
+                if picking_devices {
+                    step.set(7800);
+                }
             }
             // Output and Problems across runs, their filter, and Ctrl+`
             // (`probe_output.rs`).
@@ -723,10 +800,14 @@ pub fn start(window: &AppWindow) {
             // then says what it has and what the second wrote down.
             5200 if second_project.is_some() && !second => {
                 eprintln!(
-                    "windows: first window on {:?}, {} other windows",
+                    "windows: first window on {:?}, {} other windows; started: {}",
                     shell.get_project(),
-                    crate::instances::others()
+                    crate::instances::others(),
+                    startup_report()
                 );
+                let pressed = unix_ms(std::time::SystemTime::now());
+                eprintln!("windows: Ctrl+Shift+N at {pressed} ms");
+                let _ = std::fs::write(dir.join("pressed.txt"), pressed.to_string());
                 chord(&[Key::Control, Key::Shift], "n".into());
             }
             5201 if second_project.is_some() && !second => {
@@ -755,6 +836,30 @@ pub fn start(window: &AppWindow) {
                     }
                 }
                 eprintln!("windows: the second window said:\n{said}");
+                // How long after the key the second window's `main` began
+                // and its first frame was drawn, by the wall clock both share.
+                let pressed: Option<u128> = std::fs::read_to_string(dir.join("pressed.txt"))
+                    .ok()
+                    .and_then(|text| text.trim().parse().ok());
+                let main_at: Option<u128> = said
+                    .split("main at ")
+                    .nth(1)
+                    .and_then(|rest| rest.split(' ').next())
+                    .and_then(|ms| ms.parse().ok());
+                let first_frame: Option<f64> = said
+                    .split("first frame ")
+                    .nth(1)
+                    .and_then(|rest| rest.split([',', '\n']).next())
+                    .and_then(|ms| ms.trim().parse().ok());
+                if let (Some(pressed), Some(main_at), Some(first_frame)) =
+                    (pressed, main_at, first_frame)
+                {
+                    let to_main = main_at as f64 - pressed as f64;
+                    eprintln!(
+                        "windows: the key to the second's main {to_main:.0} ms, to its first frame {:.0} ms",
+                        to_main + first_frame
+                    );
+                }
                 eprintln!(
                     "windows: the first still on {:?}; recents {:?}",
                     shell.get_project(),
@@ -784,6 +889,7 @@ pub fn start(window: &AppWindow) {
                     shell.get_has_project(),
                     crate::instances::others()
                 ));
+                told(format!("second: {}", startup_report()));
                 snapshot(&window, &dir.join("welcome.png"));
                 if let Some(project) = &second_project {
                     app.open_project(project.clone(), None);
@@ -821,6 +927,9 @@ pub fn start(window: &AppWindow) {
                 snapshot(&window, &dir.join("refused.png"));
                 told("second: done".to_string());
                 app.act("app.exit");
+            }
+            n if picking_devices && (7800..7900).contains(&n) => {
+                devices(n, &window, &dir, &step, &waited, &until, &device_probe);
             }
             n if reading_book && (6400..6600).contains(&n) => {
                 book(n, &window, &app, &dir, &step, &waited, &chapter);
@@ -5160,6 +5269,277 @@ fn page_origin(window: &AppWindow, shell: &Shell) -> (f32, f32) {
     };
     let column = f32::max(32.0, (right - left - 820.0 * shell.get_page_zoom()) / 2.0);
     (left + column, 41.0 + 36.0 + 28.0)
+}
+
+/// A frame waited for by what it shows: the condition and since when it is
+/// waited for, then how long it took.
+#[derive(Default)]
+struct Waited {
+    wanted: Option<(Instant, Box<dyn Fn() -> bool>)>,
+    reached: Option<Duration>,
+    /// When the frame being drawn began, and how long the one that showed
+    /// the condition took to draw.
+    drawing: Option<Instant>,
+    drawn: Option<Duration>,
+}
+
+type Until = Rc<RefCell<Waited>>;
+
+/// Wait for the first frame drawn once `holds` is true.
+fn wait_for_frame(until: &Until, holds: impl Fn() -> bool + 'static) {
+    let mut until = until.borrow_mut();
+    until.reached = None;
+    until.drawn = None;
+    until.wanted = Some((Instant::now(), Box::new(holds)));
+}
+
+/// What the devices probe has seen so far.
+#[derive(Default)]
+struct DeviceProbe {
+    /// When the button was clicked.
+    clicked: Option<Instant>,
+    /// The rows last printed, to print them again only when they change.
+    rows: Vec<String>,
+    /// Which opening of the list this is: the first, or once the last scan
+    /// is known.
+    opening: u32,
+}
+
+/// The picker's rows as they read.
+fn picker_rows(shell: &Shell) -> Vec<String> {
+    shell
+        .get_picker_rows()
+        .iter()
+        .map(|row| {
+            if row.detail.is_empty() {
+                row.title.to_string()
+            } else {
+                format!("{} — {}", row.title, row.detail)
+            }
+        })
+        .collect()
+}
+
+/// The title bar alone, cropped from the window's own picture: where the
+/// device button says what is chosen.
+fn snapshot_title_bar(window: &AppWindow, path: &Path) {
+    let Ok(buffer) = window.window().take_snapshot() else {
+        eprintln!("snapshot failed");
+        return;
+    };
+    let (width, height) = (buffer.width(), buffer.height());
+    let Some(picture) = image::RgbaImage::from_raw(width, height, buffer.as_bytes().to_vec())
+    else {
+        return;
+    };
+    let scale = window.window().scale_factor();
+    let bar = ((40.0 * scale).ceil() as u32).min(height);
+    // The middle half, where the run control is.
+    let (left, wide) = (width / 4, width / 2);
+    let cropped = image::imageops::crop_imm(&picture, left, 0, wide, bar).to_image();
+    cropped.save(path).expect("the snapshot is written");
+    eprintln!("snapshot: {}", path.display());
+}
+
+/// The device button clicked as a hand clicks it: in the run control, right
+/// of the run button, which the window's middle is always inside.
+fn click_device_button(window: &AppWindow) {
+    let scale = window.window().scale_factor();
+    let width = window.window().size().width as f32 / scale;
+    click_at(window, width / 2.0 + 20.0, 20.0);
+}
+
+/// `RUSTY_PROBE_DEVICES`: the device button clicked, the time to the frame
+/// that shows its list, the list photographed as it opens and once every
+/// source has answered, then a serial port picked when the machine has one
+/// and the simulator again — the button photographed with each — and the
+/// list opened a second time, when the last scan is known. Nothing is
+/// flashed and no port is opened: a pick with no verb waiting only chooses.
+fn devices(
+    n: u32,
+    window: &AppWindow,
+    dir: &Path,
+    step: &Rc<Cell<u32>>,
+    waited: &Rc<Cell<u32>>,
+    until: &Until,
+    probe: &Rc<RefCell<DeviceProbe>>,
+) {
+    let shell = window.global::<Shell>();
+    let app = work::app();
+    let button = |name: &str| {
+        eprintln!(
+            "devices: the button ({name}): {:?}, kind {:?}, tooltip {:?}",
+            shell.get_target_label(),
+            shell.get_target_kind(),
+            shell.get_target(),
+        );
+        snapshot_title_bar(window, &dir.join(format!("button-{name}.png")));
+    };
+    // Back to this step on the next tick, up to `ticks` of them.
+    let again = |ticks: u32| -> bool {
+        waited.set(waited.get() + 1);
+        if waited.get() < ticks {
+            step.set(n);
+            true
+        } else {
+            false
+        }
+    };
+    let scanning = || {
+        let word = rusty_i18n::translate("device.scanning");
+        shell
+            .get_picker_rows()
+            .iter()
+            .any(|row| word.as_deref() == Some(row.title.as_str()))
+    };
+    match n {
+        7800 => {
+            // The project read, and the part known.
+            if shell.get_target_kind().is_empty() && again(500) {
+                return;
+            }
+            waited.set(0);
+            eprintln!("devices: started: {}", startup_report());
+            button("unchosen");
+            // `RUSTY_PROBE_DEVICES=palette`: the palette opened first, so the
+            // list is not the first overlay this window draws — what the
+            // first one costs, apart from what the list does.
+            if std::env::var("RUSTY_PROBE_DEVICES").as_deref() == Ok("palette") {
+                let weak = window.as_weak();
+                wait_for_frame(until, move || {
+                    weak.upgrade()
+                        .is_some_and(|window| window.global::<Shell>().get_picker_open())
+                });
+                app.act("palette.open");
+            }
+        }
+        7801 if std::env::var("RUSTY_PROBE_DEVICES").as_deref() == Ok("palette")
+            && probe.borrow().opening == 0
+            && shell.get_picker_open() =>
+        {
+            if until.borrow().reached.is_none() && again(100) {
+                return;
+            }
+            waited.set(0);
+            eprintln!(
+                "devices: the palette first: to the frame showing it {}",
+                until
+                    .borrow()
+                    .reached
+                    .map_or("not seen".to_string(), |d| format!(
+                        "{:.1} ms",
+                        d.as_secs_f64() * 1000.0
+                    ))
+            );
+            shell.invoke_picker_pick(-1);
+            // This step again, now as the click on the device button.
+            step.set(n);
+        }
+        7801 | 7820 => {
+            // Three seconds for the project's own start to settle — its
+            // language server, its first scan — before the first click.
+            if n == 7801 && probe.borrow().opening == 0 && again(75) {
+                return;
+            }
+            waited.set(0);
+            {
+                let mut seen = probe.borrow_mut();
+                seen.opening += 1;
+                seen.clicked = Some(Instant::now());
+                seen.rows.clear();
+            }
+            let weak = window.as_weak();
+            wait_for_frame(until, move || {
+                weak.upgrade()
+                    .is_some_and(|window| window.global::<Shell>().get_picker_open())
+            });
+            // The click is handled as it is dispatched: what the window's
+            // own code took, apart from the frame after it.
+            let handled = Instant::now();
+            click_device_button(window);
+            eprintln!(
+                "devices: the click handled in {:.1} ms",
+                handled.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        7802 | 7821 => {
+            if !shell.get_picker_open() && again(500) {
+                return;
+            }
+            waited.set(0);
+            let opening = probe.borrow().opening;
+            let (shown, drawn) = {
+                let until = until.borrow();
+                (until.reached, until.drawn)
+            };
+            let ms = |d: Option<Duration>| {
+                d.map_or("not seen".to_string(), |d| {
+                    format!("{:.1} ms", d.as_secs_f64() * 1000.0)
+                })
+            };
+            eprintln!(
+                "devices: opening {opening}: click to the frame showing the list: {}, that frame drawn in {}",
+                ms(shown),
+                ms(drawn)
+            );
+            snapshot(window, &dir.join(format!("list-{opening}-open.png")));
+        }
+        7803 | 7822 => {
+            // Each change of the rows, and when, until no source is still
+            // being asked — fifteen seconds at most.
+            let rows = picker_rows(&shell);
+            {
+                let mut seen = probe.borrow_mut();
+                if rows != seen.rows {
+                    let since = seen
+                        .clicked
+                        .map_or(0.0, |at| at.elapsed().as_secs_f64() * 1000.0);
+                    eprintln!("devices: +{since:.0} ms: {rows:?}");
+                    seen.rows = rows;
+                }
+            }
+            if (scanning() || !shell.get_picker_open()) && again(375) {
+                return;
+            }
+            waited.set(0);
+            let opening = probe.borrow().opening;
+            snapshot(window, &dir.join(format!("list-{opening}-scanned.png")));
+        }
+        7804 => {
+            // A serial port, when the machine has one: chosen, not opened.
+            let serial = rusty_i18n::lookup("device.serial-port");
+            let port = shell
+                .get_picker_rows()
+                .iter()
+                .position(|row| row.detail.starts_with(serial.as_str()));
+            match port {
+                Some(index) => shell.invoke_picker_pick(index as i32),
+                None => {
+                    eprintln!("devices: no serial port on this machine");
+                    shell.invoke_picker_pick(-1);
+                }
+            }
+        }
+        7806 => button("chosen"),
+        7823 => {
+            // The simulator again, the first row where the part has one.
+            let simulator = rusty_i18n::lookup("desk.simulator");
+            let row = shell
+                .get_picker_rows()
+                .iter()
+                .position(|row| row.title.starts_with(simulator.as_str()));
+            shell.invoke_picker_pick(row.map_or(-1, |at| at as i32));
+        }
+        7825 => {
+            button("simulator");
+            eprintln!(
+                "devices: notes {:?}",
+                shell.get_notes().iter().map(|n| n.text).collect::<Vec<_>>()
+            );
+            app.act("app.exit");
+        }
+        _ => {}
+    }
 }
 
 /// A left click at a point of the window.
