@@ -815,10 +815,14 @@ export global Shell {
     in property <string> project;
     in property <string> branch;
 
-    // The run loop: where it runs, and what is happening.
+    // The run loop: where it runs, and what is happening. `target` is the
+    // whole of it, for the tooltip; `target-label` the short name the
+    // device button shows beside its icon — `COM5`, the simulator and its
+    // chip, or that nothing is chosen.
     in property <string> target;
+    in property <string> target-label;
     // What kind of place the target is: "simulator", "board", or empty for
-    // none — the icon the run control shows, its name in the tooltip.
+    // none — the icon the run control shows.
     in property <string> target-kind;
     in property <string> activity;
     // What kind of run, as an icon's name, and its clock while it runs.

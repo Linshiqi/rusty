@@ -298,6 +298,7 @@ impl App {
         let servers = Servers::new();
         let problems = Problems::default();
         let editor = Surface::new(window, files.clone(), servers.clone(), problems.clone());
+        crate::probe::mark("editor made");
         let keeper = Keeper::start(backup::directory(), |reason| {
             work::deliver(reason, |app, reason| app.backup_failed(reason))
         });
@@ -337,10 +338,14 @@ impl App {
             }),
         });
         app.wire(window);
+        app.watch_focus(window);
+        crate::probe::mark("wired");
         app.picture_ground();
         app.editor.set_view(saved.editor);
         app.editor.set_vim(saved.vim);
+        crate::probe::mark("editor set");
         app.sync_all();
+        crate::probe::mark("synced");
         app.update_soon();
         app
     }
@@ -1040,6 +1045,8 @@ impl App {
         self.load_board(None);
         self.bring_back(opened);
         self.tell_instances();
+        // So the device list opens on what is plugged in.
+        self.scan_in_background();
     }
 
     /// Open a file of the project: in front if it is open, read off the

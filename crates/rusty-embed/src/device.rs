@@ -9,10 +9,11 @@
 //! - A **debug probe**, over JTAG/SWD. Adds breakpoints, memory inspection, and
 //!   defmt over RTT. Required for STM32 and WCH's parts, whose bootloaders
 //!   espflash does not speak.
-//! - A **board waiting in its USB bootloader** ([`list_boot_devices`]): an RP2040
-//!   or RP2350 held in BOOTSEL mounts as a drive with an `INFO_UF2.TXT` on it,
-//!   and an STM32 started with BOOT0 high answers USB DFU. Neither needs a
-//!   probe, which is the board most people buy.
+//! - A **board waiting in its USB bootloader** ([`list_uf2_drives`],
+//!   [`list_dfu_devices`]): an RP2040 or RP2350 held in BOOTSEL mounts as a
+//!   drive with an `INFO_UF2.TXT` on it, and an STM32 started with BOOT0 high
+//!   answers USB DFU. Neither needs a probe, which is the board most people
+//!   buy.
 //!
 //! Naming the bridge chip matters more than it looks: "CP210x" and "CH340" are
 //! what a user sees printed on the board, and matching that against a COM
@@ -27,14 +28,18 @@ use crate::{
     process, tools,
 };
 
-/// Boards waiting in a USB bootloader: UF2 drives, then DFU devices.
-pub fn list_boot_devices() -> Vec<BootDevice> {
-    let mut out: Vec<BootDevice> = drive_roots()
+/// The UF2 bootloaders' drives mounted now. A question of its own, since it
+/// reads every drive — an absent network drive's letter can take a while.
+pub fn list_uf2_drives() -> Vec<BootDevice> {
+    drive_roots()
         .iter()
         .filter_map(|root| uf2_drive_at(root))
-        .collect();
-    out.extend(dfu_devices());
-    out
+        .collect()
+}
+
+/// The boards in their DFU bootloader, as `dfu-util -l` lists them.
+pub fn list_dfu_devices() -> Vec<BootDevice> {
+    dfu_devices()
 }
 
 /// Where a removable drive mounts on this machine: every drive letter on
@@ -261,6 +266,17 @@ pub fn list_probes() -> Vec<Probe> {
     probes
 }
 
+/// The probes `probe-rs list` finds, alone: one process, asked apart from
+/// wlink's so neither waits on the other.
+pub fn list_probe_rs_probes() -> Vec<Probe> {
+    probe_rs_probes()
+}
+
+/// The WCH-Link probes `wlink list` finds, alone.
+pub fn list_wlink_probes() -> Vec<Probe> {
+    wlink_probes()
+}
+
 /// WCH-Link probes, as `wlink list` numbers them — the number is what its
 /// `-d` takes, so it travels as the identifier (`wlink:0`). Asked of wlink
 /// rather than read off USB because a WCH-LinkE in DAP mode answers to
@@ -307,24 +323,37 @@ fn probe_rs_probes() -> Vec<Probe> {
     if !output.status.success() {
         return Vec::new();
     }
+    parse_probe_rs_list(&String::from_utf8_lossy(&output.stdout))
+}
 
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
+/// `probe-rs list`'s probes: `[0]: ESP JTAG -- 303a:1001:34:85:18:0A:47:F4
+/// (EspJtag)` under a header, one per probe. The part after ` -- ` is the
+/// selector `--probe` takes (`VID:PID[:SERIAL]`), so it is the identifier;
+/// the whole line is the description. The entries were once taken only
+/// when they began with a digit, which `[0]:` never does — no probe was
+/// ever listed — and the identifier was the whole description, which no
+/// `--probe` accepts.
+fn parse_probe_rs_list(text: &str) -> Vec<Probe> {
+    text.lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty())
-        // `probe-rs list` prints a header line when it finds nothing, and an
-        // enumerated list otherwise. Only the enumerated entries matter.
-        .filter(|line| line.starts_with(|c: char| c.is_ascii_digit()))
-        .map(|line| {
-            let description = line
-                .split_once(':')
-                .map(|(_, rest)| rest.trim())
-                .unwrap_or(line)
-                .to_string();
-            Probe {
-                identifier: description.clone(),
-                description,
+        .filter_map(|line| {
+            // `[0]: …`, or `0: …` as older versions printed it; the header
+            // and "No debug probes were found." are neither.
+            let rest = line.strip_prefix('[').unwrap_or(line);
+            let digits = rest.chars().take_while(char::is_ascii_digit).count();
+            if digits == 0 {
+                return None;
             }
+            let rest = rest[digits..].strip_prefix(']').unwrap_or(&rest[digits..]);
+            let description = rest.strip_prefix(':')?.trim().to_string();
+            let identifier = description
+                .split_once(" -- ")
+                .and_then(|(_, after)| after.split_whitespace().next())
+                .map_or_else(|| description.clone(), str::to_string);
+            Some(Probe {
+                identifier,
+                description,
+            })
         })
         .collect()
 }
@@ -356,6 +385,25 @@ mod tests {
         let ids: Vec<&str> = probes.iter().map(|p| p.identifier.as_str()).collect();
         assert_eq!(ids, ["wlink:0", "wlink:1"]);
         assert!(probes[0].description.contains("RV mode"));
+    }
+
+    /// The probes probe-rs lists, each identified by the selector its
+    /// `--probe` takes — and the header and the empty answer are no probe.
+    #[test]
+    fn a_probe_rs_probe_is_identified_by_its_selector() {
+        let listed = "The following debug probes were found:\n\
+                      [0]: ESP JTAG -- 303a:1001:34:85:18:0A:47:F4 (EspJtag)\n\
+                      [1]: STLink V2 -- 0483:3748:0E1A2B3C (ST-LINK)\n";
+        let probes = parse_probe_rs_list(listed);
+        let ids: Vec<&str> = probes.iter().map(|p| p.identifier.as_str()).collect();
+        assert_eq!(ids, ["303a:1001:34:85:18:0A:47:F4", "0483:3748:0E1A2B3C"]);
+        assert!(probes[0].description.starts_with("ESP JTAG -- "));
+        assert!(parse_probe_rs_list("No debug probes were found.\n").is_empty());
+        // The form without brackets an older probe-rs printed.
+        assert_eq!(
+            parse_probe_rs_list("0: J-Link -- 1366:0101:000123 (J-Link)")[0].identifier,
+            "1366:0101:000123"
+        );
     }
 
     #[test]

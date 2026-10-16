@@ -2238,6 +2238,41 @@ their board-and-port box, Xcode's destination picker and activity view,
   waits there (`Devices::pending`) and runs when a row is picked, rather than
   asking for the key again. A write the plan warns about is asked about
   first.
+- **The list opens in the frame of the click** (`crate::targets`, pure and
+  tested; `app/device.rs` asks and draws). It waited for one scan of
+  everything — the ports, `probe-rs list`, `wlink list`, every drive letter
+  for a UF2 drive, `dfu-util -l` — one after another, and drew nothing until
+  the last had answered: reported as the button being slow. It opens on
+  what the last scan found, with a row at its foot saying which sources are
+  still being asked; each source is a thread of its own and fills its rows
+  in as it answers; only the sources the part's `flashers` can use are
+  asked (`sources_for`: an ESP32 reads no drive letter and starts no
+  `dfu-util`); a source being asked is not asked twice; one silent past
+  eight seconds stops holding the foot at "looking". **A row under the
+  pointer never moves** (`targets::merge`): a device still there keeps its
+  place, a new one goes after every row there is, and one unplugged stays
+  where it was, marked and not to be picked, until the list is opened
+  again — and the rows are changed in the picker's model in place
+  (`refresh_list`), never replaced, so a press already on a row is not lost
+  with its element. The window asks again in the background when it comes
+  to the front (winit's `Focused`, `watch_focus`) and as a project opens,
+  not more than once in ten seconds and never while something runs. Flash
+  and Monitor with nothing chosen still wait for every source before they
+  decide which board (`decide`) — the chosen board as soon as its own
+  source says it is there — and after three seconds ask instead, since
+  deciding on what half the sources said is a guess. Measured with
+  `RUSTY_PROBE_DEVICES`, on a machine under a dozen compiles: the click to
+  the frame with the list was 700–825 ms, and is 18–56 ms now (the click's
+  own code 5 ms; one first opening took 209 ms, Slint drawing the picker for
+  the first time), the ports answering 0.1–0.3 s later and `probe-rs list`
+  0.45–1 s later.
+- **`probe-rs list` prints `[0]: <name> -- <vid:pid:serial> (<kind>)`**,
+  and the reader took only lines beginning with a digit — so no probe was
+  ever listed — and used the whole line as the identifier, which no
+  `--probe` accepts. `parse_probe_rs_list` (rusty-embed, tested) takes the
+  bracketed form and the selector after ` -- `. Read off probe-rs's
+  `Display` for a probe, **not off a probe plugged in here**: there was
+  none.
 - **A monitor holding the port is let go first** (`Devices::after_stop`), as
   PlatformIO's Upload does. The flash starts from the old session's own end,
   not from the stop's answer: that is the only moment the port is certainly
@@ -2457,6 +2492,24 @@ from. `src/instances.rs` starts it and keeps the count;
   group of its own on Unix so a Ctrl+C in the terminal that ran the first
   leaves it alone, and no console window (a debug build is a console
   program).
+- **Its start is Slint's and the driver's, and the probe says whose.**
+  `probe::mark` notes each step of `main` and the first frame, and
+  `RUSTY_PROBE_WINDOWS` prints them for the second window with the time
+  from the key. Measured on a machine running a dozen compiles beside it
+  (ten starts, medians): the key to the new process's `main` about 0.11
+  s; Slint building the window's tree about 0.48 s; rusty's own steps
+  before the first frame about 0.05 s (the editor's metrics, `sync_all`);
+  the native window and its OpenGL context about 0.28 s, up to 2 s when
+  the first window's language server is loading a project; the first
+  draw about 0.07 s. **What was tried and measured away**: loading the
+  OpenGL driver on a thread while the tree is built — one
+  `ChoosePixelFormat` against the screen, which in a bare process cut the
+  next context from 0.55 s to 0.06 s — changed nothing in the window
+  (0.99 s to the first frame without it, 0.97 s with), because winit's
+  start then waits on the loader lock instead; it was taken out rather
+  than shipped as unsafe code that buys nothing. What is left to cut is
+  the tree — the code view and its find bar are built while the welcome
+  page is in front — or the renderer, both the owner's call.
 - **Here or in a new window, as VS Code offers it.** A recent project in
   the project menu opens here; Ctrl+Enter or the window button on its row
   opens it in a new window, and so do Ctrl+click and the hover button on
@@ -2802,7 +2855,13 @@ rules it settled, each the answer to something that went wrong.
   middle, Xcode's shape — the run button and *where* it runs, the simulator,
   a serial port, a probe or a USB bootloader, one list chosen once
   (`app/device.rs`) — and stop; on the right, the finder, the palette and the
-  window's own controls. Build, Test, Debug, Flash and Monitor are keys, menu
+  window's own controls. **Where it runs is said in words beside its icon**
+  (`target-label`, `part::target_words`): `Simulator · ESP32-C3`, `COM5`, a
+  probe's short name, a bootloader's board, or *Choose device* — the whole
+  of it in the tooltip, the label bounded and cut short with an ellipsis.
+  The chosen device is a value, which the icons-first rule below keeps
+  text for; it was an icon alone for a release and the user could not see
+  what was chosen. Do not strip it again. Build, Test, Debug, Flash and Monitor are keys, menu
   rows and the palette's (`actions.rs`). **What is running is not said
   there**: an activity view stood beside the button for one phase, and the
   user's verdict was that no IDE puts progress at the top centre — it is the
@@ -2840,7 +2899,7 @@ rules it settled, each the answer to something that went wrong.
   language server, the caret, the encoding, the line endings, the language
   and the chip. **Icons first, the words in the tooltip**, the user's rule
   for all chrome: text appears in a control only where it carries a value —
-  a count, a clock, a position, a zoom. **A server's own words never reach
+  a count, a clock, a position, a zoom, the device Run goes to. **A server's own words never reach
   the bar**: rust-analyzer's progress is a crate name per piece of work, and
   for `Roots Scanned` a whole path — `Roots Scanned 92% 13/14:
   C:\Users\…\lib/rustlib/src/rust/library\std` — which pushed the bar's

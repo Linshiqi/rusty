@@ -24,6 +24,7 @@ mod probe_surfaces;
 mod project;
 mod reveal;
 mod run;
+mod targets;
 mod trail;
 mod tree;
 mod work;
@@ -32,6 +33,7 @@ mod zoom;
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
+    probe::mark("main");
     if let Err(refusal) = probe::ready() {
         eprintln!("rusty: {refusal}");
         std::process::exit(2);
@@ -64,19 +66,25 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     // Counted by the other rusty windows on this machine.
     instances::register();
+    probe::mark("registered");
     let saved = rusty_embed::config::workbench();
+    probe::mark("workbench read");
     let window = AppWindow::new()?;
+    probe::mark("window made");
     // After the window: Slint's translations are bundled with the component,
     // and asked for before it exists the choice is lost and Slint follows the
     // system — the two halves of the window then spoke two languages.
     app::apply_locale(&app::chosen_locale(saved.locale.as_deref()));
+    probe::mark("locale");
     let app = app::App::new(&window);
+    probe::mark("app made");
     work::install(app.clone());
     {
         let app = app.clone();
         window.window().on_close_requested(move || app.closing());
     }
     window.show()?;
+    probe::mark("shown");
     zoom::apply(&window, saved.layout.zoom);
     window.invoke_focus_window();
 
@@ -111,7 +119,11 @@ fn main() -> Result<(), slint::PlatformError> {
             None => app.act("environment.refresh"),
         },
     }
+    probe::mark("project asked");
     probe::start(&window);
+    slint::Timer::single_shot(std::time::Duration::ZERO, || {
+        probe::mark("event loop turned")
+    });
     slint::run_event_loop()
 }
 

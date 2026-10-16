@@ -52,6 +52,66 @@ pub fn target_of(project: Option<&Result<EmbeddedProject, String>>, chip: Option
     }
 }
 
+/// What somebody chose in the device list, as the button needs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Picked {
+    Simulator,
+    /// A board: its short name and the whole of what is known of it.
+    Board {
+        label: String,
+        tip: String,
+    },
+}
+
+/// What the title bar's device button says: a short label naming where Run
+/// goes, the whole of it for the tooltip, and the kind its icon is drawn
+/// for (`simulator`, `board`, or nothing when there is nowhere to run).
+/// The chosen device is a value, which is why it is words beside the icon
+/// and not only a tooltip: the button was an icon alone for a release, and
+/// nobody could see what was chosen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TargetWords {
+    pub label: String,
+    pub tip: String,
+    pub kind: &'static str,
+}
+
+/// The button's words for the project's target and what was chosen —
+/// which wins. `chip` names the part, for the simulator's words.
+pub fn target_words(target: &Target, picked: Option<Picked>, chip: Option<&str>) -> TargetWords {
+    let words = |label: String, tip: String, kind| TargetWords { label, tip, kind };
+    let simulator = || match chip {
+        Some(chip) => words(
+            t!("device.label-simulator", chip = chip),
+            t!("device.tip-simulator", chip = chip),
+            "simulator",
+        ),
+        None => words(t!("desk.simulator"), t!("desk.simulator"), "simulator"),
+    };
+    match picked {
+        Some(Picked::Simulator) => simulator(),
+        Some(Picked::Board { label, tip }) => words(label, tip, "board"),
+        None => match target {
+            Target::Nothing => words(String::new(), String::new(), ""),
+            Target::NotAProject => {
+                let said = t!("desk.target-not-a-project");
+                words(said.clone(), said, "")
+            }
+            Target::NoPart => {
+                let said = t!("desk.target-no-part");
+                words(said.clone(), said, "")
+            }
+            Target::Simulator => simulator(),
+            Target::Board(name) => words(
+                t!("device.choose"),
+                t!("device.tip-choose", chip = name),
+                "board",
+            ),
+            Target::Nowhere(name) => words(name.clone(), name.clone(), ""),
+        },
+    }
+}
+
 /// A project problem's title and detail in the window's language: looked up
 /// by its `kind` and refilled from its `args`, the English kept where the
 /// catalogue has no entry — a sentence rather than a key.
@@ -109,25 +169,13 @@ impl App {
         };
         shell.set_chip(chip_name.into());
         shell.set_chip_tip(chip_tip.into());
+        let chip = chip.map(|chip| chip.name.clone());
+        drop(state);
         // What somebody chose wins over what the part makes of it.
-        if let Some((text, kind)) = self.chosen_target() {
-            shell.set_target(SharedString::from(text));
-            shell.set_target_kind(SharedString::from(kind));
-            return;
-        }
-        shell.set_target_kind(SharedString::from(match target {
-            Target::Simulator => "simulator",
-            Target::Board(_) => "board",
-            _ => "",
-        }));
-        shell.set_target(SharedString::from(match target {
-            Target::Nothing => String::new(),
-            Target::NotAProject => t!("desk.target-not-a-project"),
-            Target::NoPart => t!("desk.target-no-part"),
-            Target::Simulator => t!("desk.simulator"),
-            Target::Board(name) => t!("desk.target-board", chip = name),
-            Target::Nowhere(name) => name,
-        }));
+        let words = target_words(&target, self.chosen_target(), chip.as_deref());
+        shell.set_target_label(SharedString::from(words.label));
+        shell.set_target(SharedString::from(words.tip));
+        shell.set_target_kind(SharedString::from(words.kind));
     }
 
     /// The project read again — a fix ran, and what stood between it and a
@@ -235,5 +283,40 @@ mod tests {
             Target::NotAProject
         );
         assert_eq!(target_of(None, None), Target::Nothing);
+    }
+
+    /// The button names where Run goes whenever there is somewhere: the
+    /// simulator with its chip, the board chosen, or that nothing is chosen
+    /// — and what was chosen wins over what the part makes of it.
+    #[test]
+    fn the_button_says_what_is_chosen() {
+        let simulator = target_words(&Target::Simulator, None, Some("Part-7"));
+        assert_eq!(simulator.kind, "simulator");
+        assert!(simulator.label.contains("Part-7"), "{simulator:?}");
+
+        let port = Picked::Board {
+            label: "COM5".to_string(),
+            tip: "COM5 · serial port · CP210x".to_string(),
+        };
+        let chosen = target_words(&Target::Simulator, Some(port), Some("Part-7"));
+        assert_eq!(chosen.label, "COM5", "the choice wins");
+        assert!(chosen.tip.contains("CP210x"));
+        assert_eq!(chosen.kind, "board");
+
+        let unchosen = target_words(&Target::Board("Part-9".into()), None, None);
+        assert!(!unchosen.label.is_empty(), "nothing chosen is said");
+        assert!(unchosen.tip.contains("Part-9"), "{unchosen:?}");
+        assert_eq!(unchosen.kind, "board");
+
+        for target in [
+            Target::NotAProject,
+            Target::NoPart,
+            Target::Nowhere("X".into()),
+        ] {
+            let words = target_words(&target, None, None);
+            assert!(!words.label.is_empty(), "{target:?} says why Run cannot go");
+            assert_eq!(words.kind, "", "{target:?} is drawn as nowhere to run");
+        }
+        assert!(target_words(&Target::Nothing, None, None).label.is_empty());
     }
 }

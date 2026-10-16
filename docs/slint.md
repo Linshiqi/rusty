@@ -298,7 +298,13 @@ tests green, and CLAUDE.md saying how it works.
    the dock. With nothing chosen the one board plugged in is the answer;
    otherwise the list opens with the verb waiting on it, and offers no
    simulator to a board verb. A monitor holding the port is stopped first,
-   and the flash starts from its end. Proven as far as this desk allows —
+   and the flash starts from its end. The list opens in the frame of the
+   click on what the last scan found and fills in as each source answers on
+   a thread of its own — it waited for every source in turn, which was the
+   button being "slow to open" (700–825 ms from the click; 18–56 ms now,
+   measured under load) — without moving a row already shown
+   (`crate::targets`); the button says what is chosen in words beside its
+   icon. Proven as far as this desk allows —
    the list, the ask, the choice — and **not against a board**: the
    machine it was written on had four COM ports, none a board, and no
    probe. Telemetry reaching Plot waits for Plot (6); every line already
@@ -678,7 +684,11 @@ tests green, and CLAUDE.md saying how it works.
 
    Then two the release candidate was missed for, in the user's words:
    no New Window, two projects never open at once, and no way to see the
-   keys. New Window starts this executable again with `--new-window`
+   keys. (Its start was measured later, reported as slow: about a second
+   from `main` to the first frame, of which rusty's own steps are some
+   50 ms and the rest Slint building the tree and Windows making the
+   window and its OpenGL context — CLAUDE.md, *More than one rusty*.)
+   New Window starts this executable again with `--new-window`
    (`src/instances.rs`, the Tauri window's design carried over: the
    AppImage started rather than its mount, the child reaped, a process
    group of its own, no console), and the instances register by a held
