@@ -3019,6 +3019,36 @@ where anyone looks for it, and the margin had no room to say "Debug".
   run and a debugged test start with an empty dock, as rust-analyzer's
   runnables clear their terminal: appended, the dock was several runs'
   `FAILED`s in one scroll.
+- **A lens runs in the package its file is in**, as rust-analyzer's
+  runnables do: `cargo test --package core-part --lib <filter> --
+  --show-output` (`rusty_embed::cargo_target`; `--bin`, `--test`,
+  `--example`, `--bench` by name, and a target's required features). It
+  ran `cargo test <filter>` at the opened root, and at the root of a
+  workspace that is itself a package that tests the root package alone: a
+  member's test was in no binary that ran, and the run exited zero having
+  run nothing — on screen, a pass. Measured on Rust 1.98: `running 0
+  tests` bare, the test run and failed with the package. **Read off `cargo
+  metadata --no-deps`**, cargo's own list of the members and their targets
+  — kinds, names, root files, required features, autodiscovered or named
+  by `path` — and the workspace's root, without resolving the dependency
+  graph: 134 ms on a two-package workspace, 231 ms on rusty's. Not
+  `LazyWorkspace`, whose full `cargo metadata` is 812 ms here and unbounded
+  without a lockfile, for a click; not a walk of the manifests, which
+  would re-derive cargo's autodiscovery. The package is the one whose
+  directory holds the file most closely; the target is the one the file
+  is the root of, or the one target whose root's directory is above it —
+  where two could hold a module (`src/foo.rs` beside both `lib.rs` and
+  `main.rs`) no target is named and `--package` alone runs them all under
+  the filter, slower and never wrong. **A file in no package is refused
+  by name** (`toolbar.test-no-package`), never run at the root, and so is
+  one in the excluded firmware crate (`toolbar.test-in-firmware`). Cargo
+  runs at the opened project when that is inside the file's workspace —
+  so the project's own `.cargo/config.toml` still applies — and at the
+  workspace's root otherwise, which is how a workspace of its own nested
+  in the project runs its tests. Debug's build and its JSON take the same
+  selection (`host_debug::build_plan`, `built_json`), and an example's ▶
+  Run its package. Test in the title bar is still `cargo test` at the
+  opened project, its suite and no more.
 - **What a run says is read as it goes** (`rusty_edit::testrun`, pure and
   tested against a captured run; `app/testing.rs` feeds it every line the run
   prints): each test's verdict, and for each failed one where it panicked
@@ -3049,16 +3079,29 @@ where anyone looks for it, and the margin had no room to say "Debug".
   the workspace's root**, not to the directory the run started in:
   `core\src\lib.rs` from the root and from inside `core/` alike, an
   absolute path for a path package outside the workspace — measured all
-  three ways (`testrun`'s tests hold the captured runs). So the run asks
-  cargo (`host_debug::workspace_root`, `cargo locate-project --workspace`,
-  beside the build) and `testrun::file_in` resolves the place against that
+  three ways (`testrun`'s tests hold the captured runs). So a lens's run
+  takes the root its selection named, the title bar's Test asks cargo
+  (`host_debug::workspace_root`, `cargo locate-project --workspace`,
+  beside the build), and `testrun::file_in` resolves the place against that
   root and makes it the project's; a place outside the project, or a run
-  whose root cargo would not name, is marked nowhere. Read against the
-  run's directory — as the dock's links still read every compiler path
-  (`App::place_path`) — a project opened at its member `core/` would look
-  for `core/src/lib.rs` inside `core/`. `RUSTY_PROBE_TESTFAIL` drives all
-  of it in the window, at a root package, a member from the root and a
-  member opened as the project.
+  whose root cargo would not name, is marked nowhere.
+- **Every link in the dock reads its path the same way** (`app/places.rs`):
+  a compile error's `-->` in a Build, a test run's and a debugged test's
+  panic — a `thread '…' panicked at <place>:` line is a link now
+  (`buildlog::place_on`), as VS Code's terminal makes one. `App::place_path` read them against the run's directory, and a
+  project opened at its member `core/` had every link one directory too
+  deep, `core/src/lib.rs` inside `core/`. The workspace's root of each
+  directory a run starts in is asked of cargo off the UI thread as the run
+  starts and kept (a lens's selection hands it over already known); a
+  directory with no workspace — a CMake or PlatformIO project's — is its
+  own base, as before, and a changed `Cargo.toml` or another project asks
+  again. **A line heard while the root is still being asked is said
+  without its link and given it when cargo answers** (`Runner::relink`, by
+  the line's number, which survives trimming), and so is an error the
+  build listed meanwhile: never a link to the wrong file in the meantime.
+  `RUSTY_PROBE_TESTFAIL` drives all of it in the window, at a root
+  package, a member from the root and a member opened as the project, and
+  prints where every link in the dock goes.
 - **A mark is about the text the test ran against, so it does not follow
   an edit**: an edit to the file takes its marks away, and a file edited
   while a run goes — after its drafts were written, while cargo built what
@@ -3069,14 +3112,26 @@ where anyone looks for it, and the margin had no room to say "Debug".
   project forgets the verdicts and the marks.
 - **A test run through Debug is read by the same reader**
   (`App::testing_debug_heard`, what the debugger forwards of the program),
-  and that is less than a run prints: Debug runs the binary with
-  `--nocapture`, so the panic goes to the program's stderr, and both
-  debuggers' stderr is `null()` (`rusty-dbg`) — the verdict on stdout can
-  reach the lens, the panic's place cannot reach the line. Not run here
-  either way: this machine's only adapter is LLVM's `lldb-dap`, which
-  starts and answers nothing.
+  and the program's stderr is forwarded as its stdout is
+  (`session::forward_lines`, one thread per stream, through the outlet the
+  reader empties as the session's last state goes). Debug runs the binary
+  with `--nocapture`, so the panic goes to stderr, and both debuggers had
+  it `null()`: the verdict on stdout reached the lens and the panic's
+  place never reached the line — as VS Code's Debug Console would have
+  shown it. Measured with `dap_probe` on CodeLLDB 1.12.3 (its VS Code
+  extension's adapter): with stderr thrown away, `test … FAILED` and no
+  panic; read, `panicked at core\src\lib.rs:20:9:` and the message. So
+  CodeLLDB hands the program the adapter's own stderr; an adapter that
+  sends it as `output` events (`category: stderr`) is read too, the events
+  joined into whole lines per stream, since an adapter forwards what it
+  read and libtest writes `test x ... ` and its verdict apart. gdb's stderr
+  is read for a program on this machine (it inherits gdb's) and stays
+  `null()` for a remote target, where only gdb's own complaints arrive; a
+  board's probe-rs keeps `null()`, its firmware printing through RTT.
+  LLVM's own Windows `lldb-dap` still starts and answers nothing.
 - **Debug builds, asks, then runs.** `App::debug_test` runs `cargo test
-  --no-run` visibly, then the same with `--message-format=json` to learn
+  --no-run --package <its file's> [target]` visibly, then the same with
+  `--message-format=json` to learn
   where each test executable landed, then asks each binary `<exe> <filter>
   --list` and starts the *one* that lists a match under gdb
   (`rusty_dbg::Target::Host`). Which binary holds a test is cargo's private

@@ -11,6 +11,10 @@
 //! It fails loudly rather than passing quietly: a session that never stops is
 //! the failure worth catching, and a probe that shrugged at it would be the
 //! test that reported a working debugger on a machine with none.
+//!
+//! After the stop it lets the program run to its end and says whether a
+//! panic reached the output — a failing test under `--nocapture` writes its
+//! panic to stderr, which is what marks the line it failed on.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -71,6 +75,7 @@ fn main() {
     // for: `rusty_dbg::placement`, or a line with no code the adapter moved
     // it off. The stop is judged against where it landed.
     let mut landed = line - 1;
+    let mut resumed = false;
 
     while Instant::now() < deadline {
         let Some(state) = events.next() else { break };
@@ -112,15 +117,16 @@ fn main() {
             }
             stopped_where = Some((frame.file.clone(), frame.line));
         }
-        if stopped_where.is_some() && !state.variables.is_empty() {
+        if stopped_where.is_some() && !resumed && !state.variables.is_empty() {
             eprintln!("locals:");
             for v in state.variables.iter().take(8) {
                 eprintln!("   {} = {}", v.name, v.value);
             }
             // Everything the panel needs has arrived; let the program finish
-            // so the adapter and the debuggee are not left running.
+            // so the adapter and the debuggee are not left running — and
+            // read what it prints on the way, its panic among it.
             session.resume().expect("resume");
-            break;
+            resumed = true;
         }
         if state.exited.is_some() {
             break;
@@ -128,6 +134,13 @@ fn main() {
     }
 
     session.stop();
+    // A failing test's panic is written to its stderr: the line the window
+    // marks the test's failure on the line it happened from.
+    match printed.iter().find(|line| line.contains("panicked at")) {
+        Some(panic) => eprintln!("the program's panic reached the output: {panic}"),
+        None if resumed => eprintln!("no panic reached the output"),
+        None => {}
+    }
 
     match stopped_where {
         Some((Some(at), Some(hit))) if at == file && hit == landed => {

@@ -377,7 +377,10 @@ lens-failed = "测试 {name} 未通过"
 [toolbar]
 build = "构建 —— 用工程自己的构建系统（cargo、PlatformIO 或 CMake），输出在下方面板"
 test-blocked = "打开的目录本身就是固件，在这里跑 cargo test 会按芯片目标编译测试，而芯片没有测试框架。把固件 crate 放进 workspace 的 exclude、可测试的 crate 作为成员，「测试」就会在成员所在的位置运行。"
-flash = "烧录 —— 构建、写入设备，然后显示它的输出"
+test-in-firmware = "{file} 在固件 crate 里，在那里跑 cargo test 会按芯片目标编译测试，而芯片没有测试框架。测试在 workspace 的成员里运行；请把这个测试移到能在本机构建的 crate 中。"
+test-no-workspace = "cargo 没有为 {file} 找到 workspace，因此没有可以运行其测试的 package，什么也没有运行。cargo 的原话：{said}"
+test-no-package = "{file} 不属于 {workspace} 这个 workspace 的任何 package，因此没有可以运行其测试的 package；在根目录运行只会什么测试也不跑。什么也没有运行。"
+flash ="烧录 —— 构建、写入设备，然后显示它的输出"
 debug = "调试 —— 冻结启动，停在你设的断点上"
 stop = "停止正在运行的任务"
 

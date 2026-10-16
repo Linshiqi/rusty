@@ -89,6 +89,9 @@ pub use protocol::{
 // The build systems beside Cargo: PlatformIO and CMake, recognised, built,
 // flashed and searched for images.
 pub mod buildsys;
+// Which package and target of a cargo workspace a file is compiled in, and
+// the arguments that select them — what a test's lens runs.
+pub mod cargo_target;
 pub mod catalog;
 pub mod circuit;
 pub mod config;

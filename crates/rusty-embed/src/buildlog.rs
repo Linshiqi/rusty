@@ -152,11 +152,15 @@ pub fn place_in(text: &str) -> Option<Place> {
 }
 
 /// The place a line of output names, for the dock to make it a link: the
-/// `-->` under a rustc diagnostic, or the head of a GCC one.
+/// `-->` under a rustc diagnostic, the head of a GCC one, or where a Rust
+/// program panicked.
 pub fn place_on(line: &str) -> Option<Place> {
     let trimmed = line.trim_start();
     if let Some(rest) = trimmed.strip_prefix("--> ") {
         return place_in(rest.trim());
+    }
+    if let Some(place) = panic_place(trimmed) {
+        return Some(place);
     }
     one_line(line).map(|located| Place {
         path: located.path,
@@ -165,9 +169,50 @@ pub fn place_on(line: &str) -> Option<Place> {
     })
 }
 
+/// Where a panic says it happened: `thread 'tests::it' (1234) panicked at
+/// core\src\lib.rs:20:9:` — the path as rustc was handed the file, which for
+/// cargo is relative to the workspace's root — or, before Rust 1.73, after
+/// the quoted message: `panicked at 'boom', src/lib.rs:5:9`.
+fn panic_place(trimmed: &str) -> Option<Place> {
+    let rest = trimmed.strip_prefix("thread '")?;
+    let (_, rest) = rest.split_once("panicked at ")?;
+    let place = match rest.strip_prefix('\'') {
+        Some(quoted) => quoted.rsplit_once("', ")?.1,
+        None => rest,
+    };
+    place_in(place.trim().trim_end_matches(':'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test's panic names its place, which the dock makes a link — in a
+    /// run's output and a debugged test's alike — as libtest printed it on
+    /// Rust 1.98, and as Rust before 1.73 did.
+    #[test]
+    fn a_panic_names_its_place() {
+        assert_eq!(
+            place_on(
+                r"thread 'tests::the_dot_of_two_axes' (22376) panicked at core\src\lib.rs:20:9:"
+            ),
+            Some(Place {
+                path: r"core\src\lib.rs".to_string(),
+                line: 20,
+                col: 9,
+            })
+        );
+        assert_eq!(
+            place_on("thread 'main' panicked at 'boom: a, b', src/main.rs:5:9"),
+            Some(Place {
+                path: "src/main.rs".to_string(),
+                line: 5,
+                col: 9,
+            })
+        );
+        // The message under the header names no place.
+        assert_eq!(place_on("assertion `left == right` failed"), None);
+    }
 
     fn read_all(lines: &[&str]) -> Vec<Located> {
         let mut reader = Reader::new();

@@ -143,7 +143,10 @@
 //! `assert_eq!` test, it runs the test from its lens and photographs its
 //! message on the line where it failed, on the hover card, in a window of
 //! its own, gone once the line is typed on, and gone with the test mended
-//! (`probe_testfail.rs`).
+//! (`probe_testfail.rs`); and says which command the lens ran and where
+//! every link in the dock goes. `RUSTY_PROBE_TESTFAIL_VERB=debug` takes the
+//! lens's Debug first, the panic then reaching the line through the
+//! program's stderr.
 //! With `RUSTY_PROBE_HISTORY`, on a repository with a commit changing a long
 //! line (`probe_history.rs`), it drags each of the History page's dividers,
 //! selects and copies in the commit's message and in each column of its

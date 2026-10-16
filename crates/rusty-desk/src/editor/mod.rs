@@ -146,7 +146,7 @@ type OnChord = RefCell<Option<Box<dyn Fn(&str, bool, bool, bool, bool) -> bool>>
 /// many lines were there and how many are there now.
 type OnLines = RefCell<Option<Box<dyn Fn(&str, usize, usize, usize)>>>;
 type OnBreakpoint = RefCell<Option<Box<dyn Fn(String, u32)>>>;
-type OnLens = RefCell<Option<Box<dyn Fn(rusty_edit::Runnable, String)>>>;
+type OnLens = RefCell<Option<Box<dyn Fn(String, rusty_edit::Runnable, String)>>>;
 /// Who applies a fix the hover card offered: the text's version, the
 /// server's answer, and which of its actions.
 type OnFix = RefCell<Option<Box<dyn Fn(u64, rusty_lsp::CodeActions, usize)>>>;
@@ -438,8 +438,8 @@ impl Surface {
 
     /// Who decides what a click beside a line's number does: the debugger
     /// holds the breakpoints.
-    /// What a lens runs, and which verb: `run` or `debug`.
-    pub fn on_lens(&self, tell: impl Fn(rusty_edit::Runnable, String) + 'static) {
+    /// What a lens runs, in which file, and which verb: `run` or `debug`.
+    pub fn on_lens(&self, tell: impl Fn(String, rusty_edit::Runnable, String) + 'static) {
         *self.on_lens.borrow_mut() = Some(Box::new(tell));
     }
 
@@ -1172,8 +1172,12 @@ impl Surface {
             let Some(runnable) = this.rows.runnable_at(row.max(0) as usize) else {
                 return;
             };
+            // Which file: the package and target a test runs in are its.
+            let Some(path) = this.doc().map(|doc| doc.borrow().path.clone()) else {
+                return;
+            };
             if let Some(tell) = this.on_lens.borrow().as_ref() {
-                tell(runnable, verb.to_string());
+                tell(path, runnable, verb.to_string());
             }
         });
         let this = Rc::downgrade(self);

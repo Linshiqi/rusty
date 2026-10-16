@@ -95,6 +95,9 @@ pub struct Runner {
     /// Where the last run ran: what a relative path it printed is relative
     /// to.
     dir: RefCell<Option<PathBuf>>,
+    /// How many lines have gone from the front — trimmed, or cleared —
+    /// since the first: what turns a line's number (`said`) into its row.
+    gone: Cell<u64>,
     /// Told the counts whenever they may have moved (`on_counts`).
     counted: RefCell<Option<Counted>>,
 }
@@ -159,8 +162,29 @@ impl Runner {
             running: RefCell::default(),
             generation: Cell::new(0),
             dir: RefCell::default(),
+            gone: Cell::new(0),
             counted: RefCell::default(),
         }
+    }
+
+    /// The number of the line said last, for [`Runner::relink`]: every line
+    /// ever said has one, counted from the first, whatever has gone since.
+    pub fn said(&self) -> u64 {
+        (self.gone.get() + self.output.row_count() as u64).saturating_sub(1)
+    }
+
+    /// The line numbered `said` names a place after all, now that what its
+    /// path is relative to is known — or nothing, if it is gone.
+    pub fn relink(&self, said: u64, place: (String, i32, i32)) {
+        let Some(row) = said.checked_sub(self.gone.get()) else {
+            return;
+        };
+        let row = row as usize;
+        let Some(mut line) = self.output.row_data(row) else {
+            return;
+        };
+        (line.path, line.line, line.col) = (place.0.into(), place.1, place.2);
+        self.output.set_row_data(row, line);
     }
 
     /// Where the last run ran.
@@ -251,7 +275,9 @@ impl Runner {
             // tenth more than is over, so the next trim is two thousand
             // lines away: every trim is the whole model set again, and the
             // filter over it judges every line again.
-            let kept: Vec<OutputLine> = self.output.iter().skip(over + KEPT / 10).collect();
+            let dropped = (over + KEPT / 10).min(self.output.row_count());
+            let kept: Vec<OutputLine> = self.output.iter().skip(dropped).collect();
+            self.gone.set(self.gone.get() + dropped as u64);
             self.output.set_vec(kept);
         }
         // The count beside the box moves with every line while it narrows;
@@ -262,6 +288,8 @@ impl Runner {
     }
 
     pub fn clear(&self) {
+        self.gone
+            .set(self.gone.get() + self.output.row_count() as u64);
         self.output.set_vec(Vec::new());
         self.recount();
     }

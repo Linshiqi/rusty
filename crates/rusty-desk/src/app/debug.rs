@@ -203,8 +203,10 @@ impl App {
         if self.state.borrow().debug.epoch != epoch {
             return;
         }
+        // A link where a line names a place, as a run's are: a panic the
+        // program wrote goes to the line it happened on.
         for text in &update.output {
-            self.runner.say(text, crate::run::kind::PLAIN);
+            self.say_linked(text);
         }
         self.testing_debug_heard(epoch, &update.output);
         // Attached: the standing breakpoints are placed, and the frozen
