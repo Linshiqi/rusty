@@ -12,7 +12,9 @@
 //! rather than among every other test's lines as they happen. What the run
 //! says is read as it goes (`rusty_edit::testrun`) and each lens carries a
 //! tick or a cross until the next run of it. Test in the title bar runs
-//! the opened project's suite, as `cargo test` there does.
+//! the opened project's whole suite: `cargo test --workspace` where the
+//! root declares a workspace, the excluded firmware crate left out as
+//! cargo leaves it.
 //!
 //! A failed test's panic is marked where it happened (`editor/failed.rs`):
 //! the place as rustc printed it, resolved against the workspace's root —
@@ -24,7 +26,9 @@
 //! Debug builds the test binaries visibly, asks each binary which holds the
 //! test (`rusty_embed::host_debug` says why the path cannot), and runs that
 //! one under gdb — or LLDB's debug adapter where the debug information is a
-//! PDB, which gdb cannot read.
+//! PDB, which gdb cannot read — in its package's directory, where `cargo
+//! test` runs it, so a fixture read by a relative path is found under the
+//! debugger as without it.
 
 use std::{
     collections::HashMap,
@@ -104,6 +108,7 @@ impl App {
                     cargo_target::selection_for(&full).map(|chosen| Chosen {
                         dir: chosen.run_in(&root),
                         base: chosen.workspace.clone(),
+                        package: chosen.package_dir.clone(),
                         args: chosen.args(),
                     })
                 },
@@ -155,19 +160,29 @@ impl App {
         Some(root)
     }
 
-    /// The opened project's whole suite, as `cargo test` there runs it —
-    /// every draft written first, since what runs is what is on screen.
+    /// The opened project's whole suite — `cargo test --workspace` where
+    /// its manifest declares a workspace, as rust-analyzer's "test all"
+    /// runs it, and `cargo test` for one package (`cargo_target::
+    /// suite_args`): plain, at a root package with members, it tested the
+    /// root alone. Every draft written first, since what runs is what is on
+    /// screen.
     pub(super) fn run_suite(self: &Rc<Self>) {
         let Some(root) = self.test_root() else { return };
-        self.write_all_then(move |app| {
-            let plan = CommandPlan::new("cargo", vec!["test".to_string()], String::new());
-            // A run of its own in an empty dock, as rust-analyzer's
-            // runnables clear their terminal.
-            if !app.begin_run(Kind::Test) {
-                return;
-            }
-            app.tests_begin(&root, None);
-            app.run(&plan, Some(root), |app, _| app.test_ended());
+        self.write_all_then(move |_| {
+            let at = root.clone();
+            work::spawn(
+                move || cargo_target::suite_args(&at),
+                move |app, args| {
+                    let plan = CommandPlan::new("cargo", args, String::new());
+                    // A run of its own in an empty dock, as rust-analyzer's
+                    // runnables clear their terminal.
+                    if !app.begin_run(Kind::Test) {
+                        return;
+                    }
+                    app.tests_begin(&root, None);
+                    app.run(&plan, Some(root), |app, _| app.test_ended());
+                },
+            );
         });
     }
 
@@ -410,7 +425,12 @@ impl App {
                     Err(why) => return app.note(2, why),
                 };
                 app.choose(root.clone(), file, move |app, chosen| {
-                    let Chosen { dir, base, args } = chosen;
+                    let Chosen {
+                        dir,
+                        base,
+                        package,
+                        args,
+                    } = chosen;
                     let plan = host_debug::build_plan(&args);
                     // Afresh once: the build, then the debugger on what it
                     // built, are one run.
@@ -423,7 +443,7 @@ impl App {
                         }
                         let breakpoints = app.editor.gutter().borrow().all();
                         let read_in = dir.clone();
-                        let built = Built { dir, args };
+                        let built = Built { dir, args, package };
                         work::spawn(
                             move || start_host(&built, &root, &filter, backend, breakpoints),
                             move |app, started| match started {
@@ -448,19 +468,23 @@ impl App {
 }
 
 /// What a lens runs in: the directory cargo runs in, the workspace's root
-/// that what it prints is relative to, and the arguments that select the
-/// file's package and target.
+/// that what it prints is relative to, the package's directory a test
+/// binary runs in, and the arguments that select the file's package and
+/// target.
 struct Chosen {
     dir: PathBuf,
     base: PathBuf,
+    package: PathBuf,
     args: Vec<String>,
 }
 
 /// Where a debugged test was built, and what selected it: the same again
-/// answers where cargo put its binaries.
+/// answers where cargo put its binaries. `package` is where the binary
+/// runs, as `cargo test` runs it.
 struct Built {
     dir: PathBuf,
     args: Vec<String>,
+    package: PathBuf,
 }
 
 /// Which debugger reads what this machine's toolchain builds.
@@ -473,8 +497,8 @@ enum Backend {
 /// a step is a step and not a switch to whichever test ran next, and
 /// `--nocapture` because what the test prints is usually why it is being
 /// run this way — its panic too, on the stderr the debugger now hands on.
-/// The binaries are the ones `built` made; the session reads its files as
-/// the project at `root` names them.
+/// The binaries are the ones `built` made, run in its package's directory;
+/// the session reads its files as the project at `root` names them.
 fn start_host(
     built: &Built,
     root: &Path,
@@ -483,6 +507,7 @@ fn start_host(
     breakpoints: Vec<(String, u32)>,
 ) -> Result<(AnySession, Events), String> {
     let json = host_debug::built_json(&built.dir, &built.args).map_err(|e| e.to_string())?;
+    let cwd = built.package.clone();
     let built = host_debug::test_executables(&json);
     let exe = host_debug::binary_holding(&built, filter).map_err(|e| e.to_string())?;
     let args = vec![
@@ -495,7 +520,10 @@ fn start_host(
             let launch = Launch {
                 gdb,
                 elf: exe,
-                target: Target::Host { args },
+                target: Target::Host {
+                    args,
+                    cwd: Some(cwd),
+                },
                 root: root.to_path_buf(),
             };
             Debugger::start(&launch)
@@ -512,6 +540,7 @@ fn start_host(
                     program: exe.clone(),
                     args: args.clone(),
                     root: root.to_path_buf(),
+                    cwd: Some(cwd.clone()),
                     breakpoints: breakpoints.clone(),
                     board: None,
                 };

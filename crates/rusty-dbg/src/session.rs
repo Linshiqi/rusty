@@ -39,7 +39,14 @@ pub enum Target {
     /// `-exec-run` rather than `-exec-continue`, the program's own stdout
     /// arrives in the pipe beside gdb's records, and its exit ends the
     /// session, since there is no target left to talk to.
-    Host { args: Vec<String> },
+    ///
+    /// `cwd` is where the program runs when that is not the root: a test
+    /// in its package's directory, as `cargo test` runs it, so a fixture
+    /// read by a relative path is found under the debugger as without it.
+    Host {
+        args: Vec<String>,
+        cwd: Option<PathBuf>,
+    },
 }
 
 impl Target {
@@ -61,6 +68,18 @@ fn exec_arguments(args: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// What a program gdb runs itself is told before it starts: its arguments,
+/// and its working directory where it has one of its own. `set cwd` is the
+/// inferior's alone — gdb's own stays the root its source paths are read
+/// against — and takes the rest of the line as it is, spaces and all.
+fn host_commands(args: &[String], cwd: Option<&Path>) -> Vec<String> {
+    let mut commands = vec![format!("-exec-arguments {}", exec_arguments(args))];
+    if let Some(cwd) = cwd {
+        commands.push(format!("-gdb-set cwd {}", cwd.display()));
+    }
+    commands
 }
 
 /// What "resume" means: a host program that has not started yet is started,
@@ -263,7 +282,7 @@ impl Debugger {
             Target::Qemu { port } => {
                 debugger.send(&format!("-target-select extended-remote localhost:{port}"))?;
             }
-            Target::Host { args } => {
+            Target::Host { args, cwd } => {
                 // Nothing to connect to: gdb has the binary from its command
                 // line and starts it on the first resume. So the session is
                 // attached from the start, and says so now rather than after
@@ -271,7 +290,9 @@ impl Debugger {
                 // breakpoints on that word and then asks for the run — and
                 // a breakpoint placed after `-exec-run` is one the program
                 // may already have run past.
-                debugger.send(&format!("-exec-arguments {}", exec_arguments(args)))?;
+                for command in host_commands(args, cwd.as_deref()) {
+                    debugger.send(&command)?;
+                }
                 let outlet = outlet.lock().expect("outlet");
                 let mut state = debugger.state.lock().expect("state");
                 state.attached = true;
@@ -962,6 +983,19 @@ pub(crate) mod tests {
             exec_arguments(&args),
             r#"tests::it_works --nocapture "a b" "say \"hi\"""#
         );
+    }
+
+    /// A test runs where `cargo test` runs it, its package's directory, so
+    /// gdb is told the program's directory before it starts it — and told
+    /// nothing where the program runs at the root.
+    #[test]
+    fn a_host_program_is_told_where_it_runs() {
+        let args = vec!["probe::reads".to_string()];
+        assert_eq!(
+            host_commands(&args, Some(Path::new("E:/w/my core"))),
+            ["-exec-arguments probe::reads", "-gdb-set cwd E:/w/my core"]
+        );
+        assert_eq!(host_commands(&args, None), ["-exec-arguments probe::reads"]);
     }
 
     #[test]

@@ -31,6 +31,7 @@ fn a_launch_probe_rs_cannot_carry_out_is_refused_at_once_in_its_words() {
         program: dir.join("no-such-image.elf"),
         args: Vec::new(),
         root: dir.clone(),
+        cwd: None,
         breakpoints: vec![("src/main.rs".to_string(), 10)],
         board: Some(Board {
             chip: "STM32F411CEUx".to_string(),

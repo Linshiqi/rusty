@@ -584,6 +584,30 @@ tests green, and CLAUDE.md saying how it works.
    same binary shows the difference: no panic with the adapter's stderr
    thrown away, the panic with it read.
 
+   Then whether Continue works after a breakpoint, which `dap_probe` had
+   seemed to say it did not: stopped, resumed, and the panic never came.
+   It does. With every message on the wire printed (`RUSTY_DAP_LOG`), the
+   `continue` was answered and the program went on — to a second stop at
+   the same breakpoint, an `assert_eq!` line that CodeLLDB binds to three
+   locations in a debug MSVC build, and the probe answered only the first
+   stop. It answers every stop now and drives the program to its end:
+   Continue three times through a loop, Step over, into and out, a
+   breakpoint added while stopped, then the panic and exit 101. Two races
+   found on the way are closed: the window's run on attach is
+   `AnySession::begin`, nothing for an adapter whose program is already
+   going (a resume there could take a program already at its first
+   breakpoint past it), and the session says it is running before
+   `configurationDone` rather than after, so the first stop is never
+   overwritten. Test in the title bar is `cargo test --workspace` wherever
+   the root declares a workspace, and a debugged test runs in its
+   package's directory, as `cargo test` runs it — measured on a member
+   whose test reads `fixtures/data.txt`: `NotFound` from the opened root,
+   read from the member, by `dap_probe` both ways and by
+   `RUSTY_PROBE_TESTFAIL_VERB=debug` in the window, whose test then failed
+   on its assertion with the fixture's text in the message. The same probe
+   ends by pressing the title bar's Test, and the dock said `$ cargo test
+   --workspace` over the member's test.
+
    Folding, sticky scroll and the minimap next. The folds live in the
    document, carried across every edit (`document::carry`: one below an
    edit moves, one whose hidden lines it reached opens, one being typed on

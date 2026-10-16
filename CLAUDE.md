@@ -3153,6 +3153,19 @@ where anyone looks for it, and the margin had no room to say "Debug".
   own, a `#[path]` module anywhere — so the binaries are asked rather than
   the path read. Two matches are refused by name; none is refused because
   `cargo test` with such a filter exits zero having run nothing.
+- **A debugged test runs where `cargo test` runs it**: in its package's
+  directory (`Selection::package_dir`, `CARGO_MANIFEST_DIR`), the adapter's
+  `cwd` and gdb's `set cwd`, where it ran at the opened project — so a
+  member's test reading `fixtures/data.txt` passed under `cargo test` and
+  panicked `NotFound` under Debug. Source paths stay the root's.
+- **Test in the title bar is the whole workspace** (`cargo_target::
+  suite_args`): `cargo test --workspace` wherever the root's manifest
+  declares a `[workspace]`, as rust-analyzer's "test all" runs it, plain
+  `cargo test` for one package. Plain at a root package with members, it
+  tested the root alone and passed. A crate the workspace `exclude`s — the
+  firmware — stays out, as cargo keeps it out; the test that holds it puts
+  a `compile_error!` in an excluded glob member and fails without the
+  `exclude`.
 - **A host program is run, not attached to.** `Target::Host` sends
   `-exec-arguments` instead of `-target-select`, is `attached` from the start
   (pushed at once, so the window places its breakpoints *before* the first
@@ -3178,7 +3191,9 @@ where anyone looks for it, and the margin had no room to say "Debug".
   test ran to its end — reported as "Debug does not start". `debug_assert!`
   is the same; `assert_eq!(`, `assert_ne!(`, `println!(` and `vec![` do
   their work on their first line and stop there as clicked, each measured
-  with `dap_probe`. The line clicked stays `Breakpoint::requested`, so the
+  with `dap_probe` — a one-line `assert_eq!` three times over under
+  CodeLLDB, one per location it binds (*Continue works on the DAP path*,
+  under Hard-won specifics). The line clicked stays `Breakpoint::requested`, so the
   dot moves to where the session will stop: the DAP answer is paired with
   its request by `request_seq`, in order — taken as the adapter's line, a
   breakpoint moved in its first answer never moved its dot — and gdb's
@@ -4443,13 +4458,43 @@ is no browser storage, and what the window remembers between runs is
   not stdio, not a socket. So discovery returns a *list*, the caller tries
   each, and the connect timeout is short because a working adapter listens at
   once. `cargo run -p rusty-dbg --example dap_probe -- <project> <exe> <file>
-  <line> [args…]` is the check that a machine can debug at all.
+  <line> [args…]` is the check that a machine can debug at all — and that
+  it goes on: it answers every stop (`DAP_PROBE_STEPS`, `continue` once the
+  list runs out) until the program exits, and fails on stops or an exit
+  code other than `DAP_PROBE_EXPECT` / `DAP_PROBE_EXIT` say.
+  `RUSTY_DAP_ADAPTER` names the one adapter it tries, and **`RUSTY_DAP_LOG`
+  prints every message on the wire**, in the probe and in the window alike.
 - **A debug adapter takes breakpoints only between `initialized` and
   `configurationDone`.** After that the program is running and a breakpoint
   placed then is one a short test has already run past. The standing list
   therefore travels *with* the launch request rather than being placed on
-  attach the way the gdb path does it, and the panel's first resume is a
-  no-op rather than an error about a program that is already going.
+  attach the way the gdb path does it — and **the window's run on attach is
+  `AnySession::begin`, which for an adapter does nothing**: it was a
+  resume, a no-op only while the program was still going, so one that had
+  already reached its first breakpoint would have been sent straight past
+  it. The session is marked running *before* `configurationDone` goes, so
+  the first stop, which can only follow it, is never overwritten by it, and
+  a stop clears the last stop's stack and locals itself, since an adapter
+  need not say `continued` after a request that implies it.
+- **Continue works on the DAP path; the probe that said otherwise resumed
+  once.** Reported as "after a breakpoint, Continue never lets the program
+  finish", from `dap_probe` on CodeLLDB 1.12.3: it stopped, resumed, and the
+  panic never came before the timeout. On the wire (`RUSTY_DAP_LOG`) the
+  `continue` was answered, `continued` followed — and then a second
+  `stopped` at the same breakpoint, which the probe never answered, so the
+  program waited there until the outer `timeout` killed the adapter, and
+  the session's "ended without reporting an exit" was cut off mid-line as
+  the probe died: the "error with no message". The breakpoint was on an
+  `assert_eq!` line, and **in a debug MSVC build `assert_eq!(…)` on one line
+  resolves to three locations** (`Resolved locations: 3`): it stops there
+  three times before it panics, the second and third with `left_val` in
+  the locals. A loop body or a helper called twice does the same. Driven to
+  its end, the probe shows Continue at every stop, Step over, into and out,
+  and a breakpoint added while stopped, all on CodeLLDB, with the panic and
+  exit 101 after. Three stops on one line are the adapter's — it bound
+  three locations to the one line asked for — and nothing in a stop tells
+  the third location of one pass from the next turn of a loop, so rusty
+  skips none.
 - **The two debuggers end, print and select by one set of rules.** A
   session that ends without an `exited` — gdb gone, or an adapter's
   `terminated` — has not exited 0, and says so in `error`; the DAP path

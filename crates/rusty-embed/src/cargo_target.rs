@@ -29,6 +29,16 @@
 //! runs every target of the package under the filter: slower, never wrong.
 //! Following `mod` lines to decide would be a parser's job, and `#[path]`
 //! puts a module anywhere.
+//!
+//! **The package's directory is where its test runs.** `cargo test` starts
+//! each test binary in the directory of the package that built it
+//! (`CARGO_MANIFEST_DIR`), so a debugged test is started there too, or a
+//! fixture it reads by a relative path is found by one and not the other.
+//!
+//! **The whole suite is `test --workspace` wherever the root declares a
+//! workspace** ([`suite_args`]), for the same reason the lens names its
+//! package: plain `cargo test` at a root that is a package with members
+//! tests the root package and nothing else.
 
 use std::path::{Path, PathBuf};
 
@@ -82,6 +92,9 @@ pub struct Selection {
     /// The workspace's root, as [`Workspace::root`].
     pub workspace: PathBuf,
     pub package: String,
+    /// The directory its `Cargo.toml` is in: where `cargo test` runs a test
+    /// binary (`CARGO_MANIFEST_DIR`), so where a debugged test runs too.
+    pub package_dir: PathBuf,
     /// `None` where more than one target could hold the file: every target
     /// of the package is run.
     pub target: Option<(TargetKind, String)>,
@@ -158,6 +171,31 @@ impl std::fmt::Display for Refusal {
 }
 
 impl std::error::Error for Refusal {}
+
+/// The arguments that test the whole of the project at `root`, after
+/// `cargo`: `test --workspace` where its manifest declares a workspace, as
+/// rust-analyzer's "test all" runs it, and plain `test` where it is one
+/// package. Plain `test` at a root that is a package *and* a workspace
+/// tests the root package alone — the members' tests never ran from the
+/// title bar's Test, and the run said it had passed. A member cargo
+/// `exclude`s, the firmware crate, stays out with `--workspace` as without.
+/// A manifest that cannot be read is tested plainly, and cargo says why.
+pub fn suite_args(root: &Path) -> Vec<String> {
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    suite_args_for(&manifest)
+}
+
+/// [`suite_args`] for the text of the root's `Cargo.toml`.
+pub fn suite_args_for(manifest: &str) -> Vec<String> {
+    let workspace = manifest
+        .parse::<toml::Table>()
+        .is_ok_and(|table| table.contains_key("workspace"));
+    let mut args = vec!["test".to_string()];
+    if workspace {
+        args.push("--workspace".to_string());
+    }
+    args
+}
 
 /// The workspace `dir` is in, as `cargo metadata --no-deps` lists it.
 pub fn workspace_of(dir: &Path) -> Result<Workspace, Refusal> {
@@ -268,6 +306,7 @@ pub fn select(workspace: &Workspace, file: &Path) -> Result<Selection, Refusal> 
     Ok(Selection {
         workspace: workspace.root.clone(),
         package: package.name.clone(),
+        package_dir: package.dir.clone(),
         target: target.map(|t| (t.kind, t.name.clone())),
         features: target
             .map(|t| t.required_features.clone())
@@ -392,6 +431,13 @@ mod tests {
             args("/w/core/benches/speed.rs"),
             ["--package", "core-part", "--bench", "speed"]
         );
+        let dir = |file: &str| {
+            select(&workspace(), Path::new(file))
+                .expect("selected")
+                .package_dir
+        };
+        assert_eq!(dir("/w/core/tests/it.rs"), PathBuf::from("/w/core"));
+        assert_eq!(dir("/w/src/main.rs"), PathBuf::from("/w"));
     }
 
     /// The root package's own files select it — a binary by name, the
@@ -560,6 +606,11 @@ mod tests {
         assert_eq!(chosen.args(), ["--package", "core-part", "--lib"]);
         let canonical = |path: &Path| path.canonicalize().expect("there");
         assert_eq!(canonical(&chosen.workspace), canonical(root));
+        assert_eq!(
+            canonical(&chosen.package_dir),
+            canonical(&root.join("core")),
+            "a member's test runs in the member, as cargo test runs it"
+        );
         assert_eq!(chosen.run_in(root), root);
         assert_eq!(chosen.run_in(&root.join("core")), root.join("core"));
 
@@ -582,6 +633,105 @@ mod tests {
         assert!(
             run(&chosen.args()).contains("test tests::it_holds ... ok"),
             "the selection runs the member's test"
+        );
+    }
+
+    /// The suite is the workspace's wherever the root's manifest declares
+    /// one — a root package with members, a virtual workspace, a root that
+    /// only shares dependencies — and the package's where it does not, a
+    /// member inheriting its version from the workspace included.
+    #[test]
+    fn the_suite_is_the_workspace_wherever_the_root_declares_one() {
+        let package = "[package]\nname = \"a\"\nversion = \"0.1.0\"\n";
+        assert_eq!(suite_args_for(package), ["test"]);
+        assert_eq!(
+            suite_args_for(&format!("[workspace]\nmembers = [\"core\"]\n\n{package}")),
+            ["test", "--workspace"]
+        );
+        assert_eq!(
+            suite_args_for("[workspace]\nmembers = [\"a\"]\nresolver = \"2\"\n"),
+            ["test", "--workspace"]
+        );
+        assert_eq!(
+            suite_args_for(&format!(
+                "{package}\n[workspace.dependencies]\nlog = \"0.4\"\n"
+            )),
+            ["test", "--workspace"]
+        );
+        assert_eq!(
+            suite_args_for("[package]\nname = \"core\"\nversion.workspace = true\n"),
+            ["test"],
+            "a member's inherited key is not a workspace",
+        );
+        assert_eq!(
+            suite_args_for("[package\nname ="),
+            ["test"],
+            "cargo says what is wrong"
+        );
+        assert_eq!(suite_args_for(""), ["test"]);
+    }
+
+    /// Against cargo itself: a root package whose members are a glob, one
+    /// of which is a firmware crate that does not build for this machine
+    /// and is excluded. The suite runs the member's test, which plain
+    /// `cargo test` at the root never did, and leaves the firmware out as
+    /// cargo's `exclude` says — without it, `--workspace` would build the
+    /// firmware and stop at its `compile_error!`.
+    #[test]
+    fn the_suite_runs_every_members_tests_and_leaves_the_excluded_out() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = dir.path();
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            std::fs::write(path, text).expect("written");
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/firmware\"]\n\n[package]\nname = \"top\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write(
+            "src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn top_holds() {}\n}\n",
+        );
+        write(
+            "crates/core/Cargo.toml",
+            "[package]\nname = \"core-part\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write(
+            "crates/core/src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn member_holds() {}\n}\n",
+        );
+        write(
+            "crates/firmware/Cargo.toml",
+            "[package]\nname = \"firmware\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        write(
+            "crates/firmware/src/lib.rs",
+            "compile_error!(\"the firmware builds for the chip\");\n",
+        );
+        let run = |args: &[String]| {
+            let output = process::command("cargo")
+                .args(args)
+                .current_dir(root)
+                .env("CARGO_TARGET_DIR", root.join("target"))
+                .output()
+                .expect("cargo ran");
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        let suite = suite_args(root);
+        assert_eq!(suite, ["test", "--workspace"]);
+        let all = run(&suite);
+        assert!(all.contains("test tests::top_holds ... ok"), "{all}");
+        assert!(
+            all.contains("test tests::member_holds ... ok"),
+            "the member's test ran: {all}"
+        );
+        let plain = run(&["test".to_string()]);
+        assert!(
+            !plain.contains("member_holds"),
+            "plain `cargo test` at the root never ran it: {plain}"
         );
     }
 
