@@ -352,9 +352,9 @@ impl App {
             }
         });
         let weak = Rc::downgrade(self);
-        surface.on_lens(move |runnable, verb| {
+        surface.on_lens(move |file, runnable, verb| {
             if let Some(app) = weak.upgrade() {
-                app.lens(runnable, &verb);
+                app.lens(file, runnable, &verb);
                 app.bring_forward();
             }
         });

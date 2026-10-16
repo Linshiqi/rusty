@@ -22,24 +22,31 @@ use std::path::{Path, PathBuf};
 
 use crate::{Error, Result, model::CommandPlan, process};
 
-/// The build the dock shows: every test target, compiled and not run.
+/// The build the dock shows: the test targets `selected` names, compiled
+/// and not run.
 ///
-/// No filter and no package: the filter names a test, not a target, and
-/// cargo would build everything anyway. `--no-run` is the whole point — the
-/// running is gdb's.
-pub fn build_plan() -> CommandPlan {
+/// `selected` is the package and target the test's file is in
+/// ([`crate::cargo_target::Selection::args`]): without it, at the root of a
+/// workspace that is itself a package, cargo builds the root package's
+/// tests alone, and a member's test is in none of them. No filter: the
+/// filter names a test, not a target. `--no-run` is the whole point — the
+/// running is the debugger's.
+pub fn build_plan(selected: &[String]) -> CommandPlan {
+    let mut args = vec!["test".to_string(), "--no-run".to_string()];
+    args.extend(selected.iter().cloned());
     CommandPlan::new(
         "cargo",
-        vec!["test".to_string(), "--no-run".to_string()],
+        args,
         "Builds the test binaries so gdb can read one",
     )
 }
 
 /// The same build again, answered as JSON — instant, since nothing changed —
 /// which is the only way cargo says *where* it put each test executable.
-pub fn built_json(root: &Path) -> Result<String> {
+pub fn built_json(root: &Path, selected: &[String]) -> Result<String> {
     let output = process::command("cargo")
         .args(["test", "--no-run", "--message-format=json"])
+        .args(selected)
         .current_dir(root)
         .output()
         .map_err(|source| Error::Spawn {

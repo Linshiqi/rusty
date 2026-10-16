@@ -50,7 +50,7 @@ use serde_json::{Value, json};
 
 use crate::model::{Breakpoint, DebugState, StackFrame, StopReason, Variable};
 use crate::placement::placed_line;
-use crate::session::{Error, Events, Result, publish, push_line, relative};
+use crate::session::{Error, Events, Outlet, Result, forward_lines, publish, relative};
 
 /// How long the adapter has to answer `initialized`. Generous: the first
 /// launch loads the target's symbols, and a Rust test binary with its whole
@@ -210,16 +210,6 @@ impl Wire {
     }
 }
 
-/// Where the session's states go: the channel's only sender, in a slot the
-/// reader and the console thread share.
-///
-/// The reader empties the slot as the session's last state goes, so the
-/// channel closes behind it — which is how whoever reads the stream learns
-/// the session is over when there is no exit code to say so. A console line
-/// still on its way then finds the slot empty and is dropped, rather than
-/// arriving after the state that said the session had ended.
-type Outlet = Arc<Mutex<Option<Sender<DebugState>>>>;
-
 /// The lines one `setBreakpoints` was sent for, as they were clicked and in
 /// the order the request listed them: the answer lists its breakpoints in
 /// that same order, and says only where each one landed.
@@ -301,6 +291,7 @@ impl DapSession {
         let (ready_tx, ready_rx) = channel();
         let reader = Reader {
             rtt: Mutex::new(String::new()),
+            streams: Mutex::new(HashMap::new()),
             state: Arc::clone(&session.state),
             wire: Arc::clone(&session.wire),
             outlet: Arc::clone(&outlet),
@@ -313,22 +304,19 @@ impl DapSession {
         };
         std::thread::spawn(move || reader.pump(reader_half));
 
-        // The program's console, on its own thread. Lines rather than frames:
-        // this pipe is plain text.
-        let console = session.child.lock().expect("dap adapter").stdout.take();
-        if let Some(stdout) = console {
-            let state = Arc::clone(&session.state);
-            let outlet = Arc::clone(&outlet);
-            std::thread::spawn(move || {
-                for line in BufReader::new(stdout)
-                    .lines()
-                    .map_while(std::result::Result::ok)
-                {
-                    if !console_line(&outlet, &state, line) {
-                        return;
-                    }
-                }
-            });
+        // The program's console, each stream on its own thread. Lines rather
+        // than frames: these pipes are plain text. Its stderr as well as its
+        // stdout — a test's panic is written there — where the adapter
+        // hands the program its own (`spawn_adapter`).
+        let (stdout, stderr) = {
+            let mut adapter = session.child.lock().expect("dap adapter");
+            (adapter.stdout.take(), adapter.stderr.take())
+        };
+        if let Some(stdout) = stdout {
+            forward_lines(stdout, Arc::clone(&outlet), Arc::clone(&session.state));
+        }
+        if let Some(stderr) = stderr {
+            forward_lines(stderr, Arc::clone(&outlet), Arc::clone(&session.state));
         }
 
         session.handshake(launch, &ready_rx)?;
@@ -688,7 +676,18 @@ fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
         // as `output`, which is the whole reason for driving the protocol
         // over a socket instead of this pipe.
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        // And its stderr, which a program on this machine inherits from the
+        // adapter as it does stdout: a test run with `--nocapture` writes its
+        // panic there, and thrown away, a failed test under Debug said
+        // nothing of where or why. Read, never piped and forgotten — a full
+        // pipe blocks the program writing to it. A board's firmware prints
+        // through RTT and has no stderr here; what probe-rs says there is
+        // its own narration, not the program's, so that stays shut.
+        .stderr(if launch.board.is_none() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
     command.env_remove("RUSTUP_TOOLCHAIN");
     #[cfg(windows)]
     {
@@ -780,17 +779,6 @@ fn connect(port: u16, child: &mut Child, adapter: &Path) -> Result<TcpStream> {
     })
 }
 
-/// One line of the program's console, out through the outlet. False once
-/// the session is over or nobody is listening, and the console thread
-/// stops there.
-fn console_line(outlet: &Outlet, state: &Mutex<DebugState>, line: String) -> bool {
-    let outlet = outlet.lock().expect("dap outlet");
-    match outlet.as_ref() {
-        Some(sender) => push_line(state, sender, line),
-        None => false,
-    }
-}
-
 /// The reader thread's half of the session: everything a message from the
 /// adapter can change, the wire its follow-up questions go out on, and the
 /// outlet the states go down.
@@ -810,6 +798,12 @@ struct Reader {
     /// RTT text received after its last line break: probe-rs sends what the
     /// channel held, which need not end at a line.
     rtt: Mutex<String>,
+    /// The same for the program's streams when the adapter sends them as
+    /// `output` events, by category: an adapter forwards what it read from
+    /// the program's pipe, and libtest writes `test x ... ` and its verdict
+    /// in two writes — two lines, and neither one a verdict, if each event
+    /// were taken for whole lines.
+    streams: Mutex<HashMap<String, String>>,
 }
 
 /// The adapter's answer to "will you take configuration": yes, or why not.
@@ -867,6 +861,11 @@ impl Reader {
             return;
         };
         let mut state = self.state.lock().expect("dap state");
+        // What the program printed last without a line break is a line.
+        let held = std::mem::take(&mut *self.streams.lock().expect("dap streams"));
+        state
+            .output
+            .extend(held.into_values().filter(|text| !text.is_empty()));
         state.running = false;
         state.attached = false;
         if state.exited.is_none() && state.error.is_none() {
@@ -975,9 +974,16 @@ impl Reader {
                 if category != "stdout" && category != "stderr" {
                     return false;
                 }
+                let lines = {
+                    let mut streams = self.streams.lock().expect("dap streams");
+                    complete_lines(streams.entry(category.to_string()).or_default(), text)
+                };
+                if lines.is_empty() {
+                    return false;
+                }
                 // Waiting for the next state to go, which takes them with it.
                 let mut state = self.state.lock().expect("dap state");
-                state.output.extend(text.lines().map(str::to_string));
+                state.output.extend(lines);
                 true
             }
             "breakpoint" => {
@@ -1170,6 +1176,7 @@ mod tests {
     use std::sync::mpsc::TryRecvError;
 
     use super::*;
+    use crate::session::program_line;
     use crate::session::tests::{ended, stand_in};
 
     fn root() -> PathBuf {
@@ -1195,8 +1202,42 @@ mod tests {
             pending: Arc::new(Mutex::new(HashMap::new())),
             ready,
             rtt: Mutex::new(String::new()),
+            streams: Mutex::new(HashMap::new()),
         };
         (reader, states)
+    }
+
+    /// The program's stderr, sent by an adapter as `output` events, reaches
+    /// the session's output as its stdout does — a test's panic is written
+    /// there — a whole line at a time however the adapter cut it up, and
+    /// what was left without a line break when the session ended is a line
+    /// too. The adapter's own narration is not the program's, and stays out.
+    #[test]
+    fn a_programs_stderr_from_the_adapter_reaches_the_output_a_line_at_a_time() {
+        let (reader, states) = unwired();
+        let printed = |category: &str, text: &str| {
+            event("output", json!({ "category": category, "output": text }))
+        };
+        reader.handle(&printed("stdout", "test tests::two_is_three ... "));
+        reader.handle(&printed(
+            "stderr",
+            "thread 'tests::two_is_three' (812) panicked at core\\src\\lib.rs:7:9:\nassertion",
+        ));
+        reader.handle(&printed("console", "Launched process 812\n"));
+        reader.handle(&printed("stderr", " `left == right` failed\n"));
+        reader.handle(&printed("stdout", "FAILED\n"));
+        reader.handle(&printed("stdout", "test result: FAILED"));
+        reader.finish();
+        let sent: Vec<String> = states.try_iter().flat_map(|state| state.output).collect();
+        assert_eq!(
+            sent,
+            [
+                r"thread 'tests::two_is_three' (812) panicked at core\src\lib.rs:7:9:",
+                "assertion `left == right` failed",
+                "test tests::two_is_three ... FAILED",
+                "test result: FAILED",
+            ]
+        );
     }
 
     /// probe-rs's RTT text arrives as the channel held it, not a line at a
@@ -1359,7 +1400,7 @@ mod tests {
         // console thread sends one of its own: that state carries both, and
         // the reader's after it neither.
         reader.apply(&printed("stderr", "from the adapter\n"));
-        assert!(console_line(
+        assert!(program_line(
             &reader.outlet,
             &reader.state,
             "from the console".to_string()

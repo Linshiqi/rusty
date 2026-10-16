@@ -525,6 +525,31 @@ tests green, and CLAUDE.md saying how it works.
    in a window of its own, the line typed on and the marks gone, and the
    test mended with its tick and no mark.
 
+   Three things that work found, mended as rust-analyzer's runnables do
+   them (v0.7.1). A lens runs in its file's package and target —
+   `cargo test --package core-part --lib <filter> -- --show-output`, read
+   off `cargo metadata --no-deps` (`rusty_embed::cargo_target`) — because
+   at the root of a workspace that is itself a package, the bare filter
+   tested the root package alone and a member's test ran nowhere and
+   passed; a file in no package, or in the firmware crate, is refused by
+   name. Every link the dock makes — a Build's compile errors, a run's
+   and a debugged test's panics, a panic's `at` line being a link now too
+   — reads its path against the workspace's root cargo names for the run's
+   directory (`app/places.rs`, asked off the UI thread and kept, a line
+   heard before the answer linked when it comes), where a member opened as
+   the project had them one directory too deep. And a test under Debug has
+   its stderr: both debuggers threw the program's away, and with
+   `--nocapture` that is where the panic is, so the line got no mark; gdb's
+   stderr and an adapter's are read now for a program on this machine,
+   with an adapter's `output` events joined into whole lines. Proven by
+   `RUSTY_PROBE_TESTFAIL` on a root package with a member `core/`: from
+   the root the lens ran `--package core-part --lib` and marked line 20;
+   opened at `core/`, the panic's `core\src\lib.rs:20:9` linked to
+   `src/lib.rs`; with `RUSTY_PROBE_TESTFAIL_VERB=debug` the test ran under
+   CodeLLDB, exited 101, and its stderr marked the line. `dap_probe` on the
+   same binary shows the difference: no panic with the adapter's stderr
+   thrown away, the panic with it read.
+
    Folding, sticky scroll and the minimap next. The folds live in the
    document, carried across every edit (`document::carry`: one below an
    edit moves, one whose hidden lines it reached opens, one being typed on

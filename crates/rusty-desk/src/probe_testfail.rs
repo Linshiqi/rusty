@@ -30,6 +30,34 @@ fn test_name() -> String {
         .unwrap_or_else(|| "the_dot_of_two_axes".to_string())
 }
 
+/// The lens's verb the first run takes: `run`, or `debug` with
+/// `RUSTY_PROBE_TESTFAIL_VERB=debug` — the test under the debugger, whose
+/// panic reaches the line through the program's stderr.
+fn first_verb() -> String {
+    std::env::var("RUSTY_PROBE_TESTFAIL_VERB")
+        .ok()
+        .filter(|verb| verb == "debug")
+        .unwrap_or_else(|| "run".to_string())
+}
+
+/// Every line of the dock that is a link: where it goes, and what it says.
+fn links(app: &crate::app::App) -> Vec<String> {
+    let runner = app.runner();
+    (0..runner.counts().0)
+        .filter_map(|index| runner.line(index))
+        .filter(|line| !line.path.is_empty())
+        .map(|line| {
+            format!(
+                "{}:{}:{} <- {}",
+                line.path,
+                line.line + 1,
+                line.col + 1,
+                line.text
+            )
+        })
+        .collect()
+}
+
 /// Every row with a message: its number, the message and where it starts,
 /// and the x of every error squiggle on it.
 fn marked(code: &Code) -> Vec<(i32, String, f32, Vec<f32>)> {
@@ -144,16 +172,17 @@ pub fn run(n: u32, run: &Run) {
                 marked(&code)
             );
             let (row, _) = lens_of(&code, &draft(), &name).expect("found above");
-            code.invoke_lens(row as i32, "run".into());
+            eprintln!("testfail: {} from the lens", first_verb());
+            code.invoke_lens(row as i32, first_verb().into());
         }
         7301 => {
             // The run, then its marks: cargo is asked for the workspace's
-            // root beside it.
-            let ran = !app.runner().is_running();
+            // root beside it. Under the debugger, the session's end.
+            let ran = !app.runner().is_running() && !app.debugging_a_test();
             let shown = marked(&code)
                 .iter()
                 .any(|(_, message, ..)| !message.is_empty());
-            if (!ran || !shown) && wait(3000) {
+            if (!ran || !shown) && wait(6000) {
                 return;
             }
             eprintln!(
@@ -162,6 +191,15 @@ pub fn run(n: u32, run: &Run) {
                 marked(&code),
                 lens_of(&code, &draft(), &name),
                 problems(&shell)
+            );
+            eprintln!("testfail: the dock's links {:#?}", links(&app));
+            eprintln!(
+                "testfail: the dock's command {:?}",
+                (0..app.runner().counts().0)
+                    .filter_map(|index| app.runner().line(index))
+                    .map(|line| line.text.to_string())
+                    .filter(|text| text.starts_with("$ "))
+                    .collect::<Vec<_>>()
             );
             waited.set(0);
             // The line on screen, wherever the view was when the file came.

@@ -35,6 +35,10 @@ pub(super) struct BuildLog {
     /// Errors placed in files, the paths as the project names them (or
     /// absolute, outside it).
     pub(super) errors: Vec<Located>,
+    /// Errors listed while the workspace's root of the directory they were
+    /// printed in was still being asked: which, that directory, and the path
+    /// as printed. Kept with the errors, so a fresh build forgets both.
+    waiting: Vec<(usize, PathBuf, String)>,
 }
 
 /// What a build hands on to whoever asked for it.
@@ -48,41 +52,49 @@ impl App {
         if text.contains("[rusty:") && self.absorb(text) {
             return;
         }
-        let place = buildlog::place_on(text).map(|place| {
-            let path = self.place_path(&place.path);
-            (path, place.line as i32 - 1, place.col as i32 - 1)
-        });
-        self.runner.say_at(text, run::kind_of(text), place);
+        self.say_linked(text);
         self.testing_heard(text);
         if self.activity_kind() == Some(Kind::Build) {
             let found = self.state.borrow_mut().build_log.reader.read(text);
             if let Some(mut found) = found
                 && found.severity == Severity::Error
             {
-                found.path = self.place_path(&found.path);
-                self.state.borrow_mut().build_log.errors.push(found);
+                let printed = std::mem::take(&mut found.path);
+                let mut waits = None;
+                match self.place_path(&printed) {
+                    Some(path) => found.path = path,
+                    // Listed by its printed name until the root is known.
+                    None => {
+                        found.path = printed.replace('\\', "/");
+                        waits = self.runner.dir().map(|dir| (dir, printed));
+                    }
+                }
+                let mut state = self.state.borrow_mut();
+                let log = &mut state.build_log;
+                if let Some((dir, printed)) = waits {
+                    log.waiting.push((log.errors.len(), dir, printed));
+                }
+                log.errors.push(found);
             }
         }
         self.follow_activity(text);
     }
 
-    /// A path a tool printed, as the project names it: relative to the
-    /// directory the tool ran in, and then to the project's root; absolute
-    /// when it is outside.
-    fn place_path(&self, printed: &str) -> String {
-        let path = Path::new(printed);
-        let full = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            match self.runner.dir() {
-                Some(dir) => dir.join(path),
-                None => return printed.replace('\\', "/"),
+    /// The build's errors printed in `dir`, placed now that its workspace
+    /// root is `base` — whether any were.
+    pub(super) fn build_relink(&self, dir: &Path, base: &Path, root: Option<&Path>) -> bool {
+        let mut state = self.state.borrow_mut();
+        let log = &mut state.build_log;
+        let (ours, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut log.waiting)
+            .into_iter()
+            .partition(|(_, at, _)| at == dir);
+        log.waiting = rest;
+        for (index, _, printed) in &ours {
+            if let Some(error) = log.errors.get_mut(*index) {
+                error.path = super::places::named(printed, base, root);
             }
-        };
-        let full = full.to_string_lossy().into_owned();
-        self.root()
-            .and_then(|root| super::navigate::within(&root, &full))
-            .unwrap_or(full)
+        }
+        !ours.is_empty()
     }
 
     /// A line of the dock clicked: the place it names, if it names one.

@@ -185,6 +185,7 @@ impl Debugger {
     /// its machine interface are different languages, and asking for MI
     /// after the fact means parsing a banner in the first one.
     pub fn start(launch: &Launch) -> Result<(Self, Events)> {
+        let host = launch.target.is_host();
         let mut command = Command::new(&launch.gdb);
         command
             .arg("--interpreter=mi3")
@@ -193,11 +194,16 @@ impl Debugger {
             .current_dir(&launch.root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Not piped: nothing read it, so a gdb with something to say on
-            // stderr — a Python warning per startup, a remote-protocol
-            // complaint per step — filled the pipe and then blocked on it,
-            // and the session hung with every MI answer still to come.
-            .stderr(Stdio::null());
+            // A program on this machine inherits gdb's stderr, and writes its
+            // panic there — a test run with `--nocapture` all of it — so for
+            // one it is read, line by line, as its stdout is. A remote
+            // target's program writes to no stderr of gdb's, and what gdb
+            // says there itself — a Python warning per startup, a
+            // remote-protocol complaint per step — is nobody's output: for
+            // it the pipe stays shut. Read or `null()`, never piped and
+            // forgotten: unread, a gdb with something to say filled the pipe
+            // and then blocked on it, with every MI answer still to come.
+            .stderr(if host { Stdio::piped() } else { Stdio::null() });
         // The rustup shim exports this for rusty's own build, and gdb has
         // no business inheriting it — the same leak that made a spawned
         // cargo compile an esp project with stable.
@@ -214,9 +220,11 @@ impl Debugger {
         })?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("piped");
+        let stderr = child.stderr.take();
 
         let state = Arc::new(Mutex::new(DebugState::default()));
         let (sender, receiver) = channel();
+        let outlet: Outlet = Arc::new(Mutex::new(Some(sender)));
 
         let wire = Arc::new(Wire {
             stdin: Mutex::new(stdin),
@@ -224,13 +232,15 @@ impl Debugger {
             moved: Mutex::new(HashMap::new()),
         });
 
-        let host = launch.target.is_host();
-        let initial = sender.clone();
         {
             let state = Arc::clone(&state);
             let wire = Arc::clone(&wire);
+            let outlet = Arc::clone(&outlet);
             let root = launch.root.clone();
-            std::thread::spawn(move || pump(stdout, state, wire, sender, root, host));
+            std::thread::spawn(move || pump(stdout, state, wire, outlet, root, host));
+        }
+        if let Some(stderr) = stderr {
+            forward_lines(stderr, Arc::clone(&outlet), Arc::clone(&state));
         }
 
         let debugger = Self {
@@ -262,9 +272,12 @@ impl Debugger {
                 // a breakpoint placed after `-exec-run` is one the program
                 // may already have run past.
                 debugger.send(&format!("-exec-arguments {}", exec_arguments(args)))?;
+                let outlet = outlet.lock().expect("outlet");
                 let mut state = debugger.state.lock().expect("state");
                 state.attached = true;
-                publish(&mut state, &initial);
+                if let Some(sender) = outlet.as_ref() {
+                    publish(&mut state, sender);
+                }
             }
         }
         Ok((debugger, Events(receiver)))
@@ -388,7 +401,7 @@ fn pump(
     stdout: std::process::ChildStdout,
     state: Arc<Mutex<DebugState>>,
     wire: Arc<Wire>,
-    sender: Sender<DebugState>,
+    outlet: Outlet,
     root: PathBuf,
     host: bool,
 ) {
@@ -402,7 +415,7 @@ fn pump(
             // run a test under a debugger rather than read its assertion is
             // usually what it prints on the way there.
             let printed = host && !line.trim().is_empty() && line.trim() != "(gdb)";
-            if printed && !push_line(&state, &sender, line) {
+            if printed && !program_line(&outlet, &state, line) {
                 break;
             }
             continue;
@@ -418,15 +431,22 @@ fn pump(
             let _ = wire.send("-stack-list-frames");
             let _ = wire.send("-stack-list-variables --all-values");
         }
+        // The outlet before the state, as every sender takes them: the
+        // stderr thread holds the outlet while it locks the state.
+        let out = outlet.lock().expect("outlet");
         let mut current = state.lock().expect("state");
         if apply(&mut current, &record, &root) {
             wire.clicked(&mut current);
-            if !publish(&mut current, &sender) {
+            let sent = out
+                .as_ref()
+                .is_some_and(|sender| publish(&mut current, sender));
+            if !sent {
                 break;
             }
         }
         let exited = current.exited.is_some();
         drop(current);
+        drop(out);
         // A host program that has exited leaves gdb with nothing to debug;
         // a remote target that stopped with an exit code is QEMU's or the
         // probe's to end. Quitting here is what closes this pipe and lets
@@ -439,6 +459,13 @@ fn pump(
     // that exited said so itself, code and all; a gdb that went away without
     // that is *not* a clean exit, and inventing `Some(0)` here read a crashed
     // debugger as a program that finished normally.
+    //
+    // The last state takes the sender with it, so the channel closes as it
+    // goes, and a line of stderr still on its way finds the outlet empty
+    // rather than arriving after the state that said the session had ended.
+    let Some(sender) = outlet.lock().expect("outlet").take() else {
+        return;
+    };
     let mut state = state.lock().expect("state");
     state.running = false;
     state.attached = false;
@@ -446,6 +473,61 @@ fn pump(
         state.error = Some("gdb ended the session without reporting an exit".to_string());
     }
     publish(&mut state, &sender);
+}
+
+/// Where a session's states go: the channel's only sender, in a slot every
+/// thread that sends shares — the reader, and the threads forwarding what
+/// the program prints.
+///
+/// The reader empties the slot as the session's last state goes, so the
+/// channel closes behind it — which is how whoever reads the stream learns
+/// the session is over when there is no exit code to say so.
+pub(crate) type Outlet = Arc<Mutex<Option<Sender<DebugState>>>>;
+
+/// One line the program printed, out through the outlet. False once the
+/// session is over or nobody is listening.
+pub(crate) fn program_line(outlet: &Outlet, state: &Mutex<DebugState>, line: String) -> bool {
+    let outlet = outlet.lock().expect("outlet");
+    match outlet.as_ref() {
+        Some(sender) => push_line(state, sender, line),
+        None => false,
+    }
+}
+
+/// Every line of `pipe` — a program's console, as the debugger it runs
+/// under hands it on — out as the program's output, on a thread of its
+/// own, until the pipe ends or the session does.
+///
+/// A program's stderr comes this way as well as its stdout: a test run
+/// with `--nocapture` writes its panic there — where it failed and why —
+/// and that is the line that marks the test's failure on the line it
+/// happened. A blank line is passed over, as on stdout, and bytes that are
+/// not UTF-8 are read as well as they can be rather than ending the
+/// reading. Once the session is over the pipe is still read to its end and
+/// the rest thrown away, so a program still writing never fills a pipe
+/// nobody reads.
+pub(crate) fn forward_lines(
+    pipe: impl std::io::Read + Send + 'static,
+    outlet: Outlet,
+    state: Arc<Mutex<DebugState>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(pipe);
+        let mut bytes = Vec::new();
+        let mut listened = true;
+        loop {
+            bytes.clear();
+            match reader.read_until(b'\n', &mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let line = String::from_utf8_lossy(&bytes);
+            let line = line.trim_end_matches(['\n', '\r']);
+            if listened && !line.trim().is_empty() {
+                listened = program_line(&outlet, &state, line.to_string());
+            }
+        }
+    })
 }
 
 /// Send the state as it stands, and with it every line printed since the
@@ -1156,6 +1238,54 @@ pub(crate) mod tests {
         drop(receiver);
         assert!(!push_line(&state, &sender, "test it ... ok".to_string()));
         assert!(state.lock().unwrap().output.is_empty());
+    }
+
+    /// A program's stderr reaches the session's output as its stdout does:
+    /// a test run with `--nocapture` writes its panic there, and the line
+    /// that says where it failed is the one the window marks. Blank lines
+    /// are passed over, bytes that are not UTF-8 do not end the reading,
+    /// and once the session is over nothing more is sent — while the pipe
+    /// is still read to its end, so the program never blocks on it.
+    #[test]
+    fn a_programs_stderr_is_its_output_until_the_session_ends() {
+        let state = Arc::new(Mutex::new(DebugState::default()));
+        let (sender, receiver) = channel();
+        let outlet: Outlet = Arc::new(Mutex::new(Some(sender)));
+        let panic = b"thread 'tests::two_is_three' (22376) panicked at core\\src\\lib.rs:7:9:\r\n\
+            assertion `left == right` failed\r\n  left: 2\r\n right: 3\r\n\r\n\
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\r\n\
+            \xe4\xb8\xad\xff\n";
+        forward_lines(&panic[..], Arc::clone(&outlet), Arc::clone(&state))
+            .join()
+            .expect("read to the end");
+        let sent: Vec<String> = receiver.try_iter().flat_map(|s| s.output).collect();
+        assert_eq!(
+            sent,
+            [
+                r"thread 'tests::two_is_three' (22376) panicked at core\src\lib.rs:7:9:",
+                "assertion `left == right` failed",
+                "  left: 2",
+                " right: 3",
+                "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+                "中\u{fffd}",
+            ]
+        );
+
+        // The session over: the outlet emptied, as its last state goes.
+        outlet.lock().unwrap().take();
+        let long: Vec<u8> = b"after the end\n".repeat(10_000);
+        let reader = forward_lines(
+            std::io::Cursor::new(long),
+            Arc::clone(&outlet),
+            Arc::clone(&state),
+        );
+        reader
+            .join()
+            .expect("read to the end, though nobody listens");
+        assert!(
+            state.lock().unwrap().output.is_empty(),
+            "nothing kept either"
+        );
     }
 
     #[test]

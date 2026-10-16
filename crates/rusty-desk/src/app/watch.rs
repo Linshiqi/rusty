@@ -79,6 +79,14 @@ impl App {
         if !events.is_empty() {
             self.servers.watched(events);
         }
+        // A manifest that changed may have moved a workspace's root.
+        if batch
+            .changed
+            .iter()
+            .any(|path| path.ends_with("Cargo.toml"))
+        {
+            self.forget_cargo_bases();
+        }
         if batch.tree {
             self.reread_project();
         } else if super::unlinked::touches_rust(&batch.changed) {

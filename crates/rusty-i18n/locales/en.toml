@@ -399,6 +399,12 @@ lens-failed = "Test {name} failed"
 [toolbar]
 build = "Build — with the project's own build system (cargo, PlatformIO or CMake), output in the dock"
 test-blocked = "The opened directory is the firmware itself, and cargo test there builds the tests for the chip, which has no test harness. Keep the firmware crate excluded from the workspace and the testable crates as members; Test then runs where they are."
+# A test's lens in a file of the excluded firmware crate.
+test-in-firmware = "{file} is in the firmware crate, and cargo test there builds the tests for the chip, which has no test harness. Tests run in the workspace's members; move this one into a crate the host can build."
+# A test's lens where cargo names no workspace for the file; {said} is cargo's own words.
+test-no-workspace = "cargo named no workspace for {file}, so there is no package to run its tests in, and nothing was run. cargo said: {said}"
+# A test's lens in a file no package of the workspace holds.
+test-no-package = "{file} is in none of the packages of the workspace at {workspace}, so there is no package to run its tests in; run at the root, they would run nothing. Nothing was run."
 flash = "Flash — build, write to the device, and watch what it prints"
 debug = "Debug — boot frozen, stop at your breakpoints"
 stop = "Stop what is running"

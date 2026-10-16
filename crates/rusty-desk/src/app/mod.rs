@@ -48,6 +48,7 @@ mod new_window;
 mod output;
 mod part;
 mod pictures;
+mod places;
 mod playground;
 mod plot;
 mod registers;
@@ -204,6 +205,10 @@ struct State {
     wizard: wizard::Wizard,
     activities: activity::Activities,
     build_log: build::BuildLog,
+    /// The workspace's root of each directory a run started in, which
+    /// every path cargo prints is relative to, and the dock's lines waiting
+    /// for one.
+    places: places::Places,
     /// What the Problems panel's filter box and switches say; Output's is
     /// the runner's, beside the lines it narrows.
     problems_filter: crate::filter::Filter,
@@ -384,6 +389,13 @@ impl App {
         then: impl FnOnce(&Rc<App>, Ended) + Send + 'static,
     ) -> bool {
         self.show_panel("bottom", "output");
+        // What the paths it prints are relative to: asked beside the run,
+        // which its lines wait for, when it is not already known.
+        if let Some(dir) = &dir
+            && !self.runner.is_running()
+        {
+            self.cargo_base(dir.clone(), |_, _| {});
+        }
         let began = std::time::Instant::now();
         let started = self.runner.run(plan, dir, move |app, ended| {
             app.said_end(began, ended);
@@ -775,9 +787,9 @@ impl App {
             }
         });
         let weak = Rc::downgrade(self);
-        self.editor.on_lens(move |runnable, verb| {
+        self.editor.on_lens(move |file, runnable, verb| {
             if let Some(app) = weak.upgrade() {
-                app.lens(runnable, &verb);
+                app.lens(file, runnable, &verb);
             }
         });
         let weak = Rc::downgrade(self);
@@ -829,7 +841,7 @@ impl App {
             "environment.install-missing" => self.install_missing(),
             "project.new" => self.open_wizard(),
             "project.clone" => self.clone_act("open"),
-            "run.test" => self.run_test(String::new()),
+            "run.test" => self.run_suite(),
             other if other.starts_with("clone.") => self.clone_act(&other["clone.".len()..]),
             "playground.reset" => self.reset_playground(),
             "playground.keep" => self.keep_playground(),
@@ -1060,8 +1072,10 @@ impl App {
             state.calls.forget();
             state.unlinked = state.unlinked.next();
         }
-        // So are the tests' verdicts and the marks of the failed ones.
+        // So are the tests' verdicts and the marks of the failed ones, and
+        // the workspace roots cargo named.
         self.forget_tests();
+        self.forget_cargo_bases();
         {
             let mut state = self.state.borrow_mut();
             if !state.layout.left.open {
