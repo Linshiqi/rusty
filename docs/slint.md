@@ -818,9 +818,11 @@ tests green, and CLAUDE.md saying how it works.
    Then two the release candidate was missed for, in the user's words:
    no New Window, two projects never open at once, and no way to see the
    keys. (Its start was measured later, reported as slow: about a second
-   from `main` to the first frame, of which rusty's own steps are some
-   50 ms and the rest Slint building the tree and Windows making the
-   window and its OpenGL context — CLAUDE.md, *More than one rusty*.)
+   from `main` to the first frame under load, 0.75 s on a quiet machine,
+   of which rusty's own steps are some 50 ms and the window's tree under
+   10 ms; the rest is Slint's first window in a process and Windows
+   making the window and its OpenGL context — CLAUDE.md, *More than one
+   rusty*.)
    New Window starts this executable again with `--new-window`
    (`src/instances.rs`, the Tauri window's design carried over: the
    AppImage started rather than its mount, the child reaped, a process

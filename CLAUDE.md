@@ -2863,19 +2863,33 @@ from. `src/instances.rs` starts it and keeps the count;
   `RUSTY_PROBE_WINDOWS` prints them for the second window with the time
   from the key. Measured on a machine running a dozen compiles beside it
   (ten starts, medians): the key to the new process's `main` about 0.11
-  s; Slint building the window's tree about 0.48 s; rusty's own steps
-  before the first frame about 0.05 s (the editor's metrics, `sync_all`);
-  the native window and its OpenGL context about 0.28 s, up to 2 s when
-  the first window's language server is loading a project; the first
-  draw about 0.07 s. **What was tried and measured away**: loading the
-  OpenGL driver on a thread while the tree is built — one
-  `ChoosePixelFormat` against the screen, which in a bare process cut the
-  next context from 0.55 s to 0.06 s — changed nothing in the window
+  s; `AppWindow::new` about 0.48 s; rusty's own steps before the first
+  frame about 0.05 s (the editor's metrics, `sync_all`); the native window
+  and its OpenGL context about 0.28 s, up to 2 s when the first window's
+  language server is loading a project; the first draw about 0.07 s. On
+  a quiet machine the same start is about 0.75 s, `AppWindow::new` about
+  0.4 s of it.
+- **`AppWindow::new` is not the tree, so building the tree lazily buys
+  nothing.** Measured by making each part of the window in a window of its
+  own after a first one (a throwaway example, `slint!` importing the
+  window's own `.slint` files): Slint's *first* window in a process costs
+  0.19–0.32 s whatever is in it — an empty one costs the same, and the
+  system's fonts listed through fontique take 2 ms of it — and after that
+  the title bar is 0.5 ms, the status bar with the notes and tooltip
+  0.1 ms, the left dock 0 ms, and the whole editor area with the code view,
+  its find bar and the welcome page 2.4–4.7 ms. The pages and the docks'
+  panels are already behind `if`s, and Slint 1.18 builds what an `if`
+  holds in `new()` only when its condition holds then
+  (`ensure_tree_instantiated`). So putting more behind conditions would
+  move a few milliseconds, and was not done. **Also tried and measured
+  away**: loading the OpenGL driver on a thread while the window is made —
+  one `ChoosePixelFormat` against the screen, which in a bare process cut
+  the next context from 0.55 s to 0.06 s — changed nothing in the window
   (0.99 s to the first frame without it, 0.97 s with), because winit's
   start then waits on the loader lock instead; it was taken out rather
-  than shipped as unsafe code that buys nothing. What is left to cut is
-  the tree — the code view and its find bar are built while the welcome
-  page is in front — or the renderer, both the owner's call.
+  than shipped as unsafe code that buys nothing. What is left is Slint's
+  first-window cost and the renderer's context, both inside Slint: a
+  patched backend, or another renderer, is the owner's call.
 - **Here or in a new window, as VS Code offers it.** A recent project in
   the project menu opens here; Ctrl+Enter or the window button on its row
   opens it in a new window, and so do Ctrl+click and the hover button on
@@ -3342,6 +3356,15 @@ rules it settled, each the answer to something that went wrong.
   key, by a run that brings it, or by the *Show 'Search'* rows the menu of
   any tab still on that strip lists, since a hidden panel has no tab of its
   own to be found by.
+- **A divider is drawn over what it divides, never between it in a
+  layout.** A `Splitter` is a one-pixel line with a 7 px hold, three
+  pixels each side; in a layout the pane after it is drawn after it, lies
+  over the far half of the hold and takes the press wherever it has
+  something to take one — the board under the right dock's divider took
+  every press there. The docks' dividers sit over the layout now
+  (`app.slint`: hairlines in the layout, the `Splitter`s after it, placed
+  on them), as the editor groups' and the History page's always did;
+  `RUSTY_PROBE_DIVIDERS` drags each from both halves.
 - **A run's panels are listed when they have something to say.** Output,
   Problems and Terminal always are; Plot arrives with the first sample or
   tunable, Waves with the first edge, Flight with a declared sensor, Draw

@@ -125,6 +125,11 @@ export component RowButton inherits Rectangle {
 // that runs top to bottom and is dragged sideways. The travel is measured in
 // the window's coordinates: the bar moves as the boundary does, and measured
 // against itself the pointer would seem to stand still.
+//
+// Place it over what it divides, after both regions, never between them in a
+// layout: its hold reaches three pixels past the line on each side, and a
+// region drawn after it lies over that half and takes the press wherever it
+// has something to take one.
 export component Splitter inherits Rectangle {
     in property <bool> vertical: true;
     // How far the pointer has travelled since the press.
