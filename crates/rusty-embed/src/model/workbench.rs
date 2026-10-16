@@ -98,6 +98,105 @@ pub struct WindowLayout {
     /// The share of the editor area the left group takes while the editor
     /// is split, 0.5 for halves.
     pub split: f32,
+    /// Where the History page's panes part.
+    pub history: HistoryLayout,
+}
+
+/// The History page's four dividers, Fork's shape: the refs against the
+/// log, the log against the commit opened below it, the commit's message
+/// and files against its diff, and the diff's two columns. A width is in
+/// logical pixels and a share is of the room the two panes beside it have;
+/// the page still keeps each pane a minimum while there is room for both.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryLayout {
+    /// The refs column's width.
+    pub refs: f32,
+    /// The log's share of the height, the commit opened below it taking
+    /// the rest.
+    pub log: f32,
+    /// The commit's message and files' share of the width beside its diff.
+    pub details: f32,
+    /// The left column's share of a side-by-side diff — the Changes page's
+    /// too, which is the same view.
+    pub sides: f32,
+}
+
+impl HistoryLayout {
+    /// Each divider by its name, as the window names them.
+    pub const NAMES: [&'static str; 4] = ["refs", "log", "details", "sides"];
+
+    /// A width a hand could not have meant, or a share outside the room,
+    /// brought back to one the page can draw: NaN or an infinity is the
+    /// default, a width is between 120 and 1200 pixels, a share between a
+    /// twentieth and nineteen twentieths.
+    pub fn sane(self) -> HistoryLayout {
+        let defaults = HistoryLayout::default();
+        let share = |value: f32, default: f32| {
+            if value.is_finite() {
+                value.clamp(0.05, 0.95)
+            } else {
+                default
+            }
+        };
+        HistoryLayout {
+            refs: if self.refs.is_finite() {
+                self.refs.clamp(120.0, 1200.0)
+            } else {
+                defaults.refs
+            },
+            log: share(self.log, defaults.log),
+            details: share(self.details, defaults.details),
+            sides: share(self.sides, defaults.sides),
+        }
+    }
+
+    /// One divider's value by its name: `None` for a name that is not one.
+    pub fn get(&self, name: &str) -> Option<f32> {
+        match name {
+            "refs" => Some(self.refs),
+            "log" => Some(self.log),
+            "details" => Some(self.details),
+            "sides" => Some(self.sides),
+            _ => None,
+        }
+    }
+
+    /// One divider moved, kept sane; a name that is not a divider changes
+    /// nothing.
+    pub fn set(&mut self, name: &str, value: f32) {
+        let mut next = *self;
+        match name {
+            "refs" => next.refs = value,
+            "log" => next.log = value,
+            "details" => next.details = value,
+            "sides" => next.sides = value,
+            _ => return,
+        }
+        *self = next.sane();
+    }
+
+    /// One divider put back where it starts: a double-click on it.
+    pub fn reset(&mut self, name: &str) {
+        if let Some(value) = HistoryLayout::default().get(name) {
+            self.set(name, value);
+        }
+    }
+}
+
+impl Default for HistoryLayout {
+    /// Fork's proportions: a refs column a little narrower than the left
+    /// dock, the log over three fifths of the height, the message and files
+    /// beside their diff at a little over a third, the diff's columns
+    /// halves.
+    fn default() -> Self {
+        HistoryLayout {
+            refs: 220.0,
+            log: 0.6,
+            details: 0.38,
+            sides: 0.5,
+        }
+    }
 }
 
 /// One dock: whether it is open, how wide (or for the bottom one, how tall)
@@ -139,6 +238,7 @@ impl Default for WindowLayout {
                 hidden: Vec::new(),
             },
             split: 0.5,
+            history: HistoryLayout::default(),
         }
     }
 }
@@ -174,4 +274,31 @@ pub struct RelocateReport {
 pub struct UpdateProgress {
     pub received: u64,
     pub total: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HistoryLayout;
+
+    /// A divider moved by its name stays inside the room, a double-click
+    /// puts that one back and leaves the others, and a name that is no
+    /// divider changes nothing.
+    #[test]
+    fn a_divider_moves_by_its_name_and_comes_back_on_its_own() {
+        let mut layout = HistoryLayout::default();
+        layout.set("refs", 400.0);
+        layout.set("sides", 0.7);
+        layout.set("log", 3.0);
+        assert_eq!((layout.refs, layout.sides, layout.log), (400.0, 0.7, 0.95));
+        layout.reset("refs");
+        assert_eq!(layout.refs, HistoryLayout::default().refs);
+        assert_eq!(layout.sides, 0.7, "the others stay where they were");
+        let before = layout;
+        layout.set("graph", 0.1);
+        layout.reset("graph");
+        assert_eq!(layout, before);
+        for name in HistoryLayout::NAMES {
+            assert!(layout.get(name).is_some(), "{name} is a divider");
+        }
+    }
 }

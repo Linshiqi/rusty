@@ -293,7 +293,9 @@ fn workbench_path() -> Option<PathBuf> {
 mod file {
     use serde::{Deserialize, Serialize};
 
-    use crate::model::{AssistantChoice, DockLayout, EditorView, ProjectTabs, WindowLayout};
+    use crate::model::{
+        AssistantChoice, DockLayout, EditorView, HistoryLayout, ProjectTabs, WindowLayout,
+    };
 
     #[derive(Debug, Default, Serialize, Deserialize)]
     pub(super) struct Workbench {
@@ -350,6 +352,38 @@ mod file {
         pub right: Option<Dock>,
         #[serde(default = "half")]
         pub split: f32,
+        /// `[layout.history]`, the History page's dividers.
+        #[serde(default)]
+        pub history: Option<History>,
+    }
+
+    /// The History page's dividers, each key read on its own so a file
+    /// that names one keeps the others' defaults.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct History {
+        #[serde(default = "History::refs")]
+        pub refs: f32,
+        #[serde(default = "History::log")]
+        pub log: f32,
+        #[serde(default = "History::details")]
+        pub details: f32,
+        #[serde(default = "History::sides")]
+        pub sides: f32,
+    }
+
+    impl History {
+        fn refs() -> f32 {
+            HistoryLayout::default().refs
+        }
+        fn log() -> f32 {
+            HistoryLayout::default().log
+        }
+        fn details() -> f32 {
+            HistoryLayout::default().details
+        }
+        fn sides() -> f32 {
+            HistoryLayout::default().sides
+        }
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -401,6 +435,15 @@ mod file {
                 } else {
                     defaults.split
                 },
+                history: file.history.as_ref().map_or(defaults.history, |h| {
+                    HistoryLayout {
+                        refs: h.refs,
+                        log: h.log,
+                        details: h.details,
+                        sides: h.sides,
+                    }
+                    .sane()
+                }),
             }
         }
     }
@@ -425,6 +468,12 @@ mod file {
                 bottom: dock(&layout.bottom),
                 right: dock(&layout.right),
                 split: layout.split,
+                history: Some(History {
+                    refs: layout.history.refs,
+                    log: layout.history.log,
+                    details: layout.history.details,
+                    sides: layout.history.sides,
+                }),
             }
         }
     }
@@ -966,6 +1015,13 @@ mod tests {
                     hidden: vec!["assistant".into()],
                 },
                 split: 0.3,
+                // Every divider off its default.
+                history: crate::model::HistoryLayout {
+                    refs: 300.0,
+                    log: 0.45,
+                    details: 0.25,
+                    sides: 0.65,
+                },
             },
         };
         save_workbench_at(&path, &state).unwrap();
@@ -1044,6 +1100,39 @@ mod tests {
 
         std::fs::write(&path, "[layout]\nsplit = 7.0\n").unwrap();
         assert_eq!(workbench_at(&path).layout.split, 0.95);
+    }
+
+    /// The History page's dividers read as Fork's proportions in a file
+    /// from before they were kept, a file that names one keeps the others'
+    /// defaults, and a value no page could draw is brought back to one.
+    #[test]
+    fn the_history_dividers_read_as_their_defaults_until_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench.toml");
+        std::fs::write(&path, "[layout]\ntheme = \"dark\"\n").unwrap();
+        assert_eq!(
+            workbench_at(&path).layout.history,
+            crate::model::HistoryLayout::default()
+        );
+
+        std::fs::write(&path, "[layout]\n\n[layout.history]\nlog = 0.3\n").unwrap();
+        let history = workbench_at(&path).layout.history;
+        assert_eq!(history.log, 0.3);
+        assert_eq!(
+            (history.refs, history.details, history.sides),
+            (220.0, 0.38, 0.5)
+        );
+
+        std::fs::write(
+            &path,
+            "[layout]\n\n[layout.history]\nrefs = 9000.0\nlog = -2.0\ndetails = nan\nsides = 1.0\n",
+        )
+        .unwrap();
+        let history = workbench_at(&path).layout.history;
+        assert_eq!(history.refs, 1200.0, "a width a page can hold");
+        assert_eq!(history.log, 0.05, "a share inside the room");
+        assert_eq!(history.details, 0.38, "not a number is the default");
+        assert_eq!(history.sides, 0.95);
     }
 
     /// The two properties the tab strips need: a different spelling of the

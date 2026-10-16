@@ -705,6 +705,19 @@ export struct DiffRow {
     right-text: string,
 }
 
+// What is selected in a diff (`src/app/git_select.rs`), for its rows to
+// draw: the side it is on (0 the left column or the one column, 1 the
+// right), and the row and the distance into that row's text where it
+// starts and where it ends. The rows between are selected to their ends.
+export struct DiffSel {
+    active: bool,
+    side: int,
+    from-row: int,
+    from-x: length,
+    to-row: int,
+    to-x: length,
+}
+
 // A row of a right-click menu; an empty id is a divider. An action's row
 // carries its key, as the palette's does.
 export struct MenuItem {
@@ -1272,7 +1285,38 @@ export global Shell {
     in property <bool> git-diff-staged;
     in property <[DiffRow]> git-diff-rows;
     in property <string> git-diff-note;
+    in property <DiffSel> git-diff-sel;
+    in property <length> git-diff-wide-left;
+    in property <length> git-diff-wide-right;
     in property <bool> git-split;
+    // A press (0), a drag (1) or a double-click (2) in a diff: which page's
+    // ("history" or "changes"), the row, the side, how far into that side's
+    // text, and whether Shift was held.
+    callback diff-pointer(string, int, int, int, length, bool);
+    // A key in a diff: "copy", "all" (for that side) or "clear"; whether it
+    // did anything.
+    callback diff-key(string, string, int) -> bool;
+    // A right-click in a diff: which page's, the side, where in the window.
+    callback diff-menu(string, int, length, length);
+    // Bumped to give the keys back to a page's diff, named by the other,
+    // when its menu — which took them — goes.
+    in property <int> diff-focus;
+    in property <string> diff-focus-view;
+
+    // Where the History page's panes part (`WindowLayout.history`): the
+    // refs column's width, the log's share of the height, the commit's
+    // message and files' share beside its diff, and a side-by-side diff's
+    // left column's share — the Changes page's too. Dragged here, kept
+    // when let go, put back by a double-click.
+    in-out property <length> history-refs: 220px;
+    in-out property <float> history-log: 0.6;
+    in-out property <float> history-details: 0.38;
+    in-out property <float> history-sides: 0.5;
+    callback history-resized(string, float);
+    callback history-reset(string);
+    // Where a divider stands in a room of that size, asked to stand at a
+    // distance, each pane beside it kept its least (`src/panes.rs`).
+    pure callback pane-fit(length, length, length, length) -> length;
 
     // The History page.
     in property <[GitRef]> git-refs;
@@ -1286,6 +1330,8 @@ export global Shell {
     callback git-search(string);
     callback git-search-step(bool);
     callback git-ref-filter(string);
+    // What the refs' filter holds, typed.
+    in-out property <string> git-ref-query;
     callback git-ref(int, bool);
     callback git-ref-menu(int, length, length);
     callback git-pick(int);
@@ -1298,6 +1344,16 @@ export global Shell {
     in property <[GitFile]> git-detail-files;
     in property <[DiffRow]> git-detail-rows;
     in property <string> git-detail-note;
+    in property <DiffSel> git-detail-sel;
+    in property <length> git-detail-wide-left;
+    in property <length> git-detail-wide-right;
+    // A right-click on the opened commit's subject, its author and hash
+    // ("meta") or its body: which, the selection's two ends in it as byte
+    // offsets, and where in the window.
+    callback git-detail-text-menu(string, int, int, length, length);
+    // Bumped to select all of one of them: the menu's Select all.
+    in property <int> git-detail-select-all;
+    in property <string> git-detail-select-which;
     callback git-detail-file(int);
     callback git-detail-file-menu(int, length, length);
 

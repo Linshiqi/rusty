@@ -7,8 +7,8 @@
 import { ListView, ScrollView, TextEdit, CheckBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
-import { Shell, DiffRow, GitChange, GitCommitRow } from "shell.slint";
-import { IconButton, Button, Caption, Field, Segments } from "widgets.slint";
+import { Shell, DiffRow, DiffSel, GitChange, GitCommitRow } from "shell.slint";
+import { IconButton, Button, Caption, Field, Segments, Splitter } from "widgets.slint";
 
 // A change's letter colour.
 export global GitTone {
@@ -17,17 +17,162 @@ export global GitTone {
     }
 }
 
-// A patch, one column or two, in the editor's font.
+// A row's fill by its kind: added green, removed red, a header sunken, a
+// side left blank across from the other's run half sunken.
+global DiffTone {
+    pure public function fill(kind: int) -> brush {
+        return kind == 1 ? Theme.patina-fill : kind == 2 ? Theme.crimson-fill : kind == 3 ? Theme.sunken : kind == 5 ? Theme.sunken.with-alpha(0.5) : transparent;
+    }
+}
+
+// A line number, right against its column's edge.
+component DiffNumber inherits Text {
+    x: 0px;
+    color: Theme.label-4;
+    font-family: Theme.mono;
+    font-size: Theme.caption;
+    horizontal-alignment: right;
+    vertical-alignment: center;
+}
+
+// One side's text in a row: a window of its own that clips and scrolls
+// sideways, and the part of it selected. `line` is whether the row is a
+// line of this side at all — a note, a header or a blank is not, and is
+// never selected (`src/diff_select.rs` reads the rows the same way).
+component DiffLine inherits Rectangle {
+    in property <string> text;
+    in property <bool> note;
+    in property <bool> line;
+    in property <int> side;
+    // Which row of the patch: `row` is every element's grid placement.
+    in property <int> at;
+    in property <DiffSel> selection;
+    in property <length> scroll-x;
+    in property <length> pad;
+    property <bool> selected: root.line && root.selection.active && root.selection.side == root.side && root.at >= root.selection.from-row && root.at <= root.selection.to-row;
+    property <length> sel-start: root.at == root.selection.from-row ? root.selection.from-x : 0px;
+    // To the end of the line and a little past it — its break — unless the
+    // selection ends on this row.
+    property <length> sel-end: root.at == root.selection.to-row ? root.selection.to-x : label.preferred-width + 6px;
+    clip: true;
+    if root.selected: Rectangle {
+        x: root.pad + root.scroll-x + root.sel-start;
+        width: max(0px, root.sel-end - root.sel-start);
+        background: Theme.text-selection;
+    }
+    label := Text {
+        x: root.pad + root.scroll-x;
+        width: self.preferred-width;
+        text: root.text;
+        color: root.note ? Theme.label-3 : Theme.label;
+        font-italic: root.note;
+        font-family: Theme.mono;
+        font-size: Theme.small;
+        vertical-alignment: center;
+    }
+}
+
+// A hunk's header on one side, clipped to it: drawn once per side, as Fork
+// draws it, so nothing crosses the line between the columns.
+component DiffHeader inherits Rectangle {
+    in property <string> text;
+    background: Theme.sunken;
+    clip: true;
+    Text {
+        x: 8px;
+        width: parent.width - 16px;
+        text: root.text;
+        color: Theme.slate;
+        font-family: Theme.mono;
+        font-size: Theme.caption;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// A patch, one column or two, in the editor's font. Each side's text
+// clips to its own column and both scroll sideways together, as VS Code's
+// side-by-side diff does; the line between the columns is dragged. A drag
+// selects lines and characters on the side it started on, and copies that
+// side's text alone — no numbers, no `+` or `-` (`src/app/git_select.rs`).
 export component DiffView inherits Rectangle {
     in property <[DiffRow]> rows;
     in property <bool> split;
     in property <string> note;
+    // Which page's diff, for what a press or a key tells: "history" or
+    // "changes".
+    in property <string> view;
+    in property <DiffSel> selection;
+    // The widest line of each side as drawn, for how far the text scrolls
+    // sideways; the one column's is the left.
+    in property <length> wide-left;
+    in property <length> wide-right;
     property <length> row-h: 18px;
     property <length> number-w: 40px;
+    // The one column's `+` and `-`: a column of their own, so the text a
+    // selection measures starts where it is drawn.
+    property <length> mark-w: 14px;
+    property <length> pad: 6px;
+    property <length> top: root.rows.length > 0 && root.note != "" ? 22px : 0px;
+    in-out property <length> scroll-x: 0px;
+    // The side the last press was on, which a drag stays on.
+    property <int> drag-side;
+    property <length> body-w: list.visible-width;
+    // Where the columns part: the share the line was left at, each column
+    // at least 140 px while there is room for both.
+    property <length> left-w: root.split ? Shell.pane-fit(root.body-w * Shell.history-sides, root.body-w - 1px, 140px, 140px) : root.body-w;
+    property <length> right-x: root.left-w + 1px;
+    property <length> right-w: max(0px, root.body-w - root.right-x);
+    // Each side's window onto its text, and where its text starts.
+    property <length> left-win-x: root.split ? root.number-w : 2 * root.number-w + root.mark-w;
+    property <length> left-win-w: max(0px, root.left-w - root.left-win-x);
+    property <length> right-win-w: max(0px, root.right-w - root.number-w);
+    property <length> max-scroll: max(0px, (root.split ? max(root.wide-left - root.left-win-w, root.wide-right - root.right-win-w) : root.wide-left - root.left-win-w) + 2 * root.pad);
     background: Theme.content;
 
-    pure function fill(kind: int) -> brush {
-        return kind == 1 ? Theme.patina-fill : kind == 2 ? Theme.crimson-fill : kind == 3 ? Theme.sunken : kind == 5 ? Theme.sunken.with-alpha(0.5) : transparent;
+    // A new patch starts at its left edge.
+    changed rows => {
+        root.scroll-x = 0px;
+    }
+
+    // The keys back from the menu that took them.
+    property <int> focus-asked: Shell.diff-focus;
+    changed focus-asked => {
+        if (Shell.diff-focus-view == root.view) {
+            keys.focus();
+        }
+    }
+
+    // How far into the side's text a point of a row is.
+    pure function text-x(side: int, x: length) -> length {
+        return x - (side == 1 ? root.right-x + root.number-w : root.left-win-x) - root.pad - root.scroll-x;
+    }
+
+    // The wheel over the rows, taken by them as the code view's is: up and
+    // down moves the list at once, sideways — or Shift and the wheel — the
+    // text of both sides.
+    function wheel(shift: bool, dx: length, dy: length) {
+        root.scroll-x = max(min(0px, root.scroll-x + (shift && dx == 0px ? dy : dx)), -root.max-scroll);
+        list.content-y = max(min(0px, list.content-y + (shift && dx == 0px ? 0px : dy)), min(0px, list.visible-height - root.rows.length * root.row-h));
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if ((event.modifiers.control || event.modifiers.meta) && !event.modifiers.alt) {
+                if (event.text == "c" || event.text == "C" || event.text == Key.Insert) {
+                    return Shell.diff-key(root.view, "copy", root.drag-side) ? accept : reject;
+                }
+                if (event.text == "a" || event.text == "A") {
+                    return Shell.diff-key(root.view, "all", root.drag-side) ? accept : reject;
+                }
+            }
+            if (event.text == Key.Escape) {
+                return Shell.diff-key(root.view, "clear", root.drag-side) ? accept : reject;
+            }
+            reject
+        }
     }
 
     if root.rows.length == 0: Text {
@@ -39,127 +184,198 @@ export component DiffView inherits Rectangle {
         font-size: Theme.small;
         wrap: word-wrap;
     }
-    if root.rows.length > 0: VerticalLayout {
-        if root.note != "": Text {
-            height: 22px;
-            text: root.note;
-            color: Theme.amber;
-            font-size: Theme.caption;
-            vertical-alignment: center;
-            horizontal-alignment: center;
+    if root.rows.length > 0 && root.note != "": Text {
+        y: 0px;
+        width: parent.width;
+        height: root.top;
+        text: root.note;
+        color: Theme.amber;
+        font-size: Theme.caption;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+    list := ListView {
+        y: root.top;
+        width: parent.width;
+        height: parent.height - root.top;
+        visible: root.rows.length > 0;
+        // The rows never widen the view: each side scrolls its own text.
+        content-width: self.visible-width;
+        for row[index] in root.rows: Rectangle {
+            width: root.body-w;
+            height: root.row-h;
+            // One column: both numbers, the marker, the text.
+            if !root.split: Rectangle {
+                background: DiffTone.fill(row.kind);
+                if row.kind == 3: DiffHeader {
+                    text: row.text;
+                }
+                if row.kind != 3: DiffNumber {
+                    width: root.number-w - 6px;
+                    text: row.old;
+                }
+                if row.kind != 3: DiffNumber {
+                    x: root.number-w;
+                    width: root.number-w - 6px;
+                    text: row.new;
+                }
+                if row.kind != 3: Text {
+                    x: 2 * root.number-w + 2px;
+                    width: root.mark-w;
+                    text: row.kind == 1 ? "+" : row.kind == 2 ? "-" : "";
+                    color: row.kind == 1 ? Theme.patina : Theme.crimson;
+                    font-family: Theme.mono;
+                    font-size: Theme.small;
+                    vertical-alignment: center;
+                }
+                if row.kind != 3: DiffLine {
+                    x: root.left-win-x;
+                    width: root.left-win-w;
+                    text: row.text;
+                    note: row.kind == 4;
+                    line: row.kind <= 2;
+                    side: 0;
+                    at: index;
+                    selection: root.selection;
+                    scroll-x: root.scroll-x;
+                    pad: root.pad;
+                }
+            }
+            // Two columns: each side its number and its text, its header
+            // its own, clipped to its column.
+            if root.split: Rectangle {
+                x: 0px;
+                width: root.left-w;
+                background: DiffTone.fill(row.kind);
+                clip: true;
+                if row.kind == 3: DiffHeader {
+                    text: row.text;
+                }
+                if row.kind != 3: DiffNumber {
+                    width: root.number-w - 6px;
+                    text: row.old;
+                }
+                if row.kind != 3: DiffLine {
+                    x: root.number-w;
+                    width: root.left-win-w;
+                    text: row.text;
+                    note: row.kind == 4;
+                    line: row.kind <= 2;
+                    side: 0;
+                    at: index;
+                    selection: root.selection;
+                    scroll-x: root.scroll-x;
+                    pad: root.pad;
+                }
+            }
+            if root.split: Rectangle {
+                x: root.right-x;
+                width: root.right-w;
+                background: DiffTone.fill(row.kind == 3 ? 3 : row.right-kind);
+                clip: true;
+                if row.kind == 3: DiffHeader {
+                    text: row.text;
+                }
+                if row.kind != 3: DiffNumber {
+                    width: root.number-w - 6px;
+                    text: row.new;
+                }
+                if row.kind != 3: DiffLine {
+                    x: root.number-w;
+                    width: root.right-win-w;
+                    text: row.right-text;
+                    note: row.right-kind == 4;
+                    line: row.right-kind <= 2;
+                    side: 1;
+                    at: index;
+                    selection: root.selection;
+                    scroll-x: root.scroll-x;
+                    pad: root.pad;
+                }
+            }
+            // Over the row: a press starts a selection on the side it lands
+            // on, a drag carries it there whatever row it crosses, a
+            // double-click takes a word; the right button opens the menu.
+            TouchArea {
+                mouse-cursor: MouseCursor.text;
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                        root.drag-side = root.split && self.mouse-x >= root.right-x ? 1 : 0;
+                        keys.focus();
+                        Shell.diff-pointer(root.view, 0, index, root.drag-side, root.text-x(root.drag-side, self.mouse-x), event.modifiers.shift);
+                    } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                        root.drag-side = root.split && self.mouse-x >= root.right-x ? 1 : 0;
+                        keys.focus();
+                        Shell.diff-menu(root.view, root.drag-side, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        Shell.diff-pointer(root.view, 1, index + floor(self.mouse-y / root.row-h), root.drag-side, root.text-x(root.drag-side, self.mouse-x), false);
+                    }
+                }
+                double-clicked => {
+                    Shell.diff-pointer(root.view, 2, index, root.drag-side, root.text-x(root.drag-side, self.mouse-x), false);
+                }
+                scroll-event(event) => {
+                    if (event.modifiers.control) {
+                        return reject;
+                    }
+                    root.wheel(event.modifiers.shift, event.delta-x, event.delta-y);
+                    accept
+                }
+            }
         }
-        ListView {
-            for row in root.rows: Rectangle {
-                height: root.row-h;
-                // A hunk's header across the whole width.
-                if row.kind == 3: Rectangle {
-                    background: Theme.sunken;
-                    Text {
-                        x: 8px;
-                        text: row.text;
-                        color: Theme.slate;
-                        font-family: Theme.mono;
-                        font-size: Theme.caption;
-                        vertical-alignment: center;
-                        overflow: elide;
+    }
+    // The line between the columns, dragged; a double-click puts it back
+    // at halves.
+    if root.split && root.rows.length > 0: Splitter {
+        property <length> start;
+        x: root.left-w;
+        y: root.top;
+        width: 1px;
+        height: list.height;
+        pressed => {
+            self.start = root.left-w;
+        }
+        dragged(travel) => {
+            Shell.history-sides = Shell.pane-fit(self.start + travel, root.body-w - 1px, 140px, 140px) / max(1px, root.body-w);
+        }
+        released => {
+            Shell.history-resized("sides", Shell.history-sides);
+        }
+        reset => {
+            Shell.history-reset("sides");
+        }
+    }
+    // How far the text is scrolled sideways, when it can be: a thumb along
+    // the foot, dragged.
+    if root.max-scroll > 0px && root.rows.length > 0: bar := Rectangle {
+        property <length> track: self.width - 16px;
+        property <length> thumb: max(28px, self.track * root.left-win-w / (root.left-win-w + root.max-scroll));
+        x: 0px;
+        y: parent.height - self.height;
+        width: list.visible-width;
+        height: 8px;
+        Rectangle {
+            x: 2px + (-root.scroll-x / root.max-scroll) * (bar.track - bar.thumb);
+            y: 2px;
+            width: bar.thumb;
+            height: 5px;
+            border-radius: 2.5px;
+            background: thumb-touch.pressed || thumb-touch.has-hover ? Theme.label-3 : Theme.label-4.with-alpha(0.6);
+            thumb-touch := TouchArea {
+                property <length> from;
+                property <length> start;
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        self.from = self.absolute-position.x + self.mouse-x;
+                        self.start = root.scroll-x;
                     }
                 }
-                if row.kind != 3 && !root.split: HorizontalLayout {
-                    Rectangle {
-                        width: root.number-w;
-                        background: root.fill(row.kind);
-                        Text {
-                            width: parent.width - 6px;
-                            text: row.old;
-                            color: Theme.label-4;
-                            font-family: Theme.mono;
-                            font-size: Theme.caption;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle {
-                        width: root.number-w;
-                        background: root.fill(row.kind);
-                        Text {
-                            width: parent.width - 6px;
-                            text: row.new;
-                            color: Theme.label-4;
-                            font-family: Theme.mono;
-                            font-size: Theme.caption;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle {
-                        background: root.fill(row.kind);
-                        Text {
-                            x: 6px;
-                            text: (row.kind == 1 ? "+ " : row.kind == 2 ? "- " : "  ") + row.text;
-                            color: row.kind == 4 ? Theme.label-3 : Theme.label;
-                            font-italic: row.kind == 4;
-                            font-family: Theme.mono;
-                            font-size: Theme.small;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-                if row.kind != 3 && root.split: HorizontalLayout {
-                    Rectangle {
-                        width: root.number-w;
-                        background: root.fill(row.kind);
-                        Text {
-                            width: parent.width - 6px;
-                            text: row.old;
-                            color: Theme.label-4;
-                            font-family: Theme.mono;
-                            font-size: Theme.caption;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle {
-                        background: root.fill(row.kind);
-                        clip: true;
-                        Text {
-                            x: 6px;
-                            text: row.text;
-                            color: row.kind == 4 ? Theme.label-3 : Theme.label;
-                            font-italic: row.kind == 4;
-                            font-family: Theme.mono;
-                            font-size: Theme.small;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle {
-                        width: 1px;
-                        background: Theme.line;
-                    }
-                    Rectangle {
-                        width: root.number-w;
-                        background: root.fill(row.right-kind);
-                        Text {
-                            width: parent.width - 6px;
-                            text: row.new;
-                            color: Theme.label-4;
-                            font-family: Theme.mono;
-                            font-size: Theme.caption;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle {
-                        background: root.fill(row.right-kind);
-                        clip: true;
-                        Text {
-                            x: 6px;
-                            text: row.right-text;
-                            color: row.right-kind == 4 ? Theme.label-3 : Theme.label;
-                            font-italic: row.right-kind == 4;
-                            font-family: Theme.mono;
-                            font-size: Theme.small;
-                            vertical-alignment: center;
-                        }
+                moved => {
+                    if (self.pressed) {
+                        root.scroll-x = max(min(0px, self.start - (self.absolute-position.x + self.mouse-x - self.from) * root.max-scroll / max(1px, bar.track - bar.thumb)), -root.max-scroll);
                     }
                 }
             }
@@ -667,17 +883,77 @@ export component GitPanel inherits Rectangle {
     }
 }
 
+// A piece of the opened commit's message — its subject, who wrote it and
+// its hash, its body — as text a drag selects and Ctrl+C copies, never
+// edited. The left button is the text's own; the right one, which the text
+// leaves alone, opens the commit's text menu with what is selected in it.
+component DetailText inherits Rectangle {
+    in property <string> text;
+    // "summary", "meta" or "body": which piece, for the menu.
+    in property <string> which;
+    in property <length> size: Theme.small;
+    in property <int> weight: 400;
+    in property <color> ink: Theme.label;
+    height: input.preferred-height;
+    // The menu's Select all, asked for this piece.
+    property <int> select-all-asked: Shell.git-detail-select-all;
+    changed select-all-asked => {
+        if (Shell.git-detail-select-which == root.which) {
+            input.focus();
+            input.select-all();
+        }
+    }
+    TouchArea {
+        mouse-cursor: MouseCursor.text;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                Shell.git-detail-text-menu(root.which, input.anchor-position-byte-offset, input.cursor-position-byte-offset, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+        input := TextInput {
+            text: root.text;
+            read-only: true;
+            single-line: false;
+            wrap: word-wrap;
+            color: root.ink;
+            font-size: root.size;
+            font-weight: root.weight;
+            selection-background-color: Theme.text-selection;
+            selection-foreground-color: root.ink;
+            // Nothing is typed here, so no caret is drawn.
+            text-cursor-width: 0px;
+        }
+    }
+}
+
 // One row of the log: its slice of the graph, its labels, its subject, who
 // and when, and the hash.
 component LogRow inherits Rectangle {
     in property <GitCommitRow> commit;
     in property <length> graph-w;
+    // Picked by a click: the page takes the keys back for Up and Down,
+    // which a press in the diff or the message had taken.
+    callback picked();
+    // The graph never takes more than two fifths of a narrow row.
+    property <length> graph-shown: min(root.graph-w, max(14px, round(root.width * 0.4 / 1px) * 1px));
+    // What is left beside the graph, for the labels, the subject and the
+    // columns. As it narrows the subject is elided first, down to a least
+    // that leaves room for a label or two beside it; then the author goes,
+    // then the date, then the hash, as Fork's columns give way. Decided by
+    // the width alone, so every row of the log keeps the same columns.
+    property <length> rest: root.width - 14px - root.graph-shown - 8px;
+    property <length> subject-least: 200px;
+    property <bool> show-hash: root.rest >= root.subject-least + 64px;
+    property <bool> show-when: root.rest >= root.subject-least + 64px + 84px;
+    property <bool> show-author: root.rest >= root.subject-least + 64px + 84px + 128px;
     height: 26px;
+    clip: true;
     background: root.commit.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
     opacity: root.commit.dim ? 0.35 : 1;
     touch := TouchArea {
         clicked => {
             Shell.git-pick(root.commit.index);
+            root.picked();
         }
         pointer-event(event) => {
             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
@@ -693,7 +969,7 @@ component LogRow inherits Rectangle {
         // leave it: each half drawn here, clipped to the row, so a filled
         // row below covers nothing.
         Rectangle {
-            width: root.graph-w;
+            width: root.graph-shown;
             clip: true;
             for lane in root.commit.above: Path {
                 x: -0.75px;
@@ -733,12 +1009,15 @@ component LogRow inherits Rectangle {
         for label in root.commit.labels: Rectangle {
             y: 4px;
             height: 18px;
-            width: label-text.preferred-width + 14px;
+            // A long name is elided rather than pushing the row wide.
+            width: min(label-text.preferred-width + 14px, 140px);
             border-radius: 9px;
             background: label.kind == 3 ? Theme.amber-fill : label.kind == 2 ? label.color.with-alpha(0.2) : label.color;
             border-width: label.kind == 2 ? 1px : 0;
             border-color: label.color;
             label-text := Text {
+                x: 7px;
+                width: parent.width - 14px;
                 text: label.text;
                 color: label.kind == 3 ? Theme.amber : label.kind == 2 ? Theme.label : #15130f;
                 font-family: Theme.mono;
@@ -746,6 +1025,7 @@ component LogRow inherits Rectangle {
                 font-weight: 600;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                overflow: elide;
             }
         }
         if root.commit.more > 0: Text {
@@ -762,7 +1042,7 @@ component LogRow inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        Text {
+        if root.show-author: Text {
             width: 120px;
             text: root.commit.author;
             color: Theme.label-2;
@@ -770,14 +1050,15 @@ component LogRow inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        Text {
+        if root.show-when: Text {
             width: 76px;
             text: root.commit.when;
             color: Theme.label-3;
             font-size: Theme.caption;
             vertical-alignment: center;
+            overflow: elide;
         }
-        Text {
+        if root.show-hash: Text {
             width: 56px;
             text: root.commit.short;
             color: Theme.label-3;
@@ -788,9 +1069,34 @@ component LogRow inherits Rectangle {
     }
 }
 
+// One column or two: the two words while there is room for them, and an
+// icon that says the other way where there is not.
+component SplitToggle inherits HorizontalLayout {
+    in property <bool> roomy: true;
+    if root.roomy: Segments {
+        labels: [@tr("git.unified"), @tr("git.split")];
+        values: ["unified", "split"];
+        value: Shell.git-split ? "split" : "unified";
+        picked(value) => {
+            if ((value == "split") != Shell.git-split) {
+                Shell.act("git.split");
+            }
+        }
+    }
+    if !root.roomy: IconButton {
+        icon: Shell.git-split ? Icons.rows : Icons.columns;
+        tip: Shell.git-split ? @tr("git.unified") : @tr("git.split");
+        clicked => {
+            Shell.act("git.split");
+        }
+    }
+}
+
 // The History page: the refs, the graph, and the commit opened below it.
 export component GitPage inherits Rectangle {
     background: Theme.content;
+    // Laid out to whatever width it is given, and nothing drawn past it.
+    clip: true;
     init => {
         Shell.act("git.shown");
         keys.focus();
@@ -820,366 +1126,497 @@ export component GitPage inherits Rectangle {
         wrap: word-wrap;
     }
 
-    if Shell.git-state == 1: HorizontalLayout {
-        // Every ref.
-        VerticalLayout {
-            width: 220px;
-            padding: 6px;
-            spacing: 6px;
-            Field {
-                height: 26px;
-                placeholder: @tr("git.filter-refs");
-                edited(text) => {
-                    Shell.git-ref-filter(text);
-                }
-            }
-            ListView {
-                for ref in Shell.git-refs: Rectangle {
-                    height: ref.kind == 0 ? 26px : 22px;
-                    border-radius: 5px;
-                    background: ref.kind != 0 && ref-touch.has-hover ? Theme.hover : transparent;
-                    ref-touch := TouchArea {
-                        enabled: ref.kind != 0;
-                        clicked => {
-                            Shell.git-ref(ref.index, false);
-                        }
-                        double-clicked => {
-                            Shell.git-ref(ref.index, true);
-                        }
-                        pointer-event(event) => {
-                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                Shell.git-ref-menu(ref.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
-                            }
-                        }
-                    }
-                    if ref.kind == 0: HorizontalLayout {
-                        padding-left: 4px;
-                        Caption {
-                            text: ref.label;
-                            vertical-alignment: bottom;
-                        }
-                        if ref.label == @tr("git.remotes"): IconButton {
-                            width: 22px;
-                            height: 22px;
-                            glyph: 13px;
-                            icon: Icons.plus;
-                            tip: @tr("git.add-remote");
-                            clicked => {
-                                Shell.act("git.remote");
-                            }
-                        }
-                    }
-                    if ref.kind != 0: HorizontalLayout {
-                        padding-left: ref.kind == 3 ? 22px : 8px;
-                        padding-right: 6px;
-                        spacing: 6px;
-                        Icon {
-                            y: (parent.height - self.height) / 2;
-                            path: ref.kind == 4 ? Icons.check : ref.kind == 2 ? Icons.fetch : Icons.branch;
-                            size: 13px;
-                            color: ref.current ? Theme.rust : ref.filtered ? Theme.slate : Theme.label-3;
-                        }
-                        Text {
-                            horizontal-stretch: 1;
-                            text: ref.label;
-                            color: ref.gone ? Theme.label-3 : Theme.label;
-                            font-size: Theme.small;
-                            font-weight: ref.current ? 700 : 400;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                        Text {
-                            text: ref.detail;
-                            color: Theme.label-3;
-                            font-size: Theme.caption;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-        }
-        Rectangle {
-            width: 1px;
-            background: Theme.line;
-        }
-        VerticalLayout {
-            // The verbs, the filter in force and the search.
-            HorizontalLayout {
+    if Shell.git-state == 1: page := Rectangle {
+        // The refs column at the width its divider was left at, the log
+        // beside it at least 360 px. A page with no room for both keeps the
+        // log: a refs column squeezed under its least is a column of
+        // ellipses.
+        property <bool> refs-shown: self.width >= 140px + 1px + 360px;
+        property <length> refs-w: Shell.pane-fit(Shell.history-refs, self.width - 1px, 140px, 360px);
+        property <length> log-w: self.width - (self.refs-shown ? self.refs-w + 1px : 0px);
+        // The toolbar's verbs give way as the log narrows — a new branch
+        // and refresh first, then the head's name, then the search's steps,
+        // then the head's button — while the search and the filter shrink
+        // to their least; what stays is fetch, pull, push and the search.
+        property <bool> show-more: self.log-w >= 500px;
+        property <bool> show-head: self.log-w >= 440px;
+        property <bool> show-steps: self.log-w >= 320px;
+        property <bool> show-reveal: self.log-w >= 280px;
+        HorizontalLayout {
+            // Every ref.
+            if page.refs-shown: VerticalLayout {
+                width: page.refs-w;
                 padding: 6px;
-                spacing: 4px;
-                IconButton {
-                    icon: Icons.branch;
-                    tip: @tr("git.head-reveal");
-                    clicked => {
-                        Shell.act("git.head");
+                spacing: 6px;
+                Field {
+                    height: 26px;
+                    placeholder: @tr("git.filter-refs");
+                    // Kept outside the column, which goes when the page is
+                    // too narrow for it and comes back with the filter in it.
+                    text <=> Shell.git-ref-query;
+                    edited(text) => {
+                        Shell.git-ref-filter(text);
                     }
                 }
-                Text {
-                    text: Shell.git-head;
-                    color: Theme.label;
-                    font-size: Theme.small;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                }
-                IconButton {
-                    icon: Icons.fetch;
-                    tip: @tr("git.fetch");
-                    clicked => {
-                        Shell.act("git.fetch");
-                    }
-                }
-                IconButton {
-                    icon: Icons.pull;
-                    tip: Shell.git-pull-tip;
-                    tint: Shell.git-behind > 0 ? Theme.rust : Theme.label-2;
-                    clicked => {
-                        Shell.act("git.pull");
-                    }
-                }
-                IconButton {
-                    icon: Icons.push;
-                    tip: Shell.git-push-tip;
-                    tint: Shell.git-ahead > 0 ? Theme.rust : Theme.label-2;
-                    clicked => {
-                        Shell.act("git.push");
-                    }
-                }
-                IconButton {
-                    icon: Icons.plus;
-                    tip: @tr("git.new-branch");
-                    clicked => {
-                        Shell.act("git.branch");
-                    }
-                }
-                IconButton {
-                    icon: Icons.refresh;
-                    tip: @tr("git.refresh");
-                    clicked => {
-                        Shell.act("git.refresh");
-                    }
-                }
-                if Shell.git-filter != "": Rectangle {
-                    y: 2px;
-                    height: 24px;
-                    width: filter-row.preferred-width;
-                    border-radius: 12px;
-                    background: Theme.slate.with-alpha(0.18);
-                    filter-row := HorizontalLayout {
-                        padding-left: 10px;
-                        spacing: 2px;
-                        Text {
-                            text: Shell.git-filter;
-                            color: Theme.label;
-                            font-size: Theme.caption;
-                            vertical-alignment: center;
-                        }
-                        IconButton {
-                            width: 24px;
-                            height: 24px;
-                            glyph: 12px;
-                            icon: Icons.close;
-                            tip: @tr("git.filter-clear");
+                ListView {
+                    for ref in Shell.git-refs: Rectangle {
+                        height: ref.kind == 0 ? 26px : 22px;
+                        border-radius: 5px;
+                        background: ref.kind != 0 && ref-touch.has-hover ? Theme.hover : transparent;
+                        ref-touch := TouchArea {
+                            enabled: ref.kind != 0;
                             clicked => {
-                                Shell.act("git.filter-clear");
+                                Shell.git-ref(ref.index, false);
                             }
+                            double-clicked => {
+                                Shell.git-ref(ref.index, true);
+                            }
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                    Shell.git-ref-menu(ref.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                        }
+                        if ref.kind == 0: HorizontalLayout {
+                            padding-left: 4px;
+                            Caption {
+                                text: ref.label;
+                                vertical-alignment: bottom;
+                            }
+                            if ref.label == @tr("git.remotes"): IconButton {
+                                width: 22px;
+                                height: 22px;
+                                glyph: 13px;
+                                icon: Icons.plus;
+                                tip: @tr("git.add-remote");
+                                clicked => {
+                                    Shell.act("git.remote");
+                                }
+                            }
+                        }
+                        if ref.kind != 0: HorizontalLayout {
+                            padding-left: ref.kind == 3 ? 22px : 8px;
+                            padding-right: 6px;
+                            spacing: 6px;
+                            Icon {
+                                y: (parent.height - self.height) / 2;
+                                path: ref.kind == 4 ? Icons.check : ref.kind == 2 ? Icons.fetch : Icons.branch;
+                                size: 13px;
+                                color: ref.current ? Theme.rust : ref.filtered ? Theme.slate : Theme.label-3;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: ref.label;
+                                color: ref.gone ? Theme.label-3 : Theme.label;
+                                font-size: Theme.small;
+                                font-weight: ref.current ? 700 : 400;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: ref.detail;
+                                color: Theme.label-3;
+                                font-size: Theme.caption;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+            if page.refs-shown: Rectangle {
+                width: 1px;
+                background: Theme.line;
+            }
+            VerticalLayout {
+                // The verbs, the filter in force and the search.
+                HorizontalLayout {
+                    padding: 6px;
+                    spacing: 4px;
+                    if page.show-reveal: IconButton {
+                        icon: Icons.branch;
+                        tip: @tr("git.head-reveal");
+                        clicked => {
+                            Shell.act("git.head");
+                        }
+                    }
+                    // The head's name keeps its width — up to 160 px, elided
+                    // past it — while the search gives way beside it.
+                    if page.show-head: Text {
+                        width: min(self.preferred-width, 160px);
+                        text: Shell.git-head;
+                        color: Theme.label;
+                        font-size: Theme.small;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    IconButton {
+                        icon: Icons.fetch;
+                        tip: @tr("git.fetch");
+                        clicked => {
+                            Shell.act("git.fetch");
+                        }
+                    }
+                    IconButton {
+                        icon: Icons.pull;
+                        tip: Shell.git-pull-tip;
+                        tint: Shell.git-behind > 0 ? Theme.rust : Theme.label-2;
+                        clicked => {
+                            Shell.act("git.pull");
+                        }
+                    }
+                    IconButton {
+                        icon: Icons.push;
+                        tip: Shell.git-push-tip;
+                        tint: Shell.git-ahead > 0 ? Theme.rust : Theme.label-2;
+                        clicked => {
+                            Shell.act("git.push");
+                        }
+                    }
+                    if page.show-more: IconButton {
+                        icon: Icons.plus;
+                        tip: @tr("git.new-branch");
+                        clicked => {
+                            Shell.act("git.branch");
+                        }
+                    }
+                    if page.show-more: IconButton {
+                        icon: Icons.refresh;
+                        tip: @tr("git.refresh");
+                        clicked => {
+                            Shell.act("git.refresh");
+                        }
+                    }
+                    if Shell.git-filter != "": Rectangle {
+                        y: 2px;
+                        height: 24px;
+                        min-width: 40px;
+                        preferred-width: filter-row.preferred-width;
+                        max-width: 200px;
+                        horizontal-stretch: 1;
+                        clip: true;
+                        border-radius: 12px;
+                        background: Theme.slate.with-alpha(0.18);
+                        filter-row := HorizontalLayout {
+                            padding-left: 10px;
+                            spacing: 2px;
+                            Text {
+                                text: Shell.git-filter;
+                                color: Theme.label;
+                                font-size: Theme.caption;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            IconButton {
+                                width: 24px;
+                                height: 24px;
+                                glyph: 12px;
+                                icon: Icons.close;
+                                tip: @tr("git.filter-clear");
+                                clicked => {
+                                    Shell.act("git.filter-clear");
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        max-width: self.preferred-width;
+                        horizontal-stretch: 1;
+                        text: Shell.git-search-count;
+                        color: Theme.label-3;
+                        font-size: Theme.caption;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Field {
+                        min-width: 48px;
+                        preferred-width: 260px;
+                        max-width: 260px;
+                        horizontal-stretch: 1;
+                        placeholder: @tr("git.search-placeholder");
+                        edited(text) => {
+                            Shell.git-search(text);
+                        }
+                        accepted => {
+                            Shell.git-search-step(true);
+                        }
+                    }
+                    if page.show-steps: IconButton {
+                        icon: Icons.arrow-up;
+                        tip: "↑";
+                        clicked => {
+                            Shell.git-search-step(false);
+                        }
+                    }
+                    if page.show-steps: IconButton {
+                        icon: Icons.arrow-down;
+                        tip: "↓";
+                        clicked => {
+                            Shell.git-search-step(true);
                         }
                     }
                 }
                 Rectangle {
-                    horizontal-stretch: 1;
+                    height: 1px;
+                    background: Theme.line;
                 }
-                Text {
-                    text: Shell.git-search-count;
-                    color: Theme.label-3;
-                    font-size: Theme.caption;
-                    vertical-alignment: center;
-                }
-                Field {
-                    width: 260px;
-                    placeholder: @tr("git.search-placeholder");
-                    edited(text) => {
-                        Shell.git-search(text);
-                    }
-                    accepted => {
-                        Shell.git-search-step(true);
-                    }
-                }
-                IconButton {
-                    icon: Icons.arrow-up;
-                    tip: "↑";
-                    clicked => {
-                        Shell.git-search-step(false);
-                    }
-                }
-                IconButton {
-                    icon: Icons.arrow-down;
-                    tip: "↓";
-                    clicked => {
-                        Shell.git-search-step(true);
-                    }
-                }
-            }
-            Rectangle {
-                height: 1px;
-                background: Theme.line;
-            }
-            ListView {
-                vertical-stretch: 3;
-                // The commit opened, brought into view when it was picked
-                // from somewhere other than its row.
-                property <int> reveal: Shell.git-reveal;
-                changed reveal => {
-                    if (Shell.git-selected >= 0) {
-                        self.content-y = min(0px, max(-(self.content-height - self.visible-height), -(Shell.git-selected * 26px - self.visible-height / 2 + 13px)));
-                    }
-                }
-                for row in Shell.git-log: LogRow {
-                    commit: row;
-                    graph-w: Shell.git-lanes * 14px;
-                }
-            }
-            if Shell.git-truncated: HorizontalLayout {
-                height: 30px;
-                alignment: center;
-                Button {
-                    y: 2px;
-                    height: 26px;
-                    text: @tr("git.show-more");
-                    clicked => {
-                        Shell.act("git.more");
-                    }
-                }
-            }
-            // The commit opened: its message and files beside the patch.
-            if Shell.git-detail-open: Rectangle {
-                height: 1px;
-                background: Theme.line;
-            }
-            if Shell.git-detail-open: HorizontalLayout {
-                vertical-stretch: 2;
-                VerticalLayout {
-                    width: 38%;
-                    padding: 8px;
-                    spacing: 4px;
-                    HorizontalLayout {
-                        Text {
-                            horizontal-stretch: 1;
-                            text: Shell.git-detail-summary;
-                            color: Theme.label;
-                            font-size: Theme.body;
-                            font-weight: 600;
-                            wrap: word-wrap;
+                // The log above, the commit opened below it, parted where the
+                // divider between them was left.
+                below := Rectangle {
+                    vertical-stretch: 1;
+                    property <length> log-h: Shell.git-detail-open ? Shell.pane-fit(self.height * Shell.history-log, self.height - 1px, 80px, 140px) : self.height;
+                    VerticalLayout {
+                        y: 0px;
+                        height: below.log-h;
+                        ListView {
+                            // The commit opened, brought into view when it was picked
+                            // from somewhere other than its row.
+                            property <int> reveal: Shell.git-reveal;
+                            changed reveal => {
+                                if (Shell.git-selected >= 0) {
+                                    self.content-y = min(0px, max(-(self.content-height - self.visible-height), -(Shell.git-selected * 26px - self.visible-height / 2 + 13px)));
+                                }
+                            }
+                            for row in Shell.git-log: LogRow {
+                                commit: row;
+                                graph-w: Shell.git-lanes * 14px;
+                                picked => {
+                                    keys.focus();
+                                }
+                            }
                         }
-                        IconButton {
-                            icon: Icons.close;
-                            tip: @tr("git.detail-hide");
-                            clicked => {
-                                Shell.act("git.detail-close");
+                        if Shell.git-truncated: HorizontalLayout {
+                            height: 30px;
+                            alignment: center;
+                            Button {
+                                y: 2px;
+                                height: 26px;
+                                text: @tr("git.show-more");
+                                clicked => {
+                                    Shell.act("git.more");
+                                }
                             }
                         }
                     }
-                    Text {
-                        text: Shell.git-detail-meta;
-                        color: Theme.label-3;
-                        font-size: Theme.caption;
-                        wrap: word-wrap;
-                    }
-                    if Shell.git-detail-body != "": Text {
-                        max-height: 90px;
-                        text: Shell.git-detail-body;
-                        color: Theme.label-2;
-                        font-size: Theme.small;
-                        wrap: word-wrap;
-                        overflow: elide;
-                    }
-                    ListView {
-                        for file in Shell.git-detail-files: Rectangle {
-                            height: 22px;
-                            border-radius: 5px;
-                            background: file.selected ? Theme.selection : file-touch.has-hover ? Theme.hover : transparent;
-                            file-touch := TouchArea {
-                                clicked => {
-                                    Shell.git-detail-file(file.index);
+                    // The commit opened: its message and files beside the patch.
+                    if Shell.git-detail-open: detail := Rectangle {
+                        y: below.log-h + 1px;
+                        height: below.height - below.log-h - 1px;
+                        // The message and files beside the diff at the share
+                        // their divider was left at, the diff at least 260 px; a
+                        // room too narrow for both puts them above the diff
+                        // instead, rather than squeezing either to a column of
+                        // single letters.
+                        property <bool> stacked: self.width < 180px + 1px + 260px;
+                        property <length> details-w: self.stacked ? self.width : Shell.pane-fit(self.width * Shell.history-details, self.width - 1px, 180px, 260px);
+                        property <length> details-h: self.stacked ? round(self.height * 0.45 / 1px) * 1px : self.height;
+                        property <length> diff-x: self.stacked ? 0px : self.details-w + 1px;
+                        property <length> diff-y: self.stacked ? self.details-h + 1px : 0px;
+                        property <length> diff-w: self.width - self.diff-x;
+                        clip: true;
+                        VerticalLayout {
+                            x: 0px;
+                            y: 0px;
+                            width: detail.details-w;
+                            height: detail.details-h;
+                            padding: 8px;
+                            spacing: 4px;
+                            // The message, its author and hash: text that is
+                            // selected and copied, never edited.
+                            HorizontalLayout {
+                                DetailText {
+                                    horizontal-stretch: 1;
+                                    which: "summary";
+                                    text: Shell.git-detail-summary;
+                                    size: Theme.body;
+                                    weight: 600;
                                 }
-                                pointer-event(event) => {
-                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                        Shell.git-detail-file-menu(file.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                IconButton {
+                                    icon: Icons.close;
+                                    tip: @tr("git.detail-hide");
+                                    clicked => {
+                                        Shell.act("git.detail-close");
                                     }
                                 }
                             }
+                            DetailText {
+                                which: "meta";
+                                text: Shell.git-detail-meta;
+                                size: Theme.caption;
+                                ink: Theme.label-3;
+                            }
+                            if Shell.git-detail-body != "": body-view := ScrollView {
+                                height: min(body-text.height, max(60px, detail.height * 0.4));
+                                content-width: self.visible-width;
+                                content-height: max(self.visible-height, body-text.height);
+                                body-text := DetailText {
+                                    width: body-view.visible-width;
+                                    which: "body";
+                                    text: Shell.git-detail-body;
+                                    ink: Theme.label-2;
+                                }
+                            }
+                            ListView {
+                                for file in Shell.git-detail-files: Rectangle {
+                                    height: 22px;
+                                    border-radius: 5px;
+                                    background: file.selected ? Theme.selection : file-touch.has-hover ? Theme.hover : transparent;
+                                    file-touch := TouchArea {
+                                        clicked => {
+                                            Shell.git-detail-file(file.index);
+                                            keys.focus();
+                                        }
+                                        pointer-event(event) => {
+                                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                                Shell.git-detail-file-menu(file.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                            }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        spacing: 6px;
+                                        Text {
+                                            width: 12px;
+                                            text: file.letter;
+                                            color: GitTone.of(file.tone);
+                                            font-family: Theme.mono;
+                                            font-size: Theme.small;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: file.path;
+                                            color: Theme.label;
+                                            font-size: Theme.small;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: file.added;
+                                            color: Theme.patina;
+                                            font-family: Theme.mono;
+                                            font-size: Theme.caption;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: file.removed;
+                                            color: Theme.crimson;
+                                            font-family: Theme.mono;
+                                            font-size: Theme.caption;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            x: detail.stacked ? 0px : detail.details-w;
+                            y: detail.stacked ? detail.details-h : 0px;
+                            width: detail.stacked ? detail.width : 1px;
+                            height: detail.stacked ? 1px : detail.height;
+                            background: Theme.line;
+                        }
+                        VerticalLayout {
+                            x: detail.diff-x;
+                            y: detail.diff-y;
+                            width: detail.diff-w;
+                            height: detail.height - detail.diff-y;
                             HorizontalLayout {
-                                padding-left: 6px;
-                                padding-right: 6px;
-                                spacing: 6px;
-                                Text {
-                                    width: 12px;
-                                    text: file.letter;
-                                    color: GitTone.of(file.tone);
-                                    font-family: Theme.mono;
-                                    font-size: Theme.small;
-                                    font-weight: 700;
-                                    vertical-alignment: center;
+                                padding: 4px;
+                                alignment: end;
+                                SplitToggle {
+                                    roomy: detail.diff-w >= 200px;
                                 }
-                                Text {
-                                    horizontal-stretch: 1;
-                                    text: file.path;
-                                    color: Theme.label;
-                                    font-size: Theme.small;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                }
-                                Text {
-                                    text: file.added;
-                                    color: Theme.patina;
-                                    font-family: Theme.mono;
-                                    font-size: Theme.caption;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: file.removed;
-                                    color: Theme.crimson;
-                                    font-family: Theme.mono;
-                                    font-size: Theme.caption;
-                                    vertical-alignment: center;
-                                }
+                            }
+                            DiffView {
+                                view: "history";
+                                rows: Shell.git-detail-rows;
+                                split: Shell.git-split;
+                                note: Shell.git-detail-note;
+                                selection: Shell.git-detail-sel;
+                                wide-left: Shell.git-detail-wide-left;
+                                wide-right: Shell.git-detail-wide-right;
+                            }
+                        }
+                        // Dragged, the message and files take the width; a
+                        // double-click puts them back.
+                        if !detail.stacked: Splitter {
+                            property <length> start;
+                            x: detail.details-w;
+                            y: 0px;
+                            width: 1px;
+                            height: detail.height;
+                            pressed => {
+                                self.start = detail.details-w;
+                            }
+                            dragged(travel) => {
+                                Shell.history-details = Shell.pane-fit(self.start + travel, detail.width - 1px, 180px, 260px) / max(1px, detail.width);
+                            }
+                            released => {
+                                Shell.history-resized("details", Shell.history-details);
+                            }
+                            reset => {
+                                Shell.history-reset("details");
                             }
                         }
                     }
-                }
-                Rectangle {
-                    width: 1px;
-                    background: Theme.line;
-                }
-                VerticalLayout {
-                    HorizontalLayout {
-                        padding: 4px;
-                        alignment: end;
-                        Segments {
-                            labels: [@tr("git.unified"), @tr("git.split")];
-                            values: ["unified", "split"];
-                            value: Shell.git-split ? "split" : "unified";
-                            picked(value) => {
-                                if ((value == "split") != Shell.git-split) {
-                                    Shell.act("git.split");
-                                }
-                            }
+                    // Dragged, the log takes the height; a double-click puts it
+                    // back.
+                    if Shell.git-detail-open: Splitter {
+                        property <length> start;
+                        vertical: false;
+                        y: below.log-h;
+                        width: parent.width;
+                        height: 1px;
+                        pressed => {
+                            self.start = below.log-h;
                         }
-                    }
-                    DiffView {
-                        rows: Shell.git-detail-rows;
-                        split: Shell.git-split;
-                        note: Shell.git-detail-note;
+                        dragged(travel) => {
+                            Shell.history-log = Shell.pane-fit(self.start + travel, below.height - 1px, 80px, 140px) / max(1px, below.height);
+                        }
+                        released => {
+                            Shell.history-resized("log", Shell.history-log);
+                        }
+                        reset => {
+                            Shell.history-reset("log");
+                        }
                     }
                 }
             }
         }
+        // Dragged, the refs column takes the width; a double-click puts it
+        // back.
+        if page.refs-shown: Splitter {
+            property <length> start;
+            x: page.refs-w;
+            y: 0px;
+            width: 1px;
+            height: page.height;
+            pressed => {
+                self.start = page.refs-w;
+            }
+            dragged(travel) => {
+                Shell.history-refs = Shell.pane-fit(self.start + travel, page.width - 1px, 140px, 360px);
+            }
+            released => {
+                Shell.history-resized("refs", Shell.history-refs / 1px);
+            }
+            reset => {
+                Shell.history-reset("refs");
+            }
+        }
     }
-
 }
 
 // The Changes page: one working-tree file's diff.
 export component GitDiffPage inherits Rectangle {
     background: Theme.content;
+    clip: true;
     init => {
         Shell.act("git.shown");
     }
@@ -1196,15 +1633,8 @@ export component GitDiffPage inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
-            Segments {
-                labels: [@tr("git.unified"), @tr("git.split")];
-                values: ["unified", "split"];
-                value: Shell.git-split ? "split" : "unified";
-                picked(value) => {
-                    if ((value == "split") != Shell.git-split) {
-                        Shell.act("git.split");
-                    }
-                }
+            SplitToggle {
+                roomy: root.width >= 320px;
             }
         }
         Rectangle {
@@ -1212,9 +1642,13 @@ export component GitDiffPage inherits Rectangle {
             background: Theme.line;
         }
         DiffView {
+            view: "changes";
             rows: Shell.git-diff-rows;
             split: Shell.git-split;
             note: Shell.git-diff-note;
+            selection: Shell.git-diff-sel;
+            wide-left: Shell.git-diff-wide-left;
+            wide-right: Shell.git-diff-wide-right;
         }
     }
 }

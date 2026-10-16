@@ -129,6 +129,10 @@
 //! message on the line where it failed, on the hover card, in a window of
 //! its own, gone once the line is typed on, and gone with the test mended
 //! (`probe_testfail.rs`).
+//! With `RUSTY_PROBE_HISTORY`, on a repository with a commit changing a long
+//! line (`probe_history.rs`), it drags each of the History page's dividers,
+//! selects and copies in the commit's message and in each column of its
+//! diff, and narrows the page in a split group to 900, 550, 300 and 220 px.
 
 use std::{
     cell::{Cell, RefCell},
@@ -219,6 +223,7 @@ pub fn start(window: &AppWindow) {
     let outputs = std::env::var_os("RUSTY_PROBE_OUTPUT").is_some();
     let symbolic = std::env::var_os("RUSTY_PROBE_SYMBOLS").is_some();
     let tab_dragging = std::env::var_os("RUSTY_PROBE_TABDRAG").is_some();
+    let history = std::env::var_os("RUSTY_PROBE_HISTORY").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
     // variables, so it probes itself into a directory of its own.
@@ -498,6 +503,9 @@ pub fn start(window: &AppWindow) {
                 if failing {
                     step.set(7300);
                 }
+                if history {
+                    step.set(7700);
+                }
             }
             // Output and Problems across runs, their filter, and Ctrl+`
             // (`probe_output.rs`).
@@ -507,6 +515,9 @@ pub fn start(window: &AppWindow) {
             7400..=7599 if tab_dragging => crate::probe_tabs::tab_drag(n, &surfaces),
             // A failed test's message on its line (`probe_testfail.rs`).
             7300..=7499 if failing => crate::probe_testfail::run(n, &surfaces),
+            // The History page's dividers, and selecting and copying in it
+            // (`probe_history.rs`).
+            7700..=7799 if history => crate::probe_history::history(n, &surfaces),
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),

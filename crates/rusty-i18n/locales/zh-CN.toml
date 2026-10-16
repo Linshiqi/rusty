@@ -319,6 +319,7 @@ delete-tag = "删除标签…"
 delete-tag-confirm = "删除标签 {name}？\n已经推送到远程的那份不会被删除。"
 tag-here = "在这里打标签…"
 copy-short-hash = "复制短哈希"
+copy-message = "复制提交信息"
 diff-clipped = "只显示了 {count} 行中的 {shown} 行。"
 diff-show-all = "全部显示（{count} 行）"
 

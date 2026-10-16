@@ -35,6 +35,7 @@ mod environment;
 mod expansion;
 mod flight;
 mod git;
+mod git_select;
 mod git_view;
 mod lab;
 mod lab_words;
@@ -496,6 +497,26 @@ impl App {
         on!(on_tab_menu, |app, id, other, x, y| app
             .tab_menu(&id, other, x, y));
         on!(on_split_resized, |app, share| app.split_resized(share));
+        on!(on_history_resized, |app, name, value| app
+            .history_resized(&name, value));
+        on!(on_history_reset, |app, name| app.history_reset(&name));
+        shell.on_pane_fit(|asked, room, before, after| {
+            crate::panes::fit(asked, room, before, after)
+        });
+        on!(on_diff_pointer, |app, view, phase, row, side, x, shift| app
+            .diff_pointer(&view, phase, row, side, x, shift));
+        let weak = Rc::downgrade(self);
+        shell.on_diff_key(move |view, verb, side| {
+            weak.upgrade()
+                .is_some_and(|app| app.diff_key(&view, &verb, side))
+        });
+        on!(on_diff_menu, |app, view, side, x, y| app
+            .diff_menu(&view, side, x, y));
+        on!(
+            on_git_detail_text_menu,
+            |app, which, anchor, cursor, x, y| app
+                .git_detail_text_menu(&which, anchor, cursor, x, y)
+        );
         let weak = Rc::downgrade(self);
         window
             .global::<crate::Shade>()
@@ -1463,6 +1484,33 @@ impl App {
         self.save_layout();
     }
 
+    /// One of the History page's dividers let go of, by its name: kept
+    /// with the docks' sizes, and drawn as kept — a share no page can draw
+    /// comes back inside the room.
+    fn history_resized(self: &Rc<Self>, name: &str, value: f32) {
+        self.state.borrow_mut().layout.history.set(name, value);
+        self.sync_history_layout();
+        self.save_layout();
+    }
+
+    /// One of the History page's dividers double-clicked: back where it
+    /// starts.
+    fn history_reset(self: &Rc<Self>, name: &str) {
+        self.state.borrow_mut().layout.history.reset(name);
+        self.sync_history_layout();
+        self.save_layout();
+    }
+
+    fn sync_history_layout(&self) {
+        let Some(window) = self.window() else { return };
+        let shell = window.global::<Shell>();
+        let history = self.state.borrow().layout.history;
+        shell.set_history_refs(history.refs);
+        shell.set_history_log(history.log);
+        shell.set_history_details(history.details);
+        shell.set_history_sides(history.sides);
+    }
+
     fn save_layout(&self) {
         let layout = self.state.borrow().layout.clone();
         let _ = rusty_embed::config::update(move |saved| saved.layout = layout);
@@ -1978,6 +2026,10 @@ impl App {
         shell.set_right_panels(panels(Dock::Right));
         shell.set_right_front(Dock::Right.front(layout).into());
         shell.set_split_share(layout.split);
+        shell.set_history_refs(layout.history.refs);
+        shell.set_history_log(layout.history.log);
+        shell.set_history_details(layout.history.details);
+        shell.set_history_sides(layout.history.sides);
     }
 
     fn sync_tabs(&self) {

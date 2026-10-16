@@ -41,8 +41,15 @@ impl Metrics {
     /// The ASCII advance, measured over a run so rounding in one glyph does
     /// not multiply down a long line.
     pub fn measure(window: &Strong) -> Metrics {
+        Metrics::measure_by(|text| width_of(window, text))
+    }
+
+    /// The same, in whatever font `width_of` measures with: a diff on the
+    /// History page is drawn smaller than the editor's text, and measures
+    /// with a probe of its own (`app/git_select.rs`).
+    pub fn measure_by(width_of: impl Fn(&str) -> f32) -> Metrics {
         const RUN: usize = 64;
-        let ascii = width_of(window, &"M".repeat(RUN)) / RUN as f32;
+        let ascii = width_of(&"M".repeat(RUN)) / RUN as f32;
         Metrics {
             ascii: if ascii > 0.0 { ascii } else { 7.5 },
             wide: HashMap::new(),
@@ -53,10 +60,15 @@ impl Metrics {
     /// ASCII width is: a width measured once is rounded, and the rounding of
     /// one glyph was eight pixels by the end of a line of Chinese.
     pub fn learn(&mut self, window: &Strong, text: &str) {
+        self.learn_by(|run| width_of(window, run), text);
+    }
+
+    /// The same, measured as `measure_by` measures.
+    pub fn learn_by(&mut self, width_of: impl Fn(&str) -> f32, text: &str) {
         const RUN: usize = 16;
         for ch in text.chars() {
             if !ch.is_ascii() && !self.wide.contains_key(&ch) {
-                let width = width_of(window, &ch.to_string().repeat(RUN)) / RUN as f32;
+                let width = width_of(&ch.to_string().repeat(RUN)) / RUN as f32;
                 self.wide
                     .insert(ch, if width > 0.0 { width } else { self.ascii * 2.0 });
             }
@@ -85,8 +97,8 @@ impl Metrics {
 
     /// The character boundary nearest to `x`. The editor asks
     /// `inlays::column_at`, which knows the hints; this is what it must
-    /// agree with on a line without any.
-    #[cfg(test)]
+    /// agree with on a line without any, and what a diff, which has none,
+    /// asks itself.
     pub fn column_at(&self, text: &str, x: f32) -> usize {
         let mut at = 0.0;
         for (col, ch) in text.chars().enumerate() {
