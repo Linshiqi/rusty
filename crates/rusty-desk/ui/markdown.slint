@@ -96,6 +96,12 @@ component Flow inherits VerticalLayout {
 export component MarkdownView inherits VerticalLayout {
     in property <[MdBlock]> blocks;
     in property <length> font-size: Theme.small;
+    // A heading's size against the text's, by level, the fourth on at the
+    // text's own: a page's, unless whoever draws it says otherwise — the
+    // hover card's are barely larger than its text.
+    in property <float> h1-scale: 1.6;
+    in property <float> h2-scale: 1.35;
+    in property <float> h3-scale: 1.15;
     spacing: 8px;
     for block in root.blocks: VerticalLayout {
         // Text, indented for the quotes and lists it is in.
@@ -155,7 +161,7 @@ export component MarkdownView inherits VerticalLayout {
         }
         if block.kind == 1: VerticalLayout {
             padding-top: block.level <= 2 ? 6px : 2px;
-            property <length> size: block.level == 1 ? root.font-size * 1.6 : block.level == 2 ? root.font-size * 1.35 : block.level == 3 ? root.font-size * 1.15 : root.font-size;
+            property <length> size: block.level == 1 ? root.font-size * root.h1-scale : block.level == 2 ? root.font-size * root.h2-scale : block.level == 3 ? root.font-size * root.h3-scale : root.font-size;
             if !block.flowing: StyledText {
                 text: block.text;
                 default-color: Theme.label;

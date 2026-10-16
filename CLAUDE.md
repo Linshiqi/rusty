@@ -1179,16 +1179,27 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   signature is only the code the hover opens with** (`hover::split`): an
   example in the docs was once lifted into the code rows at the top, and
   a hover that opens with words, as clangd's does, is documentation from
-  its first line, in its own order. **The card is meant to scroll under
-  the wheel when what it holds is taller than 360 px, and does not yet**:
-  the card's column measures the docs short when their paragraphs wrap —
-  the card on `true` came out 203 px for some 350 px of text, its
-  `preferred-height` and `min-height` alike, while each block inside is
-  drawn at its wrapped height — so long docs are cut at the card's foot
-  rather than scrolled. Which measure undercounts (a `StyledText`'s height
-  for its width, read through `MarkdownView`'s repeated blocks before
-  their widths settle, is the suspect) is not yet found; the probe's
-  `RUSTY_PROBE_ROOM` photographs it.
+  its first line, in its own order. **The card is at most half the
+  editor's height, 480 px at most, and scrolls under the wheel**, VS Code's
+  hover: the wheel over it is the card's while there is more of it to
+  see, and the code under it stays where it is; a card that holds all of
+  it lets the wheel through to the code, as VS Code's does. It is never
+  taller than the larger of the rooms above and below its line, so it
+  stands whole on one side — sized by the view alone, a card below a line
+  in the middle of the view ran under the status bar. A heading there is bold
+  and barely larger than the text (`MarkdownView`'s `h1-scale`…`h3-scale`,
+  the page keeping its own). **How tall the card's text is comes off the
+  laid-out column, never its `preferred-height`** — measured that way the
+  card on `true` was 203 px for some 350 px of text, and long docs were
+  cut at its foot. Slint 1.18 asks a component of rows for its height at
+  *no* width (`cell_v_constraint`: `f32::MAX`) unless a layout solving it
+  hands it one, so every wrapped paragraph of a `MarkdownView` measures one
+  line, while the same layout's solve, which knows its width, draws each at
+  its wrapped height. So the card lays its column out at the card's width,
+  rows at their own heights from the top (`alignment: start` in room to
+  spare), and reads where an empty mark after the last row landed.
+  Anything else sized by a wrapped layout's `preferred-height` has the same
+  trap.
 - **A key puts the card away, and what the check found follows the
   edits.** The card is about the text as it was when it was asked for, and
   nothing closed it but the pointer: a `;` typed for a `,` and mended under

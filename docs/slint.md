@@ -888,7 +888,11 @@ tests green, and CLAUDE.md saying how it works.
    documentation is drawn as the Markdown page draws blocks, read as
    rustdoc reads a doc comment (`markdown::doc_blocks`: links only to the
    web, an intra-doc name as its text) — `StyledText` alone refused the
-   headings and lists every std doc has and showed the source. The probe's
+   headings and lists every std doc has and showed the source. The card is
+   at most half the editor's height and scrolls under the wheel, its
+   headings bold and barely larger than its text, as VS Code's hover; its
+   height is read off its laid-out column, since a component of rows is
+   measured at no width and every wrapped paragraph counted one line. The probe's
    `RUSTY_PROBE_ROOM` scrolls past the end of a long file, types a dozen
    lines at its very end, walks the arrows down it, clicks the view's last
    row, and photographs the card on `true` and on `sqrt`.

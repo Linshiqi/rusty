@@ -333,8 +333,13 @@ component SignatureCard inherits Rectangle {
 // documentation. Everything is inside the card's own touch area, so the
 // pointer on a fix is still on the card.
 component HoverCard inherits Rectangle {
+    // The room beside its line on the side it goes, from whoever places it.
+    in property <length> room: 480px;
     width: Code.hover-width;
-    height: min(self.tall, 360px);
+    // At most half the editor's height and never more than 480 pixels, as
+    // VS Code's hover is, nor more than the room it has; what does not fit
+    // scrolls under the wheel.
+    height: min(self.tall, min(self.room, max(160px, min(480px, Code.view-height / 2))));
     background: Theme.overlay;
     border-radius: 7px;
     border-width: 1px;
@@ -343,11 +348,20 @@ component HoverCard inherits Rectangle {
     drop-shadow-color: #00000040;
     drop-shadow-offset-y: 3px;
     clip: true;
-    // How tall what it holds is, and how far a card taller than it may be
-    // is scrolled under the wheel. Measured short for documentation whose
-    // paragraphs wrap (CLAUDE.md, the hover card's documentation).
-    property <length> tall: max(column.min-height, column.preferred-height);
+    // How tall what it holds is: where the column put the mark after its
+    // last row, less the spacing before the mark and with the padding below.
+    // Read off the laid-out column, never its preferred height, which
+    // measures every wrapped paragraph of the documentation on one line —
+    // Slint asks a component of rows for its height at no width at all
+    // (`cell_v_constraint`, f32::MAX) unless a layout solving it is giving
+    // it one, as the column does here.
+    property <length> tall: end.y - 8px + 10px;
     property <length> scrolled;
+    // Another card's text starts at its top.
+    property <length> place: Code.hover-x + Code.hover-line * 100000px;
+    changed place => {
+        root.scrolled = 0px;
+    }
     touch := TouchArea {
         changed has-hover => {
             Code.on-card = self.has-hover;
@@ -355,6 +369,8 @@ component HoverCard inherits Rectangle {
                 Code.hovered(-1, 0, 0);
             }
         }
+        // The wheel is the card's while there is more of it to see, as
+        // VS Code's hover takes it: the code under it stays where it is.
         scroll-event(event) => {
             if (event.modifiers.control || root.tall <= root.height) {
                 return reject;
@@ -362,9 +378,13 @@ component HoverCard inherits Rectangle {
             root.scrolled = max(0px, min(root.tall - root.height, root.scrolled - event.delta-y));
             accept
         }
+        // Laid out at the card's width with room for anything, each row at
+        // its own height from the top: the card clips it, and `end` says
+        // where it ended.
         column := VerticalLayout {
             y: -root.scrolled;
-            height: root.tall;
+            height: 20000px;
+            alignment: start;
             padding: 10px;
             spacing: 8px;
             for problem in Code.hover-problems: HorizontalLayout {
@@ -465,9 +485,17 @@ component HoverCard inherits Rectangle {
             }
             // Headings, paragraphs, lists, examples in the editor's colours
             // and links to the web, as a Markdown page draws them.
+            // Headings barely larger than the text, and bold (Rust's), as
+            // VS Code's hover has them; the page keeps its own.
             if Code.hover-has-docs: MarkdownView {
                 blocks: Code.hover-docs;
                 font-size: Theme.small;
+                h1-scale: 1.2;
+                h2-scale: 1.1;
+                h3-scale: 1;
+            }
+            end := Rectangle {
+                height: 0px;
             }
         }
     }
@@ -1459,9 +1487,11 @@ export component CodeView inherits Rectangle {
     }
 
     // Above the line it is about, or below it when there is no room above;
-    // never past the view's right edge.
+    // never past the view's right edge, and never taller than the larger of
+    // the two rooms, so it is whole on one side or the other.
     if Code.hover-open: HoverCard {
         property <length> line-top: Code.hover-line * Code.row-height + list.content-y;
+        room: max(self.line-top - 2px, root.height - self.line-top - Code.row-height - 2px);
         x: max(4px, min(root.gutter + Code.hover-x + list.content-x, root.width - self.width - 12px));
         y: self.line-top - self.height - 2px >= 0 ? self.line-top - self.height - 2px : self.line-top + Code.row-height + 2px;
     }
