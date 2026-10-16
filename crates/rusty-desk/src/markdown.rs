@@ -86,18 +86,64 @@ pub struct Item {
     pub depth: u32,
 }
 
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS)
+    .union(Options::ENABLE_MATH);
+
 /// The blocks of a document.
 pub fn blocks(text: &str) -> Vec<Block> {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_MATH;
     let mut reader = Reader::default();
-    for event in Parser::new_ext(text, options) {
+    for event in Parser::new_ext(text, OPTIONS) {
         reader.take(event);
     }
     reader.flush();
     reader.out
+}
+
+/// The blocks of a doc comment as a language server's hover carries it,
+/// read the way rustdoc reads one: a link is a link only when it goes to
+/// a web address — rust-analyzer resolves an intra-doc link to one where it
+/// can — and an intra-doc link left as a name, `` [`Vec`] `` or
+/// `[crate::Gain]`, is its text, with neither brackets nor a target that
+/// would go nowhere.
+pub fn doc_blocks(text: &str) -> Vec<Block> {
+    let mut reader = Reader {
+        web_links_only: true,
+        ..Reader::default()
+    };
+    for event in Parser::new_with_broken_link_callback(text, OPTIONS, Some(doc_name)) {
+        reader.take(event);
+    }
+    reader.flush();
+    reader.out
+}
+
+/// An intra-doc link the server left as a name: a link to nowhere, which
+/// `doc_blocks` reads as its text.
+fn doc_name<'a>(
+    link: pulldown_cmark::BrokenLink<'a>,
+) -> Option<(pulldown_cmark::CowStr<'a>, pulldown_cmark::CowStr<'a>)> {
+    is_doc_name(&link.reference).then(|| ("".into(), "".into()))
+}
+
+/// Whether the words in `[…]` with no target name an item, as an intra-doc
+/// link does: code, or a path — not `[0]` after an array, nor a note in
+/// brackets.
+fn is_doc_name(reference: &str) -> bool {
+    let reference = reference.trim();
+    let code = reference.len() > 2 && reference.starts_with('`') && reference.ends_with('`');
+    let path = reference.contains("::")
+        && !reference.contains(char::is_whitespace)
+        && reference
+            .chars()
+            .all(|c| c.is_alphanumeric() || "_:<>!@()".contains(c));
+    code || path
+}
+
+/// A link a click may open: an address on the web.
+fn is_web(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
 
 /// Where a list is: its next number, or `None` for bullets.
@@ -116,11 +162,14 @@ struct Reader {
     item: Option<Item>,
     heading: Option<u32>,
     code: Option<(String, String)>,
-    /// The styles open: how deep in each, and the links, innermost last.
+    /// The styles open: how deep in each, and the links, innermost last —
+    /// `None` for one read as its text (`web_links_only`).
     strong: u32,
     emphasis: u32,
     strike: u32,
-    links: Vec<String>,
+    links: Vec<Option<String>>,
+    /// A link is drawn only when it goes to the web (`doc_blocks`).
+    web_links_only: bool,
     /// Inline tags styling as Markdown would: `<code>` and `<kbd>` open.
     html_code: u32,
     table: Option<Vec<Vec<Cell>>>,
@@ -140,13 +189,20 @@ impl Reader {
             emphasis: self.emphasis > 0,
             strike: self.strike > 0,
             code: self.html_code > 0,
-            link: self.links.last().cloned(),
+            link: self.links.last().cloned().flatten(),
         }
     }
 
     fn text(&mut self, text: &str) {
         let style = self.style();
         self.styled(text, style);
+    }
+
+    /// A link opened, to `url` — or, read as rustdoc reads one, its text
+    /// when `url` is no address on the web.
+    fn link(&mut self, url: &str) {
+        let shown = !self.web_links_only || is_web(url);
+        self.links.push(shown.then(|| url.to_string()));
     }
 
     fn styled(&mut self, text: &str, style: Style) {
@@ -294,7 +350,7 @@ impl Reader {
             Tag::Emphasis => self.emphasis += 1,
             Tag::Strong => self.strong += 1,
             Tag::Strikethrough => self.strike += 1,
-            Tag::Link { dest_url, .. } => self.links.push(dest_url.to_string()),
+            Tag::Link { dest_url, .. } => self.link(&dest_url),
             Tag::Image { dest_url, .. } => {
                 // A picture is a block of its own: the text before it is a
                 // paragraph, and the text after it another.
@@ -454,9 +510,7 @@ impl Reader {
                 "i" | "em" => self.emphasis += 1,
                 "s" | "del" | "strike" => self.strike += 1,
                 "code" | "kbd" | "samp" => self.html_code += 1,
-                "a" => self
-                    .links
-                    .push(html::attr(attrs, "href").unwrap_or_default().to_string()),
+                "a" => self.link(html::attr(attrs, "href").unwrap_or_default()),
                 "img" => {
                     self.flush();
                     self.out.push(Block::Image {
@@ -753,6 +807,58 @@ mod tests {
         );
         assert_eq!(text_of(&read[1]), "ok **bold** \\<blink\\>x\\</blink\\>");
         assert_eq!(read.len(), 2, "{read:?}");
+    }
+
+    /// rust-analyzer's hover on `true`, the shape of every std doc: a link
+    /// resolved to the web, a heading, a list with links in its items —
+    /// read as blocks, where `StyledText` alone refused the whole of it and
+    /// the card showed the source.
+    #[test]
+    fn a_doc_comment_is_its_blocks_and_its_web_links() {
+        let doc = "The boolean type, [`bool`](https://doc.rust-lang.org/nightly/std/primitive.bool.html).\n\n\
+                   ## Control structures\n\n\
+                   **true** is the condition of:\n\n\
+                   * The condition in an [`if`](https://doc.rust-lang.org/nightly/std/keyword.if.html) expression\n\
+                   * The condition of a [`while`] loop\n";
+        let read = doc_blocks(doc);
+        assert_eq!(
+            text_of(&read[0]),
+            "The boolean type, [`bool`](https://doc.rust-lang.org/nightly/std/primitive.bool.html)."
+        );
+        assert!(
+            matches!(&read[1], Block::Heading { level: 2, inline, .. } if inline == "Control structures")
+        );
+        assert_eq!(text_of(&read[2]), "**true** is the condition of:");
+        let items: Vec<&str> = read[3..].iter().map(text_of).collect();
+        assert_eq!(
+            items,
+            [
+                "The condition in an [`if`](https://doc.rust-lang.org/nightly/std/keyword.if.html) expression",
+                // Left as a name by the server: its text, no brackets.
+                "The condition of a `while` loop",
+            ]
+        );
+        assert!(
+            read[3..]
+                .iter()
+                .all(|b| matches!(b, Block::Text { item: Some(_), .. }))
+        );
+    }
+
+    /// A link to no web address is its text in a doc comment — a path, an
+    /// anchor — and stays a link on a page; brackets that name nothing stay
+    /// brackets.
+    #[test]
+    fn a_doc_comment_links_only_to_the_web() {
+        let doc = "See [the gain](crate::Gain), [above](#tuning), [`Vec::new`] and v[0] [sic].\n";
+        assert_eq!(
+            text_of(&doc_blocks(doc)[0]),
+            "See the gain, above, `Vec::new` and v\\[0\\] \\[sic\\]."
+        );
+        assert_eq!(
+            text_of(&blocks(doc)[0]),
+            "See [the gain](crate::Gain), [above](#tuning), \\[`Vec::new`\\] and v\\[0\\] \\[sic\\]."
+        );
     }
 
     /// A picture inside a link is still a picture.

@@ -39,6 +39,7 @@ mod git_view;
 mod lab;
 mod lab_words;
 mod markdown_view;
+pub(crate) use markdown_view::doc_blocks;
 mod math;
 mod math_words;
 mod memory;

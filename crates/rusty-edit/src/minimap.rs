@@ -21,21 +21,24 @@ pub struct Frame {
 }
 
 /// The minimap's scroll and the slider for an editor `view_top` pixels down a
-/// text of `rows` rows `row_px` tall with `pad` pixels above and below them,
-/// seen through a view `view_height` tall, on a minimap `height` tall. A file
-/// that fits is drawn from its top; one that does not is scrolled in step
-/// with the editor, so the slider travels the minimap's whole height as the
-/// view travels the file — VS Code's arithmetic.
+/// text of `rows` rows `row_px` tall with `pad` pixels above and below them
+/// and `beyond` pixels past the last row the editor scrolls into (VS Code's
+/// `scrollBeyondLastLine`), seen through a view `view_height` tall, on a
+/// minimap `height` tall. A file that fits is drawn from its top; one that
+/// does not is scrolled in step with the editor, so the slider travels the
+/// minimap's whole height as the view travels the file and the room past
+/// it — VS Code's arithmetic, which counts that room as blank rows.
 pub fn frame(
     rows: u32,
     row_px: f64,
     pad: f64,
+    beyond: f64,
     view_top: f64,
     view_height: f64,
     height: f64,
 ) -> Frame {
-    let content = f64::from(rows) * ROW;
-    let travel = (f64::from(rows) * row_px + 2.0 * pad - view_height).max(0.0);
+    let content = (f64::from(rows) + beyond.max(0.0) / row_px) * ROW;
+    let travel = (f64::from(rows) * row_px + 2.0 * pad + beyond.max(0.0) - view_height).max(0.0);
     let scroll = if content <= height || travel <= 0.0 {
         0.0
     } else {
@@ -102,7 +105,7 @@ mod tests {
     /// A short file is drawn from its top, and the slider is the view's rows.
     #[test]
     fn a_file_that_fits_is_drawn_from_its_top() {
-        let at = frame(100, 20.0, PAD, PAD + 10.0 * 20.0, 400.0, 600.0);
+        let at = frame(100, 20.0, PAD, 0.0, PAD + 10.0 * 20.0, 400.0, 600.0);
         assert_eq!(at.scroll, 0.0);
         assert_eq!(at.slider_top, 10.0 * ROW);
         assert_eq!(at.slider_height, 20.0 * ROW);
@@ -115,19 +118,45 @@ mod tests {
     fn a_long_file_scrolls_in_step_with_the_editor() {
         let (rows, row_px, view, height) = (10_000, 20.0, 400.0, 600.0);
         let travel = f64::from(rows) * row_px + 2.0 * PAD - view;
-        let top = frame(rows, row_px, PAD, 0.0, view, height);
+        let top = frame(rows, row_px, PAD, 0.0, 0.0, view, height);
         assert_eq!(top.scroll, 0.0);
-        let bottom = frame(rows, row_px, PAD, travel, view, height);
+        let bottom = frame(rows, row_px, PAD, 0.0, travel, view, height);
         assert_eq!(bottom.scroll, f64::from(rows) * ROW - height);
         assert!(bottom.slider_top + bottom.slider_height <= height + ROW);
-        let middle = frame(rows, row_px, PAD, travel / 2.0, view, height);
+        let middle = frame(rows, row_px, PAD, 0.0, travel / 2.0, view, height);
         assert!(middle.slider_top > 0.0 && middle.slider_top < height);
+    }
+
+    /// Scrolled past the end until the last row is at the top, the minimap
+    /// is at its own end — the room counted as blank rows — and the slider
+    /// stands on its last rows, inside it.
+    #[test]
+    fn the_room_past_the_end_is_travelled_too() {
+        let (rows, row_px, view, height) = (10_000, 20.0, 400.0, 600.0);
+        let beyond = view - row_px;
+        let deepest = f64::from(rows - 1) * row_px;
+        let end = frame(rows, row_px, 0.0, beyond, deepest, view, height);
+        let blank = beyond / row_px * ROW;
+        assert_eq!(end.scroll, f64::from(rows) * ROW + blank - height);
+        assert_eq!(end.slider_top + end.slider_height, height);
+        // Where the rows end, the slider is above the minimap's foot: the
+        // room is still to come.
+        let rows_end = frame(
+            rows,
+            row_px,
+            0.0,
+            beyond,
+            f64::from(rows) * row_px - view,
+            view,
+            height,
+        );
+        assert!(rows_end.slider_top + rows_end.slider_height < height);
     }
 
     /// A press puts the row under it in the middle of the view.
     #[test]
     fn a_press_centres_its_row() {
-        let at = frame(100, 20.0, PAD, 0.0, 400.0, 600.0);
+        let at = frame(100, 20.0, PAD, 0.0, 0.0, 400.0, 600.0);
         let top = scroll_for(50.0 * ROW, at, 20.0, PAD, 400.0);
         assert_eq!(top, 50.0 * 20.0 + PAD - 200.0);
         assert_eq!(

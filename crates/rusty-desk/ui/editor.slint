@@ -3,12 +3,15 @@
 // input method is composing.
 //
 // Rust measures and places everything (`src/editor/`); this file draws what
-// it is handed. The rows are a ListView, so only the rows on screen exist.
+// it is handed. The rows are a ListView, so only the rows on screen exist —
+// rusty's (`listview.slint`), which scrolls past the last of them.
 
-import { ListView } from "std-widgets.slint";
+import { ListView } from "listview.slint";
 import { Theme } from "theme.slint";
 import { Icons, Icon } from "icons.slint";
 import { IconButton, Tip } from "widgets.slint";
+import { MdBlock } from "shell.slint";
+import { MarkdownView } from "markdown.slint";
 
 export struct Piece {
     text: string,
@@ -148,7 +151,8 @@ export global Code {
     callback hover-fix(int);
     in property <[Row]> hover-code;
     in property <bool> hover-has-docs;
-    in property <styled-text> hover-docs;
+    // The documentation, as the blocks a Markdown page draws.
+    in property <[MdBlock]> hover-docs;
     // The pointer is on the card, which keeps it.
     in-out property <bool> on-card;
     // The pointer moved over a row (or off the rows, at -1), not pressed.
@@ -313,7 +317,7 @@ component SignatureCard inherits Rectangle {
 // pointer on a fix is still on the card.
 component HoverCard inherits Rectangle {
     width: Code.hover-width;
-    height: min(column.preferred-height, 360px);
+    height: min(self.tall, 360px);
     background: Theme.overlay;
     border-radius: 7px;
     border-width: 1px;
@@ -322,6 +326,11 @@ component HoverCard inherits Rectangle {
     drop-shadow-color: #00000040;
     drop-shadow-offset-y: 3px;
     clip: true;
+    // How tall what it holds is, and how far a card taller than it may be
+    // is scrolled under the wheel. Measured short for documentation whose
+    // paragraphs wrap (CLAUDE.md, the hover card's documentation).
+    property <length> tall: max(column.min-height, column.preferred-height);
+    property <length> scrolled;
     touch := TouchArea {
         changed has-hover => {
             Code.on-card = self.has-hover;
@@ -329,7 +338,16 @@ component HoverCard inherits Rectangle {
                 Code.hovered(-1, 0, 0);
             }
         }
+        scroll-event(event) => {
+            if (event.modifiers.control || root.tall <= root.height) {
+                return reject;
+            }
+            root.scrolled = max(0px, min(root.tall - root.height, root.scrolled - event.delta-y));
+            accept
+        }
         column := VerticalLayout {
+            y: -root.scrolled;
+            height: root.tall;
             padding: 10px;
             spacing: 8px;
             for problem in Code.hover-problems: HorizontalLayout {
@@ -421,11 +439,11 @@ component HoverCard inherits Rectangle {
                     }
                 }
             }
-            if Code.hover-has-docs: StyledText {
-                text: Code.hover-docs;
-                default-color: Theme.label-2;
-                default-font-size: Theme.small;
-                link-color: Theme.slate;
+            // Headings, paragraphs, lists, examples in the editor's colours
+            // and links to the web, as a Markdown page draws them.
+            if Code.hover-has-docs: MarkdownView {
+                blocks: Code.hover-docs;
+                font-size: Theme.small;
             }
         }
     }
@@ -891,12 +909,14 @@ export component ShadeView inherits Rectangle {
             Code.zoom(dy);
         } else {
             Shade.scroll-x = max(min(0px, Shade.scroll-x + (shift && dx == 0px ? dy : dx)), min(0px, shade-list.visible-width - shade-list.content-width));
-            Shade.scroll-y = max(min(0px, Shade.scroll-y + (shift && dx == 0px ? 0px : dy)), min(0px, shade-list.visible-height - Shade.rows.length * Code.row-height));
+            Shade.scroll-y = max(min(0px, Shade.scroll-y + (shift && dx == 0px ? 0px : dy)), shade-list.lowest);
         }
     }
     shade-list := ListView {
         width: parent.width;
         height: parent.height;
+        extent: Shade.rows.length * Code.row-height;
+        room: max(0px, self.view-height - Code.row-height);
         content-width: max(self.visible-width, Shade.content-width);
         content-y <=> Shade.scroll-y;
         content-x <=> Shade.scroll-x;
@@ -940,14 +960,15 @@ export component CodeView inherits Rectangle {
     // turned, at once, as VS Code scrolls. Left to the list, a wheel turned
     // within a moment of its own scroll — the pointer still — was the
     // list's whatever was held, and Ctrl scrolled instead of sizing. How far
-    // down it can go is the rows' own height, every row being one: the
-    // list's measure of itself, just after a zoom, still knew none.
+    // down it can go is the rows' own height, every row being one — the
+    // list's measure of itself, just after a zoom, still knew none — and
+    // the room past them, until the last line is at the top.
     function wheel(control: bool, shift: bool, dx: length, dy: length) {
         if (control) {
             Code.zoom(dy);
         } else {
             Code.scroll-x = max(min(0px, Code.scroll-x + (shift && dx == 0px ? dy : dx)), min(0px, list.visible-width - list.content-width));
-            Code.scroll-y = max(min(0px, Code.scroll-y + (shift && dx == 0px ? 0px : dy)), min(0px, list.visible-height - Code.rows.length * Code.row-height));
+            Code.scroll-y = max(min(0px, Code.scroll-y + (shift && dx == 0px ? 0px : dy)), list.lowest);
         }
     }
 
@@ -977,14 +998,17 @@ export component CodeView inherits Rectangle {
     list := ListView {
         width: parent.width;
         height: parent.height;
+        // The rows, and below the last of them room to scroll it to the top.
+        extent: Code.rows.length * Code.row-height;
+        room: max(0px, self.view-height - Code.row-height);
         content-width: max(self.visible-width, Code.content-width);
         content-y <=> Code.scroll-y;
         content-x <=> Code.scroll-x;
         changed content-y => {
             Code.view-changed();
         }
-        changed visible-height => {
-            Code.view-height = self.visible-height;
+        changed view-height => {
+            Code.view-height = self.view-height;
             Code.view-changed();
         }
         changed visible-width => {
@@ -1158,6 +1182,38 @@ export component CodeView inherits Rectangle {
         }
     }
 
+    // The room below the last line: no row, but a press there is a press at
+    // the end of the last line, as in VS Code, a drag from it selects up
+    // into the text, and the wheel scrolls as over the rows. Short of the
+    // list's scroll bars, which are under it.
+    if Code.has-document && Code.rows.length > 0: TouchArea {
+        property <length> top: max(0px, Code.rows.length * Code.row-height + list.content-y);
+        property <length> last: (Code.rows.length - 1) * Code.row-height + list.content-y;
+        y: self.top;
+        width: max(0px, list.visible-width - 14px);
+        height: max(0px, list.view-height - 14px - self.top);
+        mouse-cursor: text;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left) {
+                if (event.kind == PointerEventKind.down) {
+                    Code.pointer(0, Code.rows.length - 1, 1000000px, self.y + self.mouse-y - self.last, event.modifiers);
+                    sink.focus();
+                } else if (event.kind == PointerEventKind.up) {
+                    Code.pointer(2, Code.rows.length - 1, 1000000px, self.y + self.mouse-y - self.last, event.modifiers);
+                }
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                Code.pointer(1, Code.rows.length - 1, self.mouse-x - root.gutter - list.content-x, self.y + self.mouse-y - self.last, {});
+            }
+        }
+        scroll-event(event) => {
+            root.wheel(event.modifiers.control, event.modifiers.shift, event.delta-x, event.delta-y);
+            accept
+        }
+    }
+
     // Where the next key lands. Drawn here rather than by the TextInput, whose
     // own caret sits after whatever it is composing.
     Rectangle {
@@ -1263,7 +1319,7 @@ export component CodeView inherits Rectangle {
                         Code.zoom(event.delta-y);
                         return accept;
                     }
-                    Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - Code.rows.length * Code.row-height));
+                    Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), list.lowest);
                     accept
                 }
             }
@@ -1314,7 +1370,7 @@ export component CodeView inherits Rectangle {
                     Code.zoom(event.delta-y);
                     return accept;
                 }
-                Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), min(0px, list.visible-height - Code.rows.length * Code.row-height));
+                Code.scroll-y = max(min(0px, Code.scroll-y + event.delta-y), list.lowest);
                 accept
             }
         }

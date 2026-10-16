@@ -60,7 +60,12 @@
 //! since it saves and deletes.
 //! With `RUSTY_PROBE_ZOOM` and `RUSTY_PROBE_MENUS` it runs the two in
 //! `probe_surfaces.rs`: Ctrl and the wheel over each text, and the
-//! surfaces' right-click menus.
+//! surfaces' right-click menus. With `RUSTY_PROBE_ROOM`, there too, on a
+//! long file holding `true` and a `.sqrt()`, it scrolls past the last line,
+//! types a dozen lines at the very end and walks the arrows down the file,
+//! saying how much of the view stayed below the caret each time, clicks
+//! the view's last row, and photographs the hover card's documentation on
+//! `true` and `sqrt` — on a copy, since it keeps its typing as a draft.
 //! With `RUSTY_PROBE_TREE`, on a copy of a project with a `src/`, it works
 //! the file tree by its pointer and its keys: a file made in `src` from the
 //! folder's menu (a taken name refused under the box first), a folder made
@@ -191,6 +196,7 @@ pub fn start(window: &AppWindow) {
     let zooming = std::env::var_os("RUSTY_PROBE_ZOOM").is_some();
     let menus = std::env::var_os("RUSTY_PROBE_MENUS").is_some();
     let keyboard = std::env::var_os("RUSTY_PROBE_KEYS").is_some();
+    let room = std::env::var_os("RUSTY_PROBE_ROOM").is_some();
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
     // variables, so it probes itself into a directory of its own.
@@ -453,7 +459,14 @@ pub fn start(window: &AppWindow) {
                 if reading_book {
                     step.set(6400);
                 }
+                if room {
+                    step.set(7600);
+                }
             }
+            // The room below the last line, the caret kept off the view's
+            // edge, and the hover card's documentation as Markdown
+            // (`probe_surfaces.rs`).
+            7600..=7799 if room => crate::probe_surfaces::room(n, &surfaces),
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),

@@ -9,7 +9,9 @@
 //! turned, the right button pressed — at places worked out from the
 //! layout's own sizes; where a place cannot be worked out (a search hit
 //! under fields of the panel's own height) the surface's callback is called
-//! as the click would call it.
+//! as the click would call it. With `RUSTY_PROBE_ROOM` it works the room
+//! below the last line and the caret's margin, and the hover card's
+//! documentation (`room`, below).
 //!
 //! Both need a project with a `README.md` whose first paragraph begins with
 //! a link short enough to stay on one line (Slint hears a link wrapped onto
@@ -149,6 +151,23 @@ impl Run<'_> {
     /// A row of the open menu, picked as its click picks it.
     fn pick(&self, id: &str) {
         self.window.global::<Shell>().invoke_menu_picked(id.into());
+    }
+
+    /// A key pressed and let go with `held` held, as a hand does: each
+    /// modifier down first and up after.
+    fn chord(&self, held: &[Key], text: slint::SharedString) {
+        for key in held {
+            self.send(WindowEvent::KeyPressed {
+                text: (*key).into(),
+            });
+        }
+        self.send(WindowEvent::KeyPressed { text: text.clone() });
+        self.send(WindowEvent::KeyReleased { text });
+        for key in held.iter().rev() {
+            self.send(WindowEvent::KeyReleased {
+                text: (*key).into(),
+            });
+        }
     }
 }
 
@@ -687,6 +706,258 @@ pub fn menus(n: u32, run: &Run) {
             }
             app.act("app.exit");
         }
+        _ => {}
+    }
+}
+
+/// Where the code view stands, in rows: its top, how many it shows, the
+/// caret's, how many of the view's rows are below the caret, and how many
+/// rows the file has.
+struct Stand {
+    top: f32,
+    shown: f32,
+    caret: i32,
+    below: f32,
+    rows: usize,
+}
+
+impl Stand {
+    fn of(code: &Code) -> Stand {
+        let row = code.get_row_height().max(1.0);
+        let top = -code.get_scroll_y() / row;
+        let shown = code.get_view_height() / row;
+        let caret = code.get_caret_line();
+        Stand {
+            top,
+            shown,
+            caret,
+            below: top + shown - (caret as f32 + 1.0),
+            rows: code.get_rows().row_count(),
+        }
+    }
+}
+
+impl std::fmt::Display for Stand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "top row {:.2} of {} rows, {:.1} rows shown, the caret on row {} with {:.1} rows of the view below it",
+            self.top, self.rows, self.shown, self.caret, self.below
+        )
+    }
+}
+
+/// `RUSTY_PROBE_ROOM`, from step 7600, on a long file whose text holds
+/// `true` and a `.sqrt()`: the room below the last line and the caret kept
+/// off the view's edge — Ctrl+End, the wheel past the end, a dozen lines
+/// typed at the very bottom with the view following each, the arrows down
+/// the middle of the file, a click on the view's last row moving nothing —
+/// and then, once the language server answers, the hover card's
+/// documentation drawn as Markdown on `true` and on `sqrt`. On a copy: it
+/// keeps what it typed as a draft.
+pub fn room(n: u32, run: &Run) {
+    let shell = run.window.global::<Shell>();
+    let code = run.window.global::<Code>();
+    let app = work::app();
+    let left = run.editor_left();
+    let say = |what: &str| eprintln!("room: {what}: {}", Stand::of(&code));
+    let draft = || {
+        let editor = app.editor();
+        editor
+            .current_path()
+            .and_then(|path| editor.draft_of(&path))
+            .map(|(text, ..)| text)
+            .unwrap_or_default()
+    };
+    // The line and column, from one, of `needle` in the file — a character
+    // into it, so the caret is inside the word.
+    let find = |needle: &str| {
+        draft().lines().enumerate().find_map(|(index, line)| {
+            let at = line.find(needle)?;
+            Some((index + 1, line[..at].chars().count() + 2))
+        })
+    };
+    // Ask for the card, and wait for it to carry documentation: asked
+    // again every two seconds while the server is still loading.
+    let hover_on = |needle: &str| -> bool {
+        let answered = code.get_hover_open() && code.get_hover_has_docs();
+        if !answered {
+            if run.waited.get().is_multiple_of(50) {
+                app.editor().hide_hover();
+                if let Some((line, col)) = find(needle) {
+                    app.editor().go_to(line, Some(col));
+                }
+                app.act("editor.show-hover");
+            }
+            if !run.until(false, 3000) {
+                return false;
+            }
+        }
+        let kinds: Vec<String> = code
+            .get_hover_docs()
+            .iter()
+            .map(|b| match b.kind {
+                0 if b.depth > 0 => format!("item {}", b.marker),
+                0 => "text".to_string(),
+                1 => format!("heading {}", b.level),
+                2 => format!("code of {} lines", b.lines.row_count()),
+                3 => "rule".to_string(),
+                k => format!("kind {k}"),
+            })
+            .collect();
+        let signature: Vec<String> = code
+            .get_hover_code()
+            .iter()
+            .map(|row| row.pieces.iter().map(|p| p.text.to_string()).collect())
+            .collect();
+        eprintln!(
+            "room: the card on `{needle}` after {:.1} s: open {}, its signature {signature:?}, its documentation {kinds:?}",
+            f64::from(run.waited.get()) * 0.04,
+            code.get_hover_open(),
+        );
+        run.waited.set(0);
+        true
+    };
+    match n {
+        7600 => {
+            if !run.until(shell.get_active_kind() == "file", 750) {
+                return;
+            }
+            run.window.invoke_focus_code();
+            say("opened");
+        }
+        7601 => run.chord(&[Key::Control], Key::End.into()),
+        7605 => {
+            say("Ctrl+End");
+            run.snapshot("room-end.png");
+            // A dozen lines typed at the very end, each ended with Enter —
+            // no letters, so no completion takes the Enter.
+            let mut tops = Vec::new();
+            let mut least = f32::MAX;
+            for i in 0..12 {
+                for c in format!("// {}", "-".repeat(i + 1)).chars() {
+                    run.chord(&[], c.to_string().into());
+                }
+                run.chord(&[], Key::Return.into());
+                let s = Stand::of(&code);
+                least = least.min(s.below);
+                tops.push(format!("{:.1}", s.top));
+            }
+            eprintln!(
+                "room: typing at the end, the view's top row after each Enter {tops:?}; the fewest rows below the caret {least:.1}"
+            );
+        }
+        7608 => {
+            say("typed at the end");
+            run.snapshot("room-typing.png");
+            // Twelve notches down, past where the rows end.
+            for _ in 0..12 {
+                run.wheel(left + 300.0, 160.0, -120.0, false);
+            }
+        }
+        7612 => {
+            say("the wheel past the end");
+            let s = Stand::of(&code);
+            eprintln!(
+                "room: the last row is on the view's row {:.1}; the furthest the view goes is row {}",
+                s.rows as f32 - 1.0 - s.top,
+                s.rows.saturating_sub(1)
+            );
+            run.snapshot("room-past-end.png");
+            run.chord(&[Key::Control], Key::End.into());
+        }
+        7616 => {
+            say("Ctrl+End from past the end");
+            // Down the middle of the file with the arrows.
+            run.chord(&[Key::Control], Key::Home.into());
+            let presses = Stand::of(&code).shown as usize + 20;
+            let mut least = f32::MAX;
+            let mut moved = 0;
+            let mut before = Stand::of(&code).top;
+            for _ in 0..presses {
+                run.chord(&[], Key::DownArrow.into());
+                let s = Stand::of(&code);
+                if s.top != before {
+                    moved += 1;
+                    least = least.min(s.below);
+                }
+                before = s.top;
+            }
+            eprintln!(
+                "room: {presses} presses of Down from the top: the view moved {moved} times, with at least {least:.1} rows below the caret each time"
+            );
+        }
+        7618 => {
+            say("after the arrows");
+            run.snapshot("room-arrows.png");
+            // A click on the view's last whole row moves nothing.
+            let s = Stand::of(&code);
+            let row = (s.top + s.shown).floor() as i32 - 1;
+            code.invoke_pointer(0, row, 20.0, 5.0, Default::default());
+            code.invoke_pointer(2, row, 20.0, 5.0, Default::default());
+            let after = Stand::of(&code);
+            eprintln!(
+                "room: a click on the view's last row ({row}): the caret on row {}, the view moved {:.1} rows",
+                after.caret,
+                after.top - s.top
+            );
+        }
+        // The other group's view is the same list: split, and the wheel
+        // over the left one, which now draws the file from the other
+        // group's rows, takes it past the end too.
+        7619 => app.act("editor.split"),
+        7621 => {
+            for _ in 0..80 {
+                run.wheel(left + 200.0, 160.0, -120.0, false);
+            }
+        }
+        7623 => {
+            let shade = run.window.global::<crate::Shade>();
+            let row = code.get_row_height().max(1.0);
+            eprintln!(
+                "room: split {}, the other group's view at row {:.1} of {} rows",
+                shell.get_split(),
+                -shade.get_scroll_y() / row,
+                shade.get_rows().row_count()
+            );
+            run.snapshot("room-split.png");
+            app.act("tab.close");
+        }
+        // The card on `true`, and on a method of std's, rendered.
+        7630 => {
+            if hover_on("true") {
+                run.snapshot("room-hover-true.png");
+            }
+        }
+        7632 => {
+            app.editor().hide_hover();
+            run.waited.set(0);
+        }
+        7633 => {
+            if hover_on("sqrt") {
+                run.snapshot("room-hover-sqrt.png");
+            }
+        }
+        // The card taller than it may be scrolls under the wheel: three
+        // notches over it, thirty pixels above the line it is about, where
+        // it stands when there is room above (the code begins under the
+        // title bar's forty pixels and the tab strip's thirty-six).
+        7634 => {
+            let line_top =
+                code.get_hover_line() as f32 * code.get_row_height() + code.get_scroll_y();
+            let x = left + code.get_gutter() + code.get_hover_x() + code.get_scroll_x() + 60.0;
+            for _ in 0..3 {
+                run.wheel(x, 76.0 + line_top - 30.0, -120.0, false);
+            }
+        }
+        7636 => {
+            eprintln!(
+                "room: the card after the wheel over it: open {}",
+                code.get_hover_open()
+            );
+            run.snapshot("room-hover-scrolled.png");
+        }
+        7638 => app.act("app.exit"),
         _ => {}
     }
 }
