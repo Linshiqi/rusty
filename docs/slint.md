@@ -433,6 +433,34 @@ tests green, and CLAUDE.md saying how it works.
    committed with a two-line message, the graph read, the merge opened,
    `bad name` refused for its space, `probe/branch` made from a commit and
    checked out, and a search stepping to its first match.
+   Then, for v0.7.1, the page Fork's people expect to resize and copy
+   from. Its four dividers drag — the refs against the log, the log
+   against the commit opened below, the message and files against the
+   diff, the side-by-side diff's two columns — with the editor groups'
+   feel (`Splitter`: a 7 px hold on the hairline, a resize cursor, a
+   double-click back to the default), each pane kept its least by one rule
+   (`panes::fit`, asked through `Shell.pane-fit` while dragging and as the
+   room changes) and kept in `workbench.toml`'s `[layout.history]`. The
+   page lays out to any width its group gives it and draws nothing past
+   it: the log's columns give way as Fork's do (the subject elides first,
+   then the author goes, the date, the hash), the toolbar's verbs drop to
+   fetch, pull, push and the search, the refs go when there is no room
+   for both them and the log, the message and files go above the diff
+   when they cannot sit beside it, and the one-or-two toggle becomes an
+   icon — photographed in the left of two editor groups at 900, 550, 300
+   and 220 px.
+   The diff draws each hunk's header once per side, clipped to its
+   column — the port had drawn one across both — and each side's text in a
+   window of its own that clips and scrolls sideways (both together, as
+   VS Code's side-by-side diff does). A drag selects in it, on the side it
+   started on, and Ctrl+C, the menu's Copy, a double-click's word and
+   Ctrl+A are that side's text alone, without numbers or markers
+   (`diff_select`, pure; `app/git_select.rs`, measuring with a probe of
+   the diff's own font through the editor's `Metrics`). The commit's
+   subject, author and hash, and body are read-only `TextInput`s, Slint's
+   own selection and copy, with a right-click menu of rusty's beside
+   Copy message. `RUSTY_PROBE_HISTORY` drives all of it on a scratch
+   repository and photographs it.
    Memory, a page: every build the project has, the one measured marked and
    one built for another triple said so; the flash image and the static RAM
    against the part's capacity, coloured as they near it; the unattributed

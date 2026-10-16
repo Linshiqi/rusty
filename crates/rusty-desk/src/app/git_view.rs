@@ -3,7 +3,7 @@
 //! lines and labels, an opened commit, and a patch as rows either way.
 
 use rusty_git::{
-    ChangeKind, GitOperation, RefKind, RefNameProblem, RemoteProblem, StatusEntry,
+    ChangeKind, CommitDetail, GitOperation, RefKind, RefNameProblem, RemoteProblem, StatusEntry,
     diff::CellKind,
     log::{edge_line, hits, matches},
     plan::{PromptKind, PromptProblem},
@@ -222,8 +222,14 @@ fn change_row(entry: &StatusEntry, staged: bool, chosen: Option<&(String, bool)>
     }
 }
 
-/// A patch as rows, one column or two, and what to say when there are none.
-fn diff_rows(patch: &str, split: bool) -> (Vec<DiffRow>, String) {
+/// Each row's text on each side as the patch has it — the left column's
+/// (or the one column's) and the right's — `None` where the row is no line
+/// of that side: a header, a note, a blank (`crate::diff_select`).
+pub(super) type RowTexts = Vec<[Option<String>; 2]>;
+
+/// A patch as rows, one column or two, what to say when there are none, and
+/// the text a selection in them selects.
+pub(super) fn diff_rows(patch: &str, split: bool) -> (Vec<DiffRow>, String, RowTexts) {
     let hunks = rusty_git::diff::hunks(patch);
     if hunks.is_empty() {
         let note = if patch.contains("Binary files") || patch.contains("GIT binary patch") {
@@ -231,9 +237,12 @@ fn diff_rows(patch: &str, split: bool) -> (Vec<DiffRow>, String) {
         } else {
             t!("desk.git-no-diff")
         };
-        return (Vec::new(), note);
+        return (Vec::new(), note, Vec::new());
     }
-    let text = |s: &str| SharedString::from(s.replace('\t', "    "));
+    let text = |s: &str| SharedString::from(crate::diff_select::drawn(s));
+    // A cell's text, when it is a line of its side: a note is not.
+    let line_of =
+        |cell: &rusty_git::diff::Cell| (cell.kind != CellKind::Note).then(|| cell.text.clone());
     let kind = |k: CellKind| match k {
         CellKind::Context => 0,
         CellKind::Added => 1,
@@ -242,6 +251,7 @@ fn diff_rows(patch: &str, split: bool) -> (Vec<DiffRow>, String) {
     };
     let number = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
     let mut rows = Vec::new();
+    let mut texts: RowTexts = Vec::new();
     let mut total = 0;
     for hunk in &hunks {
         total += 1 + if split {
@@ -257,6 +267,7 @@ fn diff_rows(patch: &str, split: bool) -> (Vec<DiffRow>, String) {
             text: text(&hunk.header),
             ..DiffRow::default()
         });
+        texts.push([None, None]);
         if split {
             for row in &hunk.rows {
                 let mut out = DiffRow::default();
@@ -277,6 +288,10 @@ fn diff_rows(patch: &str, split: bool) -> (Vec<DiffRow>, String) {
                     None => out.right_kind = 5,
                 }
                 rows.push(out);
+                texts.push([
+                    row.left.as_ref().and_then(line_of),
+                    row.right.as_ref().and_then(line_of),
+                ]);
             }
         } else {
             for line in &hunk.lines {
@@ -287,16 +302,51 @@ fn diff_rows(patch: &str, split: bool) -> (Vec<DiffRow>, String) {
                     text: text(&line.text),
                     ..DiffRow::default()
                 });
+                texts.push([
+                    (line.kind != CellKind::Note).then(|| line.text.clone()),
+                    None,
+                ]);
             }
         }
     }
     rows.truncate(DIFF_ROWS);
+    texts.truncate(DIFF_ROWS);
     let note = if total > rows.len() {
         t!("git.diff-clipped", shown = rows.len(), count = total)
     } else {
         String::new()
     };
-    (rows, note)
+    (rows, note, texts)
+}
+
+/// The opened commit's three pieces of text, as the page shows them and its
+/// menu copies them: the subject; who wrote it, when, and its whole hash;
+/// and the body under the subject. One function, so the bytes a selection
+/// in the page names are the bytes the menu slices.
+pub(super) fn detail_texts(detail: &CommitDetail) -> [String; 3] {
+    let commit = &detail.commit;
+    let body = detail
+        .body
+        .split_once('\n')
+        .map(|(_, rest)| rest.trim())
+        .unwrap_or_default();
+    [
+        commit.summary.clone(),
+        format!(
+            "{} <{}>\n{} · {}",
+            commit.author,
+            commit.email,
+            format::full_time(commit.time),
+            commit.id
+        ),
+        body.to_string(),
+    ]
+}
+
+/// A commit's whole message, as `git log --format=%B` gives it but for the
+/// blank lines at its end.
+pub(super) fn message_of(detail: &CommitDetail) -> String {
+    detail.body.trim_end().to_string()
 }
 
 fn problem_text(problem: PromptProblem) -> String {
@@ -328,6 +378,9 @@ impl App {
     pub(super) fn sync_git(&self) {
         let Some(window) = self.window() else { return };
         let shell = window.global::<Shell>();
+        // The two diffs, kept while what they were made from is the same, so
+        // a selection in one outlives every read that changes nothing there.
+        self.sync_diff_views(&window);
         let state = self.state.borrow();
         let git = &state.git;
 
@@ -435,12 +488,8 @@ impl App {
             .collect();
         shell.set_git_stashes(ModelRc::new(VecModel::from(stashes)));
 
-        // The Changes page: the chosen file's diff.
-        let (rows, note) = match (&git.diff_for, &git.diff) {
-            (Some(_), Some(patch)) => diff_rows(patch, git.split),
-            (Some(_), None) => (Vec::new(), t!("git.loading")),
-            _ => (Vec::new(), t!("git.pick-change")),
-        };
+        // The Changes page: the chosen file's diff, whose rows are
+        // `sync_diff_views`'.
         shell.set_git_diff_title(
             git.diff_for
                 .as_ref()
@@ -458,8 +507,6 @@ impl App {
                 .into(),
         );
         shell.set_git_diff_staged(git.diff_for.as_ref().is_some_and(|(_, s)| *s));
-        shell.set_git_diff_rows(ModelRc::new(VecModel::from(rows)));
-        shell.set_git_diff_note(note.into());
         shell.set_git_split(git.split);
 
         // The refs.
@@ -598,25 +645,11 @@ impl App {
         // The opened commit.
         match &git.detail {
             Some(detail) if git.selected.as_deref() == Some(detail.commit.id.as_str()) => {
-                let commit = &detail.commit;
                 shell.set_git_detail_open(true);
-                shell.set_git_detail_summary(commit.summary.as_str().into());
-                let body = detail
-                    .body
-                    .split_once('\n')
-                    .map(|(_, rest)| rest.trim())
-                    .unwrap_or_default();
+                let [summary, meta, body] = detail_texts(detail);
+                shell.set_git_detail_summary(summary.into());
+                shell.set_git_detail_meta(meta.into());
                 shell.set_git_detail_body(body.into());
-                shell.set_git_detail_meta(
-                    format!(
-                        "{} <{}> · {} · {}",
-                        commit.author,
-                        commit.email,
-                        format::full_time(commit.time),
-                        short(&commit.id)
-                    )
-                    .into(),
-                );
                 let files: Vec<GitFile> = detail
                     .files
                     .iter()
@@ -643,19 +676,7 @@ impl App {
                         }
                     })
                     .collect();
-                let patch = git
-                    .file
-                    .as_ref()
-                    .and_then(|f| detail.files.iter().find(|c| &c.path == f))
-                    .map(|c| c.patch.as_str());
-                let (rows, note) = match patch {
-                    Some(patch) => diff_rows(patch, git.split),
-                    None if detail.files.is_empty() => (Vec::new(), t!("git.no-files")),
-                    None => (Vec::new(), String::new()),
-                };
                 shell.set_git_detail_files(ModelRc::new(VecModel::from(files)));
-                shell.set_git_detail_rows(ModelRc::new(VecModel::from(rows)));
-                shell.set_git_detail_note(note.into());
             }
             _ => {
                 shell.set_git_detail_open(git.selected.is_some());
@@ -670,8 +691,6 @@ impl App {
                     .into(),
                 );
                 shell.set_git_detail_files(ModelRc::default());
-                shell.set_git_detail_rows(ModelRc::default());
-                shell.set_git_detail_note("".into());
             }
         }
 
@@ -725,13 +744,28 @@ mod tests {
     #[test]
     fn a_patch_is_rows_either_way() {
         let patch = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n";
-        let (rows, note) = diff_rows(patch, false);
+        let (rows, note, texts) = diff_rows(patch, false);
         assert!(note.is_empty());
+        assert_eq!(
+            texts,
+            [
+                [None, None],
+                [Some("keep".to_string()), None],
+                [Some("old".to_string()), None],
+                [Some("new".to_string()), None],
+            ],
+            "the header is no line, and the markers are not text"
+        );
         let kinds: Vec<i32> = rows.iter().map(|r| r.kind).collect();
         assert_eq!(kinds, [3, 0, 2, 1]);
         assert_eq!(rows[2].old.as_str(), "2");
         assert_eq!(rows[3].new.as_str(), "2");
-        let (split, _) = diff_rows(patch, true);
+        let (split, _, texts) = diff_rows(patch, true);
+        assert_eq!(
+            texts[2],
+            [Some("old".to_string()), Some("new".to_string())],
+            "each side its own text"
+        );
         assert_eq!(
             split.len(),
             3,

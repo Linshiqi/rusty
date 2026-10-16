@@ -332,6 +332,7 @@ delete-tag = "Delete tag…"
 delete-tag-confirm = "Delete the tag {name}?\nA copy already pushed stays on the remote."
 tag-here = "New tag here…"
 copy-short-hash = "Copy short hash"
+copy-message = "Copy message"
 # A diff too long to draw at once is drawn in part, and says so.
 diff-clipped = "Showing {shown} of {count} lines."
 diff-show-all = "Show all {count}"

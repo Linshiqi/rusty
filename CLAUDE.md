@@ -1699,7 +1699,76 @@ two. A file's diff is a page of its own. `app/git.rs` reads and writes,
   decides what a row looks like. The hunk header
   is drawn once per side, as Fork draws it — one header across both columns
   crossed the centre line, and a row crossing it reads as a layout that has
-  come apart.
+  come apart. **The Slint port drew it across both, which this sentence
+  already forbade**: a rule written down is not a rule kept when the view
+  is drawn again in another toolkit, so the headers are `DiffHeader`, one
+  per column, each clipped to it (`ui/git.slint`).
+- **Each side's text is a window of its own** (`DiffLine`): it clips to its
+  column and scrolls sideways — both sides together, as VS Code's
+  side-by-side diff does — under Shift and the wheel, a touchpad's sideways
+  swipe or the thumb along the foot. Left to the list, the rows took their
+  text's width: the right column ran off the window while the left was cut
+  at the centre, and nothing reached the rest of either. The rows never
+  widen the list (`content-width` is the visible width), and the wheel is
+  the rows' own, as the code view's is, so the list's 800 ms grip on a
+  wheel never eats a sideways turn.
+- **A selection in a diff is the window's, as the editor's is, and stays on
+  the side it started on.** A row is not always a line — a header, a blank
+  across from the other side's run, a note — so each side is read as the
+  lines it shows, in order (`crate::diff_select`, pure and tested), and a
+  selection is two places in them: a drag down the left column copies the
+  old file's text and none of the new one's, a drag that ends on a header
+  takes the line above it whole, and one column copies its lines without
+  `+`, `-` or numbers. A tab is drawn as the four spaces it always was and
+  copied as the tab it is. Ctrl+C, Ctrl+A for the side last pressed,
+  Escape, a double-click's word, Shift+click to extend, and a right-click's
+  Copy and Select all (`app/git_select.rs`). Every distance is measured in
+  the diff's own font — `AppWindow.diff-probe`, smaller than the editor's —
+  through the editor's `Metrics` (`measure_by`), so a `中` in a Chinese
+  book's paragraph is as wide as it is drawn. The rows are kept while the
+  patch under them is the same (`View.made`), because the status is read
+  again after every save anywhere and a selection remade by every read is
+  one nobody can copy. No autoscroll while dragging past the list's edge:
+  the list makes only the rows on screen, and the row holding the drag
+  would be made away under it; Shift+click after scrolling extends instead.
+- **The commit's message is Slint's own text, read-only** (`DetailText`: a
+  `TextInput` with no caret): a drag and Ctrl+C there need nothing of
+  rusty's. The right button, which a `TextInput` leaves alone, reaches the
+  touch area around it, and the menu is rusty's — Copy what that text has
+  selected (its own two byte offsets, sliced from the same
+  `git_view::detail_texts` the page was filled from), Select all, Copy
+  message, Copy hash. The meta line carries the whole hash, so it can be
+  copied from the page as well. A click on a commit or a file gives the
+  keys back to the page, or Up and Down would move a caret in the message.
+- **Every divider on the page drags, and where it was left is kept** —
+  the refs, the log against the commit, the message against the diff, the
+  diff's columns — with the editor groups' `Splitter` and its double-click
+  back to the default, in `workbench.toml`'s `[layout.history]`
+  (`HistoryLayout`, read key by key and brought back inside the room by
+  `sane`). Where a divider may stand is one rule, `panes::fit`, asked by
+  the page both while dragging and whenever the room changes: each pane
+  its least while the room holds both, the room shared in proportion to
+  the two leasts when it does not, whole pixels.
+- **The page lays out to whatever width it is given, and draws nothing
+  past it** (`clip`, and every column with a way to give): the log's
+  columns go as Fork's do — the subject elides first, down to 200 px (a
+  label or two and some words), then the author goes, then the date, then
+  the hash, decided by the width alone so every row keeps the same
+  columns (decided per row, a row with two labels lost its date while the
+  row under it kept it) — a label is elided at 140 px, the graph takes at
+  most two fifths of a narrow row, the toolbar's verbs drop to fetch,
+  pull, push and a search that shrinks to 48 px, the refs column goes when
+  the page cannot hold it and the log's 360 px, the commit's message and
+  files go above its diff when the room cannot hold them beside it (180 px
+  and 260), and the one-or-two toggle becomes an icon. Reported from a
+  split window: at 550 px the dates, the hashes and the right column ran
+  on under the other group's code. **A Slint element given a size and no
+  place is centred in its parent**, which is how a side-by-side diff's left
+  column once drew from the middle of the row over the right one: every
+  absolutely placed piece here says its `x` and `y`. And **a divider's grip
+  is an overlay declared after both panes** — in a layout between them,
+  the pane after it is drawn over the half of its 7 px on that side and
+  takes the press.
 - **The right-click menu is local to the thing under the pointer**: a branch
   offers checkout, merge into and rebase onto the branch checked out (named
   in the item, since "current" says nothing about which that is), a branch
@@ -2953,7 +3022,8 @@ is no browser storage, and what the window remembers between runs is
 - `workbench.toml` (`config::WorkbenchState`) is the recents, the window's
   layout and theme and scale (`WindowLayout`: each dock's size, whether it is
   open, which panel was in front and which were taken off its strip, where
-  the editor groups part, and the editor's, the page's and the terminal's
+  the editor groups part, where the History page's four dividers stand,
+  and the editor's, the page's and the terminal's
   text scales), the editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so

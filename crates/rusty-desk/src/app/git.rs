@@ -103,6 +103,20 @@ pub(super) enum Target {
         untracked: bool,
         nested: bool,
     },
+    /// A page's diff, on the side clicked: Copy and Select all.
+    Diff {
+        which: super::git_select::Which,
+        side: usize,
+    },
+    /// A piece of the opened commit's message — "summary", "meta" or
+    /// "body" — and what was selected in it when the menu opened.
+    Text {
+        which: String,
+        selected: String,
+        id: String,
+        short: String,
+        message: String,
+    },
 }
 
 /// What the panel and the page hold.
@@ -141,6 +155,8 @@ pub(super) struct Git {
     /// Bumped to bring the selected commit into view.
     pub(super) reveal: i32,
     poll: Option<slint::Timer>,
+    /// The two pages' diffs as drawn, and what is selected in them.
+    pub(super) views: super::git_select::Views,
 }
 
 impl Default for Git {
@@ -174,6 +190,7 @@ impl Default for Git {
             menu: None,
             reveal: 0,
             poll: None,
+            views: Default::default(),
         }
     }
 }
@@ -1502,6 +1519,7 @@ impl App {
             Target::Commit { .. } => vec![
                 item("copy-hash", t!("git.copy-hash")),
                 item("copy-short", t!("git.copy-short-hash")),
+                item("copy-message", t!("git.copy-message")),
                 divider(),
                 item("branch-here", t!("git.branch-here")),
                 item("tag-here", t!("git.tag-here")),
@@ -1545,6 +1563,8 @@ impl App {
                 ));
                 items
             }
+            Target::Diff { which, side } => self.diff_menu_items(*which, *side),
+            Target::Text { selected, .. } => App::text_menu_items(selected),
         }
     }
 
@@ -1650,6 +1670,7 @@ impl App {
             Target::Commit { id: commit, short } => match id {
                 "copy-hash" => copy_text(&commit),
                 "copy-short" => copy_text(&short),
+                "copy-message" => self.git_copy_message(commit),
                 "branch-here" => self.git_prompt(PromptKind::Branch { from: Some(commit) }),
                 "tag-here" => self.git_prompt(PromptKind::Tag { at: commit }),
                 "checkout" => self.git(args(&["checkout", "--detach", &commit])),
@@ -1674,7 +1695,66 @@ impl App {
                     self.git_file(id, path, staged);
                 }
             }
+            Target::Diff { which, side } => {
+                self.diff_menu_picked(which, side, id);
+                self.diff_refocus(which);
+            }
+            Target::Text {
+                which,
+                selected,
+                id: commit,
+                short,
+                message,
+            } => match id {
+                "copy-message" => copy_text(&message),
+                "copy-hash" => copy_text(&commit),
+                "copy-short" => copy_text(&short),
+                _ => self.text_menu_picked(id, &which, &selected),
+            },
         }
+    }
+
+    /// A Git menu put away with nothing picked: a diff's keys back to it.
+    pub(super) fn git_menu_dismissed(self: &Rc<Self>) {
+        let target = self.state.borrow_mut().git.menu.take();
+        if let Some(Target::Diff { which, .. }) = target {
+            self.diff_refocus(which);
+        }
+    }
+
+    /// A commit's whole message onto the clipboard: from what was read of
+    /// it when it was opened, or read now — the log holds only subjects.
+    fn git_copy_message(self: &Rc<Self>, id: String) {
+        let known = {
+            let state = self.state.borrow();
+            let git = &state.git;
+            git.detail
+                .iter()
+                .chain(git.cache.iter())
+                .find(|d| d.commit.id == id)
+                .map(super::git_view::message_of)
+        };
+        if let Some(message) = known {
+            copy_text(&message);
+            return;
+        }
+        let Some(root) = self.root() else { return };
+        work::spawn(
+            move || rusty_git::repo::commit(&root, &id).map_err(|e| e.to_string()),
+            |app, detail| match detail {
+                Ok(detail) => {
+                    copy_text(&super::git_view::message_of(&detail));
+                    let mut state = app.state.borrow_mut();
+                    let git = &mut state.git;
+                    git.cache.retain(|d| d.commit.id != detail.commit.id);
+                    git.cache.push(detail);
+                    if git.cache.len() > CACHED {
+                        git.cache.remove(0);
+                    }
+                }
+                Err(why) => app.note(1, why),
+            },
+        );
     }
 
     /// Push a local branch that is not the one checked out.

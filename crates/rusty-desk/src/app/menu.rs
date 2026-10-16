@@ -138,6 +138,8 @@ impl App {
                 self.state.borrow_mut().tab_menu = None;
                 self.front_focus();
             }
+            // A diff's keys back to it.
+            Some("git") => self.git_menu_dismissed(),
             _ => {}
         }
     }

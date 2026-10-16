@@ -43,19 +43,19 @@ pub struct Run<'a> {
 }
 
 impl Run<'_> {
-    fn send(&self, event: WindowEvent) {
+    pub(crate) fn send(&self, event: WindowEvent) {
         self.window.window().dispatch_event(event);
     }
 
     /// The size the window is laid out at, in the pixels events are sent
     /// in — not the system's size over its scale, which a window whose
     /// scale was set from outside need not share.
-    fn size(&self) -> (f32, f32) {
+    pub(crate) fn size(&self) -> (f32, f32) {
         (self.window.get_laid_width(), self.window.get_laid_height())
     }
 
     /// Where the editor area starts across, past the left dock.
-    fn editor_left(&self) -> f32 {
+    pub(crate) fn editor_left(&self) -> f32 {
         let shell = self.window.global::<Shell>();
         if shell.get_left_open() {
             shell.get_left_size() + 1.0
@@ -65,7 +65,7 @@ impl Run<'_> {
     }
 
     /// Where the editor area ends across, before the right dock.
-    fn editor_right(&self) -> f32 {
+    pub(crate) fn editor_right(&self) -> f32 {
         let shell = self.window.global::<Shell>();
         let (width, _) = self.size();
         if shell.get_right_open() {
@@ -84,7 +84,7 @@ impl Run<'_> {
     }
 
     /// The wheel turned at a point, with Ctrl held when `control`.
-    fn wheel(&self, x: f32, y: f32, delta: f32, control: bool) {
+    pub(crate) fn wheel(&self, x: f32, y: f32, delta: f32, control: bool) {
         let position = LogicalPosition::new(x, y);
         if control {
             self.send(WindowEvent::KeyPressed {
@@ -105,19 +105,19 @@ impl Run<'_> {
     }
 
     /// A button pressed and let go at a point.
-    fn click(&self, x: f32, y: f32, button: PointerEventButton) {
+    pub(crate) fn click(&self, x: f32, y: f32, button: PointerEventButton) {
         let position = LogicalPosition::new(x, y);
         self.send(WindowEvent::PointerMoved { position });
         self.send(WindowEvent::PointerPressed { position, button });
         self.send(WindowEvent::PointerReleased { position, button });
     }
 
-    fn snapshot(&self, name: &str) {
+    pub(crate) fn snapshot(&self, name: &str) {
         crate::probe::snapshot(self.window, &self.dir.join(name));
     }
 
     /// Wait at this step until `ready`, at most `ticks` times.
-    fn until(&self, ready: bool, ticks: u32) -> bool {
+    pub(crate) fn until(&self, ready: bool, ticks: u32) -> bool {
         if ready || self.waited.get() >= ticks {
             self.waited.set(0);
             return true;
@@ -128,7 +128,7 @@ impl Run<'_> {
     }
 
     /// The open menu's rows, as they read.
-    fn menu(&self) -> Vec<String> {
+    pub(crate) fn menu(&self) -> Vec<String> {
         let shell = self.window.global::<Shell>();
         if !shell.get_menu_open() {
             return vec!["(no menu)".to_string()];
@@ -147,7 +147,7 @@ impl Run<'_> {
     }
 
     /// A row of the open menu, picked as its click picks it.
-    fn pick(&self, id: &str) {
+    pub(crate) fn pick(&self, id: &str) {
         self.window.global::<Shell>().invoke_menu_picked(id.into());
     }
 }
