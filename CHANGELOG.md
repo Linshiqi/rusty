@@ -9,6 +9,36 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.3
+
+**Code is drawn in a monospace font on every platform.** The editor named
+one font, which Windows ships and macOS and Linux do not, and where it was
+missing the text came out in a proportional font measured as if it were
+monospaced: a gap after every word, columns that did not line up. rusty now
+tries the platform's own monospace fonts at start and keeps the first one
+that measures monospaced — Menlo on a Mac, DejaVu Sans Mono on Linux,
+Cascadia Mono on Windows as before.
+
+**clangd on a Mac is recognised.** Apple's clangd, the one Xcode and its
+command line tools install, calls itself `Apple clangd version …`, and rusty
+read that as no clangd at all — and then said, under a heading about
+clangd, that rust-analyzer was not installed. Both are fixed: Apple's
+clangd is used, and a missing clangd is reported as a missing clangd.
+
+**On a Mac, more of the shell's world reaches the app.** Homebrew's `bin`
+joins cargo's on the PATH of every command rusty runs and of rusty itself,
+so cmake, ninja, openocd and dfu-util are found when the app is opened
+from the Dock; the built-in terminal starts a login shell, as Terminal.app
+does, with a UTF-8 locale when none is set; a board shows once in the
+device list instead of as both its `cu` and `tty` entries; and a project
+reached through a symlink — every temporary folder on a Mac is one — finds
+its package for Run Test, where it used to be refused.
+
+**Paths are compared the way the disk compares them.** On macOS, whose
+default volume ignores case, two spellings of one file are one file to the
+test lens, the panic links and the language server's answers, as they
+already were on Windows.
+
 ## v0.7.2
 
 **Builds find cargo on a Mac opened from Finder.** An app started from the
