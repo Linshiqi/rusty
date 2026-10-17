@@ -3578,6 +3578,25 @@ is no browser storage, and what the window remembers between runs is
 
 ## Hard-won specifics
 
+- **A macOS app opened from Finder runs on launchd's PATH, not the shell's.**
+  `launchctl getenv PATH` is empty on an ordinary Mac, which means
+  `/usr/bin:/bin:/usr/sbin:/sbin` — and cargo is on PATH only because
+  `~/.zshenv` sources `~/.cargo/env`, which no GUI process reads. So every
+  bare `cargo`, `rustup` and `rustc` the installed app spawned failed with
+  `could not run cargo — is it on PATH?` (ENOENT out of `process::spawn`),
+  while a window started from a terminal inherited the shell's PATH and
+  never showed it. Two things fix it, and both are needed:
+  `tools::tool_bin_dirs` puts `$CARGO_HOME/bin` on every child's PATH, so
+  anything through `process::command` resolves by name; and the window
+  calls `tools::adopt_cargo_bin` first thing in `main` — before a thread
+  exists, which is what its `unsafe` `set_var` requires — for the three
+  crates that spawn without coming through it (`rusty-core`'s `cargo
+  metadata` and `rustc -vV`, `rusty-lsp`'s and `rusty-edit`'s `rustup
+  which`). A first attempt special-cased the one name `cargo` inside
+  `process::command`; that would have left the Environment page, the
+  Crates panel, rust-analyzer and rustfmt all reporting "not installed" on
+  the same machine. When a tool is missing in the app and present in the
+  terminal, compare the two PATHs before reading any code.
 - **Never use PowerShell to transform source files.** It corrupted this repo
   twice: once mangling UTF-8 comments read as ANSI, once flattening a nested
   array so `$pair[0]` indexed a *character* and replaced every `u` with `s`

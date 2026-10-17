@@ -43,6 +43,10 @@ mod zoom;
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
+    // Opened from Finder or the Dock, a macOS app runs on launchd's PATH and
+    // not the shell's, and cargo lives on the shell's. First, before a thread
+    // exists: every spawn in the process reads the environment it sets.
+    rusty_embed::tools::adopt_cargo_bin();
     probe::mark("main");
     if let Err(refusal) = probe::ready() {
         eprintln!("rusty: {refusal}");

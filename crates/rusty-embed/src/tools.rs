@@ -224,17 +224,68 @@ pub(crate) fn data_tools_dir() -> Option<PathBuf> {
 /// into its own directory is one cargo cannot find however correctly the
 /// panel reports it. Handing the directories to the child is what closes
 /// that gap without touching the user's environment.
+///
+/// Cargo's own `bin` is first among them, because a child has to be able to
+/// say `cargo` and `rustup` by name whatever the parent was started with. A
+/// macOS app opened from Finder or the Dock runs on launchd's PATH —
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, never the shell's, which is where
+/// `~/.cargo/env` would have added it — and under that PATH every build in the
+/// installed app stopped at "could not run `cargo` — is it on PATH?" while a
+/// window started from a terminal never saw it.
 pub(crate) fn tool_bin_dirs() -> Vec<PathBuf> {
     // The bundle too, and after the data directory for the reason the ladder
     // gives — these are *appended* to the child's PATH, so anything the user
     // put there themselves is still found first.
-    [data_tools_dir(), bundled_dir()]
+    cargo_bin()
         .into_iter()
-        .flatten()
-        .flat_map(|root| tool_families(&root))
-        .map(|family| family.join("bin"))
+        .chain(
+            [data_tools_dir(), bundled_dir()]
+                .into_iter()
+                .flatten()
+                .flat_map(|root| tool_families(&root))
+                .map(|family| family.join("bin")),
+        )
         .filter(|bin| bin.is_dir())
         .collect()
+}
+
+/// Put cargo's `bin` on *this* process's PATH when it is not there.
+///
+/// For the window, once, before anything else runs: `process::command` hands
+/// every child the directory, but three crates spawn without coming through
+/// it — `rusty-core` runs `cargo metadata` and `rustc -vV` through
+/// `cargo_metadata`'s own command, `rusty-lsp` and `rusty-edit` ask `rustup
+/// which` for rust-analyzer and rustfmt — and under launchd's PATH each of
+/// them answered "not installed" on a machine that had everything. Appended,
+/// so a copy the user put on PATH themselves still wins; nothing is written
+/// anywhere but this process's environment.
+///
+/// Call it before any thread exists: setting an environment variable while
+/// another thread may be reading one is the race the `unsafe` names — the
+/// workspace denies `unsafe` and this is an exception beside the shells'
+/// terminal modes, for the same reason: the standard library offers no other
+/// door.
+#[allow(unsafe_code)]
+pub fn adopt_cargo_bin() {
+    let Some(bin) = cargo_bin().filter(|bin| bin.is_dir()) else {
+        return;
+    };
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(joined) = path_with(&existing, &bin) {
+        // SAFETY: called from `main` before the runtime or any other thread
+        // starts, so no concurrent reader of the environment exists.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
+}
+
+/// `existing` with `dir` appended, or `None` when it is already there.
+fn path_with(existing: &std::ffi::OsStr, dir: &Path) -> Option<std::ffi::OsString> {
+    let mut paths: Vec<PathBuf> = std::env::split_paths(existing).collect();
+    if paths.iter().any(|known| known == dir) {
+        return None;
+    }
+    paths.push(dir.to_path_buf());
+    std::env::join_paths(paths).ok()
 }
 
 /// The directories directly under `tools/`, sorted by name.
@@ -273,7 +324,7 @@ fn cargo_home_from(configured: Option<PathBuf>, home: Option<PathBuf>) -> Option
     configured.or_else(|| home.map(|home| home.join(".cargo")))
 }
 
-fn cargo_bin() -> Option<PathBuf> {
+pub(crate) fn cargo_bin() -> Option<PathBuf> {
     cargo_home().map(|home| home.join("bin"))
 }
 
@@ -298,6 +349,27 @@ pub(crate) fn host_platform() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// launchd's PATH gains cargo's bin at the end; a PATH that already
+    /// names it — the shell's — is left exactly as it is.
+    #[test]
+    fn cargos_bin_is_appended_once_and_never_ahead_of_the_users_own() {
+        let launchd = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
+        let bin = PathBuf::from("/home/me/.cargo/bin");
+        let adopted = path_with(&launchd, &bin).expect("appended");
+        let dirs: Vec<PathBuf> = std::env::split_paths(&adopted).collect();
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+                bin.clone()
+            ]
+        );
+
+        let shell = std::env::join_paths(["/usr/bin", "/home/me/.cargo/bin"]).unwrap();
+        assert_eq!(path_with(&shell, &bin), None);
+    }
 
     #[test]
     fn a_binary_name_carries_the_platforms_extension() {

@@ -54,7 +54,14 @@ use crate::{
 ///   xtensa-esp32-elf-gcc not found`. Appended rather than prepended: a
 ///   compiler the user put on PATH themselves is the one they meant. (Which
 ///   binary *rusty* runs is the other question, and `tools::find` answers it
-///   the other way round — see there.)
+///   the other way round — see there.) **Cargo's own `bin` is among them**
+///   (`tools::tool_bin_dirs`): a macOS app started from Finder or the Dock
+///   gets launchd's PATH — `/usr/bin:/bin:/usr/sbin:/sbin` — and never the
+///   shell's, so `cargo`, `rustup` and `rustc` by name were "could not run
+///   `cargo` — is it on PATH?" in the installed app and fine from a
+///   terminal, which hands over its own. The window adopts the same
+///   directory into its own PATH at launch (`tools::adopt_cargo_bin`) for
+///   the crates that spawn without coming through here.
 /// - **`LIBCLANG_PATH`** from espup's environment when the user's has none:
 ///   bindgen needs it for `esp-idf-sys`, and espup set it for shells that were
 ///   not this process.
@@ -451,6 +458,26 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(child, expected);
+    }
+
+    /// A child started from a parent with launchd's PATH still resolves
+    /// `cargo` by name: cargo's own `bin` is on the PATH it is handed.
+    #[test]
+    fn a_child_is_handed_cargos_bin_whatever_the_parent_had() {
+        let Some(bin) = crate::tools::cargo_bin().filter(|bin| bin.is_dir()) else {
+            eprintln!("no cargo bin directory on this machine; skipping");
+            return;
+        };
+        let command = command("cargo");
+        let path = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("PATH"))
+            .and_then(|(_, value)| value)
+            .expect("the child is handed a PATH");
+        assert!(
+            std::env::split_paths(path).any(|dir| dir == bin),
+            "{path:?} lacks {bin:?}"
+        );
     }
 
     #[test]
