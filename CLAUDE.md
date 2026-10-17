@@ -3578,6 +3578,38 @@ is no browser storage, and what the window remembers between runs is
 
 ## Hard-won specifics
 
+- **A font named in the theme is a font the platform may not have, and
+  Slint says nothing when it has not.** `Theme.mono` was `Cascadia Mono`,
+  which Windows ships and macOS does not; Slint drew the fallback — a
+  proportional sans — and `editor/metrics.rs` measured a run of `M` in it
+  and took that for every character's width, so each token sat at a column
+  the glyphs never reached and every line read with a gap after every
+  word. The layout was right; the font it was told it had was wrong.
+  `rusty-desk/src/font.rs` tries the platform's families in order and keeps
+  the first the window *measures* monospaced (a run of `M` against a run of
+  `i`, through the editor's own probe), sets `Theme.mono` — `in-out` now —
+  on the main window before the editor measures anything, and gives each
+  torn-off window the same (a window has a Theme of its own). Measured, not
+  named: "this platform ships this font" is a guess a stripped install
+  breaks. Verified with `RUSTY_PROBE` on this Mac: Menlo, columns aligned.
+- **A `--version` line is matched by what it contains, not what it starts
+  with.** Apple's clangd prints `Apple clangd version 21.0.0`; the check for
+  a line *starting* `clangd version` called every Mac with Xcode clangd-less
+  — and the error it then raised was `Error::NotFound`, whose text is
+  rust-analyzer's, so the toast said "clangd could not start: rust-analyzer
+  is not installed". One `Error` variant per server now (`ClangdNotFound`),
+  and `is_clangd_version` is pure and tested with Apple's line.
+- **macOS lists every serial device twice** (`/dev/cu.X` and `/dev/tty.X`),
+  and `serialport::available_ports` reports both. `device::is_tty_twin`
+  drops the `tty` one when its `cu` twin is listed — the `cu` one is the one
+  to open; `tty.X` blocks waiting for a carrier. Spelled without a `cfg`,
+  since no other platform names a port `tty.` and the rule is inert there.
+- **The built-in terminal on a Mac is a login shell** (`-l`), as
+  Terminal.app starts one: only a login shell runs `path_helper` and
+  `.zprofile`, which is where Homebrew's PATH comes from in a window opened
+  from the Dock. And `LANG` is set to a UTF-8 locale when nothing sets one —
+  launchd sets none, and a shell with none prints every non-ASCII
+  character as an escape.
 - **A macOS app opened from Finder runs on launchd's PATH, not the shell's.**
   `launchctl getenv PATH` is empty on an ordinary Mac, which means
   `/usr/bin:/bin:/usr/sbin:/sbin` — and cargo is on PATH only because
@@ -3586,9 +3618,11 @@ is no browser storage, and what the window remembers between runs is
   `could not run cargo — is it on PATH?` (ENOENT out of `process::spawn`),
   while a window started from a terminal inherited the shell's PATH and
   never showed it. Two things fix it, and both are needed:
-  `tools::tool_bin_dirs` puts `$CARGO_HOME/bin` on every child's PATH, so
-  anything through `process::command` resolves by name; and the window
-  calls `tools::adopt_cargo_bin` first thing in `main` — before a thread
+  `tools::tool_bin_dirs` puts `$CARGO_HOME/bin` — and on macOS Homebrew's
+  `bin`, where cmake, ninja and openocd come from — on every child's PATH
+  (`tools::shell_bin_dirs`), so anything through `process::command`
+  resolves by name; and the window calls `tools::adopt_shell_bins` first
+  thing in `main` — before a thread
   exists, which is what its `unsafe` `set_var` requires — for the three
   crates that spawn without coming through it (`rusty-core`'s `cargo
   metadata` and `rustc -vV`, `rusty-lsp`'s and `rusty-edit`'s `rustup

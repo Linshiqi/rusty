@@ -223,7 +223,7 @@ impl LspClient {
         query_driver: &[String],
         clangd: Option<&Path>,
     ) -> Result<(LspClient, Events)> {
-        let binary = discover::find_clangd(clangd).ok_or(Error::NotFound)?;
+        let binary = discover::find_clangd(clangd).ok_or(Error::ClangdNotFound)?;
         let mut command = discover::command_for(&binary, root);
         command.args(discover::clangd_args(compile_commands, query_driver));
         let mut child = command.spawn().map_err(Error::Spawn)?;

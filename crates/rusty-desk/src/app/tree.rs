@@ -14,7 +14,7 @@
 use std::rc::Rc;
 
 use rusty_i18n::t;
-use slint::{ComponentHandle, Model, VecModel};
+use slint::ComponentHandle;
 
 use super::{App, Tab, git};
 use crate::{
@@ -1169,38 +1169,14 @@ fn error_text(error: &rusty_edit::Error) -> String {
     }
 }
 
-/// Make `model` hold `rows`, changing only the rows that differ: the rows
-/// before and after a change keep the elements drawing them, the box among
-/// them.
-fn patch(model: &VecModel<TreeRow>, rows: Vec<TreeRow>) {
-    let old = model.row_count();
-    let same = |at: usize, row: &TreeRow| model.row_data(at).as_ref() == Some(row);
-    let mut head = 0;
-    while head < old.min(rows.len()) && same(head, &rows[head]) {
-        head += 1;
-    }
-    let mut tail = 0;
-    while tail < (old - head).min(rows.len() - head)
-        && same(old - 1 - tail, &rows[rows.len() - 1 - tail])
-    {
-        tail += 1;
-    }
-    let (was, now) = (old - head - tail, rows.len() - head - tail);
-    let both = was.min(now);
-    for at in 0..both {
-        model.set_row_data(head + at, rows[head + at].clone());
-    }
-    for at in both..now {
-        model.insert(head + at, rows[head + at].clone());
-    }
-    for _ in both..was {
-        model.remove(head + both);
-    }
-}
+// The rows are patched in place, as the tab strips' are, so the rows before
+// and after a change keep the elements drawing them, the box among them.
+use super::tab_drag::patch;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slint::{Model, VecModel};
 
     fn row(name: &str) -> TreeRow {
         TreeRow {

@@ -9,7 +9,7 @@
 //! trailing whitespace, which is why `daw` leaves a sentence spaced correctly
 //! and `diw` does not.
 
-use super::motion::Span;
+use super::motion::{Span, line_end_at as line_end, line_start_at as line_start};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Object {
@@ -144,22 +144,6 @@ fn paragraph(chars: &[char], cursor: usize, inside: bool) -> Option<(usize, usiz
         }
     }
     Some((start, (end + 1).min(chars.len()), true))
-}
-
-fn line_start(chars: &[char], at: usize) -> usize {
-    let mut at = at.min(chars.len());
-    while at > 0 && chars[at - 1] != '\n' {
-        at -= 1;
-    }
-    at
-}
-
-fn line_end(chars: &[char], at: usize) -> usize {
-    let mut at = at.min(chars.len());
-    while at < chars.len() && chars[at] != '\n' {
-        at += 1;
-    }
-    at
 }
 
 /// The pair enclosing the cursor, counting depth so `di(` inside nested

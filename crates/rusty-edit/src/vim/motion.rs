@@ -172,11 +172,7 @@ pub fn whole_lines(text: &str, cursor: usize, count: usize) -> Span {
 
 pub fn line_start(text: &str, cursor: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();
-    let mut at = cursor.min(chars.len());
-    while at > 0 && chars[at - 1] != '\n' {
-        at -= 1;
-    }
-    at
+    line_start_at(&chars, cursor)
 }
 
 pub fn line_end(text: &str, cursor: usize) -> usize {
@@ -184,7 +180,7 @@ pub fn line_end(text: &str, cursor: usize) -> usize {
     line_end_at(&chars, cursor)
 }
 
-fn line_end_at(chars: &[char], cursor: usize) -> usize {
+pub(super) fn line_end_at(chars: &[char], cursor: usize) -> usize {
     let mut at = cursor.min(chars.len());
     while at < chars.len() && chars[at] != '\n' {
         at += 1;
@@ -241,7 +237,7 @@ fn right(chars: &[char], cursor: usize, count: usize) -> usize {
     (cursor + count).min(end.saturating_sub(1).max(line_start_at(chars, cursor)))
 }
 
-fn line_start_at(chars: &[char], cursor: usize) -> usize {
+pub(super) fn line_start_at(chars: &[char], cursor: usize) -> usize {
     let mut at = cursor.min(chars.len());
     while at > 0 && chars[at - 1] != '\n' {
         at -= 1;

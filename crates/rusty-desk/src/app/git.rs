@@ -799,7 +799,12 @@ impl App {
     /// Fold an empty repository inside the project into it: its `.git`
     /// goes to the recycle bin, after checking again it has no commits.
     fn git_include_nested(self: &Rc<Self>, path: String) {
-        if !confirm(&t!("git.include-nested-confirm", path = path.clone())) {
+        let asked = if cfg!(windows) {
+            t!("git.include-nested-confirm", path = path.clone())
+        } else {
+            t!("git.include-nested-confirm-trash", path = path.clone())
+        };
+        if !confirm(&asked) {
             return;
         }
         let Some(root) = self.root() else { return };

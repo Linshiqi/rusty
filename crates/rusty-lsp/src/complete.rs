@@ -19,19 +19,6 @@
 
 use crate::CompletionItem;
 
-/// Where the identifier under the caret begins, for Ctrl+Space.
-pub fn word_start_before(text: &str, line: u32, col: u32) -> u32 {
-    let Some(line_text) = text.split('\n').nth(line as usize) else {
-        return col;
-    };
-    let chars: Vec<char> = line_text.chars().take(col as usize).collect();
-    let mut start = chars.len();
-    while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
-        start -= 1;
-    }
-    start as u32
-}
-
 /// The word typed since the popup opened — what the list narrows against.
 pub fn typed_word(text: &str, line: u32, word_start: u32) -> String {
     text.split('\n')

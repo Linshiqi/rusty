@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -205,7 +205,7 @@ impl Debugger {
     /// after the fact means parsing a banner in the first one.
     pub fn start(launch: &Launch) -> Result<(Self, Events)> {
         let host = launch.target.is_host();
-        let mut command = Command::new(&launch.gdb);
+        let mut command = crate::spawn::command(&launch.gdb);
         command
             .arg("--interpreter=mi3")
             .arg("--quiet")
@@ -223,15 +223,6 @@ impl Debugger {
             // forgotten: unread, a gdb with something to say filled the pipe
             // and then blocked on it, with every MI answer still to come.
             .stderr(if host { Stdio::piped() } else { Stdio::null() });
-        // The rustup shim exports this for rusty's own build, and gdb has
-        // no business inheriting it — the same leak that made a spawned
-        // cargo compile an esp project with stable.
-        command.env_remove("RUSTUP_TOOLCHAIN");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
 
         let mut child = command.spawn().map_err(|source| Error::Spawn {
             gdb: launch.gdb.display().to_string(),
@@ -854,19 +845,20 @@ pub(crate) mod tests {
     /// waiting, so a test that then sees it end has seen it stopped — not a
     /// filter that matched no test and let it exit on its own.
     pub(crate) fn stand_in() -> (Child, BufReader<ChildStderr>) {
-        let mut child = Command::new(std::env::current_exe().expect("the test binary"))
-            .args([
-                "session::tests::standing_in",
-                "--exact",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env(STAND_IN, "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the test binary runs again");
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("the test binary"))
+                .args([
+                    "session::tests::standing_in",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env(STAND_IN, "1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("the test binary runs again");
         let mut stderr = BufReader::new(child.stderr.take().expect("piped"));
         let mut said = String::new();
         let _ = stderr.read_line(&mut said);

@@ -225,18 +225,19 @@ pub(crate) fn data_tools_dir() -> Option<PathBuf> {
 /// panel reports it. Handing the directories to the child is what closes
 /// that gap without touching the user's environment.
 ///
-/// Cargo's own `bin` is first among them, because a child has to be able to
-/// say `cargo` and `rustup` by name whatever the parent was started with. A
-/// macOS app opened from Finder or the Dock runs on launchd's PATH —
-/// `/usr/bin:/bin:/usr/sbin:/sbin`, never the shell's, which is where
-/// `~/.cargo/env` would have added it — and under that PATH every build in the
-/// installed app stopped at "could not run `cargo` — is it on PATH?" while a
-/// window started from a terminal never saw it.
+/// The shell's own directories come first among them ([`shell_bin_dirs`]),
+/// because a child has to be able to say `cargo` and `rustup` by name
+/// whatever the parent was started with. A macOS app opened from Finder or
+/// the Dock runs on launchd's PATH — `/usr/bin:/bin:/usr/sbin:/sbin`, never
+/// the shell's, which is where `~/.cargo/env` would have added it — and under
+/// that PATH every build in the installed app stopped at "could not run
+/// `cargo` — is it on PATH?" while a window started from a terminal never
+/// saw it.
 pub(crate) fn tool_bin_dirs() -> Vec<PathBuf> {
     // The bundle too, and after the data directory for the reason the ladder
     // gives — these are *appended* to the child's PATH, so anything the user
     // put there themselves is still found first.
-    cargo_bin()
+    shell_bin_dirs()
         .into_iter()
         .chain(
             [data_tools_dir(), bundled_dir()]
@@ -249,11 +250,26 @@ pub(crate) fn tool_bin_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Put cargo's `bin` on *this* process's PATH when it is not there.
+/// The directories a login shell would have put on PATH and launchd does
+/// not: cargo's `bin`, and on macOS Homebrew's — `/opt/homebrew/bin` on
+/// Apple silicon, `/usr/local/bin` on Intel — where cmake, ninja, openocd,
+/// dfu-util and an Arm cross compiler come from. Only the ones that exist.
+pub(crate) fn shell_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = cargo_bin().into_iter().collect();
+    if cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+    dirs.retain(|dir| dir.is_dir());
+    dirs
+}
+
+/// Put the shell's directories ([`shell_bin_dirs`]) on *this* process's
+/// PATH where they are not there.
 ///
 /// For the window, once, before anything else runs: `process::command` hands
-/// every child the directory, but three crates spawn without coming through
-/// it — `rusty-core` runs `cargo metadata` and `rustc -vV` through
+/// every child the directories, but three crates spawn without coming
+/// through it — `rusty-core` runs `cargo metadata` and `rustc -vV` through
 /// `cargo_metadata`'s own command, `rusty-lsp` and `rusty-edit` ask `rustup
 /// which` for rust-analyzer and rustfmt — and under launchd's PATH each of
 /// them answered "not installed" on a machine that had everything. Appended,
@@ -266,26 +282,26 @@ pub(crate) fn tool_bin_dirs() -> Vec<PathBuf> {
 /// terminal modes, for the same reason: the standard library offers no other
 /// door.
 #[allow(unsafe_code)]
-pub fn adopt_cargo_bin() {
-    let Some(bin) = cargo_bin().filter(|bin| bin.is_dir()) else {
-        return;
-    };
+pub fn adopt_shell_bins() {
     let existing = std::env::var_os("PATH").unwrap_or_default();
-    if let Some(joined) = path_with(&existing, &bin) {
+    if let Some(joined) = path_with(&existing, &shell_bin_dirs()) {
         // SAFETY: called from `main` before the runtime or any other thread
         // starts, so no concurrent reader of the environment exists.
         unsafe { std::env::set_var("PATH", joined) };
     }
 }
 
-/// `existing` with `dir` appended, or `None` when it is already there.
-fn path_with(existing: &std::ffi::OsStr, dir: &Path) -> Option<std::ffi::OsString> {
+/// `existing` with each of `dirs` it lacks appended, in order, or `None`
+/// when it already names them all.
+fn path_with(existing: &std::ffi::OsStr, dirs: &[PathBuf]) -> Option<std::ffi::OsString> {
     let mut paths: Vec<PathBuf> = std::env::split_paths(existing).collect();
-    if paths.iter().any(|known| known == dir) {
-        return None;
+    let before = paths.len();
+    for dir in dirs {
+        if !paths.contains(dir) {
+            paths.push(dir.clone());
+        }
     }
-    paths.push(dir.to_path_buf());
-    std::env::join_paths(paths).ok()
+    (paths.len() > before).then(|| std::env::join_paths(paths).ok())?
 }
 
 /// The directories directly under `tools/`, sorted by name.
@@ -356,19 +372,27 @@ mod tests {
     fn cargos_bin_is_appended_once_and_never_ahead_of_the_users_own() {
         let launchd = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
         let bin = PathBuf::from("/home/me/.cargo/bin");
-        let adopted = path_with(&launchd, &bin).expect("appended");
+        let brew = PathBuf::from("/opt/homebrew/bin");
+        let adopted = path_with(&launchd, &[bin.clone(), brew.clone()]).expect("appended");
         let dirs: Vec<PathBuf> = std::env::split_paths(&adopted).collect();
         assert_eq!(
             dirs,
             [
                 PathBuf::from("/usr/bin"),
                 PathBuf::from("/bin"),
-                bin.clone()
+                bin.clone(),
+                brew.clone()
             ]
         );
 
-        let shell = std::env::join_paths(["/usr/bin", "/home/me/.cargo/bin"]).unwrap();
-        assert_eq!(path_with(&shell, &bin), None);
+        // The shell's PATH, which names them both, is left alone; one that
+        // names only one gains the other, after everything it had.
+        let shell =
+            std::env::join_paths(["/opt/homebrew/bin", "/usr/bin", "/home/me/.cargo/bin"]).unwrap();
+        assert_eq!(path_with(&shell, &[bin.clone(), brew.clone()]), None);
+        let half = std::env::join_paths(["/usr/bin", "/home/me/.cargo/bin"]).unwrap();
+        let grown = path_with(&half, &[bin, brew.clone()]).expect("appended");
+        assert!(std::env::split_paths(&grown).last() == Some(brew));
     }
 
     #[test]

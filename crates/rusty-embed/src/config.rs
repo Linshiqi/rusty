@@ -121,29 +121,6 @@ pub fn relocate(new_dir: &Path, take_existing: bool) -> Result<RelocateReport> {
     })
 }
 
-/// How much disk the data directory is using.
-///
-/// Its own call rather than a field on [`location`]: this walks the tree, and
-/// `location` is asked for on paths that only want the path. Worth showing at
-/// all because the number is what decides whether to move it — QEMU and the
-/// two esp-gdb builds are most of it, and none of that is obvious from a
-/// directory nobody opens.
-pub fn footprint() -> u64 {
-    fn walk(dir: &Path) -> u64 {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return 0;
-        };
-        entries
-            .flatten()
-            .map(|entry| match entry.file_type() {
-                Ok(kind) if kind.is_dir() => walk(&entry.path()),
-                _ => entry.metadata().map(|meta| meta.len()).unwrap_or(0),
-            })
-            .sum()
-    }
-    data_dir().map(|dir| walk(&dir)).unwrap_or(0)
-}
-
 // ─── workbench state ─────────────────────────────────────────────────────────
 
 /// What the workbench remembers between runs. TOML in the data directory, so
@@ -693,13 +670,6 @@ fn workbench_at(path: &Path) -> WorkbenchState {
     }
 }
 
-pub fn save_workbench(state: &WorkbenchState) -> Result<()> {
-    match workbench_path() {
-        Some(path) => save_workbench_at(&path, state),
-        None => Ok(()),
-    }
-}
-
 fn save_workbench_at(path: &Path, state: &WorkbenchState) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(Error::writing(parent))?;
@@ -773,15 +743,6 @@ fn hold_across_processes(path: &Path) -> Option<std::fs::File> {
 pub fn record_recent(path: &str) {
     // Failure to persist a convenience is not worth failing the open over.
     let _ = update(|state| push_recent(&mut state.recent_projects, path));
-}
-
-/// Drop a project that turned out not to exist any more.
-pub fn forget_recent(path: &str) {
-    let _ = update(|state| {
-        state
-            .recent_projects
-            .retain(|known| !same_dir(Path::new(known), Path::new(path)));
-    });
 }
 
 /// The list discipline, separate from storage so it is testable: newest

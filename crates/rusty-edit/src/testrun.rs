@@ -97,12 +97,6 @@ pub fn verdict_word(text: &str) -> Option<(usize, usize, Verdict)> {
     Some((from, from + word.len(), verdict))
 }
 
-/// Whether a line is the start of a panic — the one line of a failure that
-/// says where it happened, which the dock paints as an error.
-pub fn is_panic_header(text: &str) -> bool {
-    panic_header(text).is_some()
-}
-
 /// `thread '<name>' panicked at …` — with the thread's number between the
 /// two since Rust 1.91 — as the test it names and the rest of the line.
 fn panic_header(text: &str) -> Option<(&str, &str)> {
@@ -150,7 +144,8 @@ pub fn file_in(printed: &str, base: &str, root: &str) -> Option<String> {
     let root = plain(root);
     let root = root.trim_end_matches('/');
     let (head, tail) = full.split_at_checked(root.len())?;
-    let same = if cfg!(windows) {
+    // Folded where the disk folds: Windows, and macOS's default volume.
+    let same = if cfg!(any(windows, target_os = "macos")) {
         head.eq_ignore_ascii_case(root)
     } else {
         head == root

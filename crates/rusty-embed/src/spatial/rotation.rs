@@ -415,10 +415,6 @@ impl Mat3 {
         }
     }
 
-    pub fn from_cols(c0: Vec3, c1: Vec3, c2: Vec3) -> Mat3 {
-        Mat3::from_rows(c0, c1, c2).transpose()
-    }
-
     pub fn row(self, i: usize) -> Vec3 {
         let [x, y, z] = self.m[i];
         Vec3::new(x, y, z)

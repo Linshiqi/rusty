@@ -13,6 +13,7 @@ mod diff_select;
 mod docks;
 mod editor;
 mod filter;
+mod font;
 mod format;
 mod instances;
 mod keys;
@@ -46,7 +47,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // Opened from Finder or the Dock, a macOS app runs on launchd's PATH and
     // not the shell's, and cargo lives on the shell's. First, before a thread
     // exists: every spawn in the process reads the environment it sets.
-    rusty_embed::tools::adopt_cargo_bin();
+    rusty_embed::tools::adopt_shell_bins();
     probe::mark("main");
     if let Err(refusal) = probe::ready() {
         eprintln!("rusty: {refusal}");
@@ -90,6 +91,10 @@ fn main() -> Result<(), slint::PlatformError> {
     // system — the two halves of the window then spoke two languages.
     app::apply_locale(&app::chosen_locale(saved.locale.as_deref()));
     probe::mark("locale");
+    // Before the editor measures a character: the font it measures with
+    // has to be one this machine draws monospaced.
+    font::choose(&window);
+    probe::mark("font");
     let app = app::App::new(&window);
     probe::mark("app made");
     work::install(app.clone());

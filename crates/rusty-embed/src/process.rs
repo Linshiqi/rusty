@@ -60,7 +60,7 @@ use crate::{
 ///   shell's, so `cargo`, `rustup` and `rustc` by name were "could not run
 ///   `cargo` — is it on PATH?" in the installed app and fine from a
 ///   terminal, which hands over its own. The window adopts the same
-///   directory into its own PATH at launch (`tools::adopt_cargo_bin`) for
+///   directory into its own PATH at launch (`tools::adopt_shell_bins`) for
 ///   the crates that spawn without coming through here.
 /// - **`LIBCLANG_PATH`** from espup's environment when the user's has none:
 ///   bindgen needs it for `esp-idf-sys`, and espup set it for shells that were
@@ -111,14 +111,14 @@ fn child_path(existing: &OsStr, extra: Vec<PathBuf>) -> Option<std::ffi::OsStrin
 /// Part of [`command`]; on its own only for the one caller that builds its
 /// `Command` some other way.
 #[cfg(windows)]
-pub(crate) fn no_console_window(command: &mut Command) {
+pub fn no_console_window(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
-pub(crate) fn no_console_window(_command: &mut Command) {}
+pub fn no_console_window(_command: &mut Command) {}
 
 /// A running child process — or something that behaves as one.
 ///

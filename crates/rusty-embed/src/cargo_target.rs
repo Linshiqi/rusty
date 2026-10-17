@@ -328,10 +328,23 @@ fn within_or_at(path: &Path, dir: &Path) -> bool {
     key(path).trim_end_matches('/') == key(dir).trim_end_matches('/') || within(path, dir)
 }
 
-/// A path's spelling made comparable: no verbatim prefix, forward slashes,
-/// no `.` parts, a drive letter folded — and on Windows, where the whole
-/// path folds, all of it.
+/// A path's spelling made comparable: the links on it resolved where it
+/// exists, no verbatim prefix, forward slashes, no `.` parts, a drive
+/// letter folded — and on Windows, where the whole path folds, all of it.
+///
+/// Resolved, because the two sides are spelled by two different parties.
+/// `cargo metadata` answers with the paths the filesystem holds — the
+/// directory it is run in is `getcwd`'s, every link on it followed — while
+/// the file is spelled as the project was opened. On macOS a temporary
+/// directory is `/var/folders/…` and cargo says `/private/var/folders/…`
+/// of the same place, and a project opened through a symlink anywhere is
+/// the same two spellings of one directory: compared as text they shared
+/// no prefix, and a file was refused as in no package of the workspace it
+/// plainly sat in. A path that does not exist is compared as spelled —
+/// there is nothing to resolve, and nothing is guessed.
 fn key(path: &Path) -> String {
+    let resolved = path.canonicalize();
+    let path = resolved.as_deref().unwrap_or(path);
     let text = path.to_string_lossy();
     let text = text
         .strip_prefix(r"\\?\")
@@ -344,7 +357,9 @@ fn key(path: &Path) -> String {
         .map(|(_, part)| part)
         .collect();
     let text = text.join("/");
-    if cfg!(windows) {
+    // Folded where the disk folds: Windows, and macOS, whose default volume
+    // is case-insensitive too.
+    if cfg!(any(windows, target_os = "macos")) {
         return text.to_lowercase();
     }
     match text.as_bytes() {
@@ -525,6 +540,43 @@ mod tests {
         );
         assert_eq!(chosen.run_in(Path::new("/")), PathBuf::from("/w"));
         assert_eq!(chosen.run_in(Path::new("/other")), PathBuf::from("/w"));
+    }
+
+    /// A project opened through a symlink — on macOS every temporary
+    /// directory is one, `/var` for `/private/var` — spells its files one
+    /// way while cargo answers with the other. The file still selects its
+    /// package and its target, and cargo still runs where the project was
+    /// opened, spelled as it was opened.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_reached_through_a_symlink_selects_its_package() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let real = dir.path().canonicalize().expect("there");
+        std::fs::create_dir_all(real.join("core").join("src")).expect("a directory");
+        std::fs::write(real.join("core").join("src").join("lib.rs"), "").expect("written");
+        let link = real.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("linked");
+        let ws = Workspace {
+            root: real.clone(),
+            packages: vec![package(
+                "core-part",
+                real.join("core").to_str().expect("utf-8"),
+                &[(TargetKind::Lib, "core_part", "src/lib.rs")],
+            )],
+        };
+        let file = link.join("core").join("src").join("lib.rs");
+        let chosen = select(&ws, &file).expect("selected through the link");
+        assert_eq!(chosen.args(), ["--package", "core-part", "--lib"]);
+        assert_eq!(chosen.run_in(&link), link);
+        assert_eq!(chosen.run_in(&link.join("core")), link.join("core"));
+        // And the other way about: the workspace as opened, the file as
+        // cargo would spell it.
+        let mut opened = ws.clone();
+        opened.root = link.clone();
+        opened.packages[0].dir = link.join("core");
+        let chosen = select(&opened, &real.join("core").join("src").join("lib.rs"))
+            .expect("selected under the link");
+        assert_eq!(chosen.args(), ["--package", "core-part", "--lib"]);
     }
 
     /// The spelling of a path does not decide: separators, a `.` and on

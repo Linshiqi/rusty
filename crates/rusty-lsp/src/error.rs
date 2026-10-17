@@ -15,6 +15,15 @@ pub enum Error {
     )]
     NotFound,
 
+    /// No clangd to spawn. Its own variant, because the one above names
+    /// rust-analyzer in its text: for a release a Mac whose clangd went
+    /// unrecognised was told that rust-analyzer was not installed, under a
+    /// heading about clangd.
+    #[error(
+        "clangd is not installed, so this project's C and C++ have no completion or diagnostics"
+    )]
+    ClangdNotFound,
+
     #[error("could not start rust-analyzer")]
     Spawn(#[source] std::io::Error),
 

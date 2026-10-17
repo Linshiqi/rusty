@@ -120,18 +120,7 @@ pub fn report(root: &Path, firmware: &Path, chip: &str) -> PinReport {
             claims: Vec::new(),
         })
         .collect();
-    pins.sort_by_key(|pin| pin.gpio);
-
-    let mut unknown = Vec::new();
-    for claim in claims {
-        match pins.iter_mut().find(|pin| pin.gpio == claim.gpio) {
-            Some(pin) => pin.claims.push(claim),
-            // Not a gap in the scan: after a chip switch these are precisely
-            // the sites that have to be decided, and burying them among the
-            // pins that do exist would hide the only work there is.
-            None => unknown.push(claim),
-        }
-    }
+    let unknown = sort_claims(&mut pins, claims);
 
     PinReport {
         chip: chip.to_string(),
@@ -140,6 +129,23 @@ pub fn report(root: &Path, firmware: &Path, chip: &str) -> PinReport {
         note: None,
         unknown,
     }
+}
+
+/// Put each claim on the pin it names, the pins in GPIO order, and answer
+/// the claims naming a pin the part does not have. Not a gap in the scan:
+/// after a chip switch these are precisely the sites that have to be
+/// decided, and burying them among the pins that do exist would hide the
+/// only work there is.
+fn sort_claims(pins: &mut [PinInfo], claims: Vec<PinClaim>) -> Vec<PinClaim> {
+    pins.sort_by_key(|pin| pin.gpio);
+    let mut unknown = Vec::new();
+    for claim in claims {
+        match pins.iter_mut().find(|pin| pin.gpio == claim.gpio) {
+            Some(pin) => pin.claims.push(claim),
+            None => unknown.push(claim),
+        }
+    }
+    unknown
 }
 
 /// What a part that is not Espressif's has, from rusty's catalogue: the
@@ -171,14 +177,7 @@ fn from_catalogue(part: &Chip, claims: Vec<PinClaim>) -> PinReport {
             claims: Vec::new(),
         })
         .collect();
-    pins.sort_by_key(|pin| pin.gpio);
-    let mut unknown = Vec::new();
-    for claim in claims {
-        match pins.iter_mut().find(|pin| pin.gpio == claim.gpio) {
-            Some(pin) => pin.claims.push(claim),
-            None => unknown.push(claim),
-        }
-    }
+    let unknown = sort_claims(&mut pins, claims);
     PinReport {
         chip: part.id.clone(),
         pins,

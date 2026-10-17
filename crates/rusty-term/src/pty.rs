@@ -99,7 +99,18 @@ impl Terminal {
                 builder.args(args);
                 builder
             }
-            _ => CommandBuilder::new(default_shell()),
+            _ => {
+                let mut builder = CommandBuilder::new(default_shell());
+                // A login shell, as Terminal.app starts one: a window opened
+                // from Finder carries launchd's PATH, and only `.zprofile`
+                // and `path_helper` — which a login shell runs and a plain one
+                // does not — put Homebrew and the rest of the user's tools
+                // back on it.
+                if cfg!(target_os = "macos") {
+                    builder.arg("-l");
+                }
+                builder
+            }
         };
         if let Some(cwd) = cwd {
             command.cwd(cwd);
@@ -107,6 +118,17 @@ impl Terminal {
         // Without this, programs that check `TERM` decide they are writing to a
         // file and turn off colour — which is most of the Rust toolchain.
         command.env("TERM", "xterm-256color");
+        // And without a UTF-8 locale a shell started outside any terminal
+        // prints every non-ASCII character as an escape: launchd sets no
+        // `LANG`, and Terminal.app sets one from the system's language. Only
+        // when nothing is set — a locale the user chose is theirs.
+        if cfg!(target_os = "macos")
+            && ["LANG", "LC_ALL", "LC_CTYPE"]
+                .iter()
+                .all(|name| std::env::var_os(name).is_none_or(|v| v.is_empty()))
+        {
+            command.env("LANG", "en_US.UTF-8");
+        }
 
         let child = pair.slave.spawn_command(command).map_err(Error::pty)?;
         // Released as soon as the child owns it. On Unix this is what lets the

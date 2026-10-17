@@ -128,6 +128,10 @@ export global Theme {
     out property <length> small: 12px;
     out property <length> caption: 11px;
     out property <length> title: 20px;
-    out property <string> mono: "Cascadia Mono";
+    // The code's font. Set by Rust at start (`src/font.rs`) to the first
+    // family this machine draws monospaced: named here alone, a family the
+    // platform does not ship fell back to a proportional one, and every
+    // column the editor had measured was drawn somewhere else.
+    in-out property <string> mono: "Cascadia Mono";
     out property <length> radius: 6px;
 }

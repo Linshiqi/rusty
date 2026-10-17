@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -672,7 +672,7 @@ fn launch_arguments(launch: &DapLaunch) -> Value {
 }
 
 fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
-    let mut command = Command::new(&launch.adapter);
+    let mut command = crate::spawn::command(&launch.adapter);
     if launch.board.is_some() {
         // One session and then gone, as an IDE expects of an adapter it
         // started; without it probe-rs waits for the next client for ever.
@@ -699,12 +699,6 @@ fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
         } else {
             Stdio::null()
         });
-    command.env_remove("RUSTUP_TOOLCHAIN");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
     command.spawn().map_err(|source| Error::Spawn {
         gdb: launch.adapter.display().to_string(),
         source,

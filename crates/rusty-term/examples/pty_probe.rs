@@ -8,9 +8,10 @@ fn main() {
     // `--example pty_probe -- powershell.exe` probes that shell.
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.is_empty() {
-        let exe = std::env::current_dir()
-            .unwrap()
-            .join("target/debug/rusty-shell.exe");
+        let exe = std::env::current_dir().unwrap().join(format!(
+            "target/debug/rusty-shell{}",
+            std::env::consts::EXE_SUFFIX
+        ));
         argv = vec![exe.to_string_lossy().into_owned()];
     }
     // RUSTY_PROBE_CWD reproduces the app's working-directory choice.

@@ -6,7 +6,7 @@
 //! first one primary) and answers the text and the cursors after, so undo
 //! and the view treat a line moved like any other edit.
 
-use super::cursors::Cursor;
+use super::cursors::{Cursor, line_end, line_start};
 
 /// The first and last line every cursor touches, merged where they meet,
 /// as byte spans of whole lines without their final `\n`: (start, end).
@@ -37,14 +37,6 @@ fn blocks(text: &str, cursors: &[Cursor]) -> Vec<(usize, usize)> {
         }
     }
     merged
-}
-
-fn line_start(text: &str, at: usize) -> usize {
-    text[..at].rfind('\n').map_or(0, |i| i + 1)
-}
-
-fn line_end(text: &str, at: usize) -> usize {
-    text[at..].find('\n').map_or(text.len(), |i| at + i)
 }
 
 fn at_line_start(text: &str, at: usize) -> bool {

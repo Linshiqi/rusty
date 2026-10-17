@@ -51,12 +51,7 @@ pub fn open(project: Option<&Path>) -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    rusty_embed::process::no_console_window(&mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

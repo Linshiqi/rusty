@@ -70,8 +70,9 @@ impl Strips {
 }
 
 /// `model` made to hold `rows`, changing only what differs: the rows
-/// before and after a change keep their elements.
-fn patch<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+/// before and after a change keep their elements — the tree's rows too,
+/// the box among them.
+pub(super) fn patch<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
     let old = model.row_count();
     let same = |at: usize, row: &T| model.row_data(at).as_ref() == Some(row);
     let mut head = 0;

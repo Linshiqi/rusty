@@ -139,11 +139,16 @@ fn answers_as_clangd(candidate: &Path) -> bool {
     command.arg("--version");
     no_console_window(&mut command);
     command.output().is_ok_and(|out| {
-        out.status.success()
-            && String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .any(|line| line.trim_start().starts_with("clangd version"))
+        out.status.success() && is_clangd_version(&String::from_utf8_lossy(&out.stdout))
     })
+}
+
+/// Whether `--version`'s output is clangd's. LLVM's build prints `clangd
+/// version 18.1.8`; Apple's, the one on every Mac with Xcode or its command
+/// line tools, prints `Apple clangd version 21.0.0` — a check for the line
+/// *starting* with the words called every Mac's clangd absent.
+fn is_clangd_version(said: &str) -> bool {
+    said.lines().any(|line| line.contains("clangd version"))
 }
 
 /// clangd's command line for a project: where `compile_commands.json` is,
@@ -307,6 +312,22 @@ mod tests {
         assert!(!is_rust_analyzer_version(""));
         assert!(!is_rust_analyzer_version(
             "error: 'rust-analyzer' is not installed for the toolchain 'stable-x86_64-pc-windows-msvc'\n"
+        ));
+    }
+
+    /// LLVM's clangd and Apple's both name themselves, each in its own
+    /// words; a shell's complaint about a missing command does not.
+    #[test]
+    fn apples_clangd_is_clangd_too() {
+        assert!(is_clangd_version(
+            "clangd version 18.1.8\nFeatures: linux\n"
+        ));
+        assert!(is_clangd_version(
+            "Apple clangd version 21.0.0 (clang-2100.3.34.2)\nFeatures: mac+xpc\n"
+        ));
+        assert!(!is_clangd_version(""));
+        assert!(!is_clangd_version(
+            "xcode-select: note: No developer tools were found\n"
         ));
     }
 

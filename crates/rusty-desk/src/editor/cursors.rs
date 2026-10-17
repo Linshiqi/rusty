@@ -415,11 +415,13 @@ fn step(text: &str, at: usize, motion: Motion) -> usize {
     }
 }
 
-fn line_start(text: &str, at: usize) -> usize {
+/// The first byte of the line `at` is on.
+pub(super) fn line_start(text: &str, at: usize) -> usize {
     text[..at].rfind('\n').map_or(0, |i| i + 1)
 }
 
-fn line_end(text: &str, at: usize) -> usize {
+/// The byte of the `\n` ending the line `at` is on, or the text's end.
+pub(super) fn line_end(text: &str, at: usize) -> usize {
     text[at..].find('\n').map_or(text.len(), |i| at + i)
 }
 

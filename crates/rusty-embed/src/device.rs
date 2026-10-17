@@ -244,6 +244,12 @@ pub fn list_serial_ports(catalog: &Catalog) -> Vec<SerialPort> {
         })
         .collect();
 
+    // macOS names every serial device twice, `/dev/cu.X` and `/dev/tty.X`,
+    // and the enumerator lists both: one board, two rows. The `cu` one is
+    // the one to open — `tty.X` waits for a carrier nothing will raise.
+    let names: Vec<String> = out.iter().map(|port| port.name.clone()).collect();
+    out.retain(|port| !is_tty_twin(&port.name, &names));
+
     // Likely boards first, then stable by name so the list does not reshuffle
     // between refreshes.
     out.sort_by(|a, b| {
@@ -252,6 +258,40 @@ pub fn list_serial_ports(catalog: &Catalog) -> Vec<SerialPort> {
             .then_with(|| a.name.cmp(&b.name))
     });
     out
+}
+
+/// Whether `name` is macOS's `/dev/tty.X` for a `/dev/cu.X` also in
+/// `names`. Spelled for every platform: nothing else names a port with a dot
+/// after `tty`, so the rule is inert where it does not apply.
+fn is_tty_twin(name: &str, names: &[String]) -> bool {
+    name.strip_prefix("/dev/tty.").is_some_and(|rest| {
+        names
+            .iter()
+            .any(|other| other.strip_prefix("/dev/cu.") == Some(rest))
+    })
+}
+
+#[cfg(test)]
+mod twin_tests {
+    use super::is_tty_twin;
+
+    /// A board on a Mac is one row, the `cu` one; a `tty` with no `cu`
+    /// beside it, and Linux's `ttyUSB0`, stay.
+    #[test]
+    fn a_macos_tty_port_hides_behind_its_cu_twin() {
+        let names: Vec<String> = [
+            "/dev/cu.usbserial-110",
+            "/dev/tty.usbserial-110",
+            "/dev/tty.Bluetooth-Incoming-Port",
+            "/dev/ttyUSB0",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert!(is_tty_twin("/dev/tty.usbserial-110", &names));
+        assert!(!is_tty_twin("/dev/cu.usbserial-110", &names));
+        assert!(!is_tty_twin("/dev/tty.Bluetooth-Incoming-Port", &names));
+        assert!(!is_tty_twin("/dev/ttyUSB0", &names));
+    }
 }
 
 /// Debug probes, as reported by `probe-rs list`.

@@ -185,6 +185,14 @@ mod tests {
     /// whose source port is the port it dials, nobody listening there. Made
     /// on purpose here — bound first, then connected to its own address —
     /// where under load it happened about one run in a thousand.
+    ///
+    /// Not on macOS, whose kernel refuses a connection to the socket's own
+    /// address outright (`EINVAL`, measured on Darwin 25; bound first or
+    /// not, and never once in two thousand dials of a port just given
+    /// back), so the simultaneous open cannot be met there and that half
+    /// is skipped aloud. [`connect_local`] is still right there: the
+    /// refusal is an error like any other, and its callers' loops read one
+    /// as "nobody is listening yet" and dial again.
     #[test]
     fn a_socket_joined_to_itself_is_told_from_a_connection() {
         use socket2::{Domain, Socket, Type};
@@ -194,11 +202,22 @@ mod tests {
             .bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())
             .unwrap();
         let own = socket.local_addr().unwrap();
-        socket
-            .connect(&own)
-            .expect("TCP's simultaneous open, alone");
-        let alone: std::net::TcpStream = socket.into();
-        assert!(joined_to_itself(&alone).unwrap(), "{own:?}");
+        match socket.connect(&own) {
+            Ok(()) => {
+                let alone: std::net::TcpStream = socket.into();
+                assert!(joined_to_itself(&alone).unwrap(), "{own:?}");
+            }
+            Err(refused)
+                if cfg!(target_os = "macos")
+                    && refused.kind() == std::io::ErrorKind::InvalidInput =>
+            {
+                eprintln!(
+                    "skipping the socket joined to itself: this kernel refuses a \
+                     connection to the socket's own address ({refused})"
+                );
+            }
+            Err(error) => panic!("TCP's simultaneous open, alone: {error}"),
+        }
 
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
