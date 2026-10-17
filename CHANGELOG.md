@@ -9,6 +9,18 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.2
+
+**Builds find cargo on a Mac opened from Finder.** An app started from the
+Dock or Finder runs with the system's PATH and not your shell's, which is
+where `~/.cargo/env` had put cargo — so Build, Test and Flash stopped at
+"could not run `cargo` — is it on PATH?" in the installed app while a
+terminal on the same machine ran cargo fine. rusty now adds cargo's own
+`bin` directory to the environment of every command it runs, and to its
+own at launch, so cargo, rustup, rustc, rust-analyzer and rustfmt are found
+by name wherever the app was opened from. A copy of any of them you put on
+PATH yourself is still the one used.
+
 ## v0.7.1
 
 **The editor.** The code scrolls past its last line, and the caret keeps

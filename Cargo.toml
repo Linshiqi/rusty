@@ -14,7 +14,7 @@ exclude = ["crates/rusty-core/tests/fixtures", "vendor"]
 # HEAD would still call itself the old one and be offered its own release as
 # an update. `rusty-release`'s tests hold this and the newest CHANGELOG
 # heading to one number.
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 # 1.89 for `File::lock`: rusty windows are separate processes sharing one
 # workbench.toml, and a lock the OS holds is what serialises their writes.
