@@ -115,6 +115,40 @@ fn colour(colour: Colour, dark: bool) -> Option<slint::Color> {
     }
 }
 
+/// What a key does to the clipboard in the terminal, before the shell is
+/// asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Clip {
+    Paste,
+    Copy,
+    None,
+}
+
+/// VS Code's terminal keys, per platform. On Windows and Linux Ctrl+Shift+V
+/// pastes and Ctrl+Shift+C copies, and Ctrl+C copies too while something is
+/// selected — the shell's interrupt otherwise. On a Mac Cmd+V pastes and
+/// Cmd+C copies, as every Mac app's do, and the interrupt is the physical
+/// Ctrl+C, which is not the chord key there and so never reaches this rule.
+fn clip_action(
+    text: &str,
+    mods: crate::platform::Modifiers,
+    alt: bool,
+    shift: bool,
+    selected: bool,
+    macos: bool,
+) -> Clip {
+    if !mods.command || alt {
+        return Clip::None;
+    }
+    if text.eq_ignore_ascii_case("v") && (shift || macos) {
+        return Clip::Paste;
+    }
+    if text.eq_ignore_ascii_case("c") && (shift || macos || selected) {
+        return Clip::Copy;
+    }
+    Clip::None
+}
+
 /// A key as the bytes a terminal expects; `None` for keys with no terminal
 /// meaning, which the window then gets.
 fn encode(text: &str, control: bool, alt: bool) -> Option<Vec<u8>> {
@@ -325,10 +359,17 @@ impl App {
         self: &Rc<Self>,
         text: &str,
         control: bool,
+        meta: bool,
         alt: bool,
         shift: bool,
     ) -> bool {
-        if let Some(stroke) = crate::keys::chord(text, control, alt, shift, false) {
+        // Slint's two flags read as the keyboard means them: on a Mac the
+        // chord key is Cmd and the control key is the physical Ctrl, which
+        // used to be dropped here — so Ctrl+C could not interrupt anything
+        // and Cmd+C sent the interrupt instead of copying.
+        let mods = crate::platform::Modifiers::here(control, meta);
+        let macos = crate::platform::is_macos();
+        if let Some(stroke) = crate::keys::chord(text, mods.command, alt, shift, false) {
             let skips = {
                 let state = self.state.borrow();
                 state
@@ -354,20 +395,19 @@ impl App {
         let Some(terminal) = self.state.borrow().term.terminal.clone() else {
             return false;
         };
-        // Ctrl+Shift+V pastes and Ctrl+Shift+C copies; Ctrl+C copies too
-        // while something is selected, as VS Code's terminal does on
-        // Windows, and is the shell's interrupt otherwise.
-        if control && shift && text.eq_ignore_ascii_case("v") {
-            self.term_paste();
-            return true;
+        match clip_action(text, mods, alt, shift, self.term_has_selection(), macos) {
+            Clip::Paste => {
+                self.term_paste();
+                return true;
+            }
+            Clip::Copy => {
+                self.term_copy();
+                self.term_unselect();
+                return true;
+            }
+            Clip::None => {}
         }
-        if control && !alt && text.eq_ignore_ascii_case("c") && (shift || self.term_has_selection())
-        {
-            self.term_copy();
-            self.term_unselect();
-            return true;
-        }
-        let Some(bytes) = encode(text, control, alt) else {
+        let Some(bytes) = encode(text, mods.control, alt) else {
             return false;
         };
         self.term_unselect();

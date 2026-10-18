@@ -699,7 +699,7 @@ impl App {
         shell.on_term_key(move |event| {
             weak.upgrade().is_some_and(|app| {
                 let m = event.modifiers;
-                app.term_key(&event.text, m.control, m.alt, m.shift)
+                app.term_key(&event.text, m.control, m.meta, m.alt, m.shift)
             })
         });
         on!(on_registers_toggle, |app, name| app.registers_toggle(&name));

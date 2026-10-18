@@ -23,6 +23,7 @@ mod markdown;
 mod panes;
 mod picker;
 mod picture;
+mod platform;
 mod probe;
 mod probe_history;
 mod probe_output;
@@ -48,6 +49,9 @@ fn main() -> Result<(), slint::PlatformError> {
     // not the shell's, and cargo lives on the shell's. First, before a thread
     // exists: every spawn in the process reads the environment it sets.
     rusty_embed::tools::adopt_shell_bins();
+    // Before any window: a Mac's keeps the system's frame, drawn under
+    // rusty's own title bar, and no menu bar whose Quit bypasses `closing()`.
+    platform::select_backend()?;
     probe::mark("main");
     if let Err(refusal) = probe::ready() {
         eprintln!("rusty: {refusal}");
@@ -94,6 +98,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // Before the editor measures a character: the font it measures with
     // has to be one this machine draws monospaced.
     font::choose(&window);
+    platform::mark(&window);
     probe::mark("font");
     let app = app::App::new(&window);
     probe::mark("app made");

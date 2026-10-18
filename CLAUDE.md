@@ -233,6 +233,7 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-desk` | **The window, in Slint** — `docs/slint.md` is the design and the order of the work. One process: a part calls the libraries as `rusty-cli` does, blocking work goes through `work::spawn` and comes back on the UI thread. `ui/*.slint` draws and `src/` decides: the `Shell` global is what the window shows and asks (`app/mod.rs` fills it, one `sync_*` per region), `Code` the editor's rows (`editor/`: Rust measures and places every character, Slint draws). The words are `rusty-i18n`'s catalogue — `t!` in Rust, `@tr("key")` in `.slint`, which `build.rs` bundles as gettext from the TOML — and `catalogue.rs` holds both to it. `RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data rusty <project> <file>` drives the window and photographs it. Drafts outlive the window (`editor/backup.rs`, VS Code's hot exit): every backup write and removal goes through one thread in the order asked, or a backup could land after the save that made it stale. **Rust, C and C++ are rows of one table** (`language.rs`: extensions, comment, server, formatter — a test holds it to `ServerKind::serves`), and `lsp.rs` runs the servers the table names: open, change, close and save go through one ordered thread, a question carries its draft, and an event from a server since replaced is dropped by its generation. A Slint `Path` is fitted into its box less its stroke unless `fit: preserve`, which is why the squiggle once drew two thirds of its width. `actions.rs` is every action and its default key, and the `Keymap` of the keys in force over them; `instances.rs` is New Window and the other rusty windows on the machine |
 | `rusty-setup` | The Windows installer: one executable carrying the app and its tools (`payload`: one tar of the install, xz-compressed whole and appended, found by a footer — 75 MB where per-file deflate made 148), installing per user in `%LOCALAPPDATA%\Programs\rusty` with an uninstall entry and shortcuts of its own (`shell`). Double-clicked it is a window in Slint (`ui.rs`, `ui/setup.slint`, software renderer only): where it goes and a desktop shortcut, then the progress with the release's highlights going by, then Open — in the system's language, Chinese or English; `RUSTY_SETUP_SHOTS=<dir>` with `--features shots` photographs every page. The updater runs it as `--quiet --run --wait <pid>`, with no window, and — cut down to its own part — the uninstaller. `files` stages the payload beside the install and moves it into place, and writes down what it put there (`install.txt`), so an update removes what it no longer carries and the uninstaller removes exactly that |
 | `rusty-release` | What the release workflow runs between the build and the upload: `pack` appends the install directory to the installer, `sign` writes a minisign `.minisig` with the updater key, `verify` checks it with `rusty_embed::update::verify` before anything is published |
+| `rusty-spawn` | The rules every child process is started under, in one crate with no dependencies, under every other crate: no console window on Windows, no inherited `RUSTUP_TOOLCHAIN` (`quiet`), the user's home and cargo's and rustup's (`home_dir`, `cargo_home`, `rustup_home`), the host triple from `rustc -vV` in a directory so a pin answers, and where a rustup component's binary is and *that* it is one (`rustup_component`: `rustup which`, then PATH, each only when `--version` names the component — a file called `rust-analyzer` on PATH is usually rustup's proxy). It exists because rusty-core, rusty-edit, rusty-lsp, rusty-git and rusty-dbg may not depend on rusty-embed and each carried its own copy of those lines, and the copies had drifted: one `cargo_home` honoured `CARGO_HOME` and another did not, and the rustfmt finder had neither the PATH rung nor the `--version` check. Nothing with a dependency goes in it; `rusty_embed::process::command` layers the tool directories and espup's environment on top of its `quiet` |
 
 ## The rules that are load-bearing
 
@@ -3578,6 +3579,58 @@ is no browser storage, and what the window remembers between runs is
 
 ## Hard-won specifics
 
+- **Slint swaps the two modifier flags on a Mac: `modifiers.control` is
+  Cmd and `modifiers.meta` is the physical Ctrl** (i-slint-core's
+  `input.rs` says so in one comment). The window's bindings read `Ctrl+S`
+  as Cmd+S there, which is what a Mac expects — and the terminal, handed
+  `control` alone, sent the shell's interrupt for Cmd+C and a plain `c` for
+  the physical Ctrl+C, so nothing could interrupt a program. `platform::
+  Modifiers` is the one reading of the two flags (`command` is the chord
+  key, `control` the control key; Ctrl is both elsewhere), taken with a
+  `macos: bool` so both readings are tested on every platform; the terminal
+  encodes control codes from `control` and copies and pastes on `command`
+  (Cmd+C / Cmd+V on a Mac, Ctrl+Shift+C / Ctrl+Shift+V elsewhere), and the
+  editor's keymap takes `macos` for the Mac's own arrows and deletes
+  (Cmd+arrow to the line's or the document's edge, Option+arrow a word,
+  Cmd+Backspace the line before the caret: `Command::Kill`). The physical
+  Ctrl means nothing to the editor's keys on a Mac, as in VS Code.
+- **A Mac's window keeps the system's frame, and winit's menu bar is left
+  out.** `no-frame` is `!Theme.macos`, set by Rust before the window shows:
+  with rusty's own frame the traffic lights and native fullscreen were
+  gone, and the winit backend sets decorations *at runtime* from `no-frame`
+  (`winitwindowadapter.rs`), so an attributes hook alone could not keep
+  them. The hook (`platform::select_backend`, `BackendSelector` behind
+  `unstable-winit-030`) makes the title bar transparent, hides its title
+  and draws the content under it, so the lights sit over rusty's title bar,
+  which leaves 78 px for them and draws no buttons of its own. winit's
+  default menu is off (`with_default_menu(false)`): its Quit ended the
+  process behind `closing()` — no unsaved-changes question, no hot exit —
+  and its Hide took Cmd+H from Replace. Quit is `app.exit` on Cmd+Q there,
+  the window's own. A chord is *shown* as `⌘⇧P` on a Mac (`platform::
+  pretty`) and stored as `Ctrl+Shift+P` everywhere, since `Stroke::parse`
+  reads Cmd and Ctrl as one. And a second window is `open -n <bundle>
+  --args …` from inside a bundle (`platform::launcher`): the binary started
+  again gave the Dock a second, nameless icon.
+- **Espressif's macOS esp-gdb archives are stamped with the Darwin release
+  they were built on** — `aarch64-apple-darwin21.1`, `x86_64-apple-darwin14`
+  — so the plain platform name every other Espressif asset uses answers
+  404 there, which is how the installer, the bundle script and a sentence
+  in this file all came to say "Espressif publishes no macOS esp-gdb". It
+  publishes both families for both Macs; `install::gdb_asset` carries the
+  spelling per platform, checked with a HEAD request each, and a platform
+  with no asset is refused with the release page rather than handed a URL
+  that 404s like a bad network. The RISC-V gcc archives use the plain
+  names. A test holds the table per platform; the C toolchain the host
+  itself needs — `xcode-clt` on a Mac (`xcode-select -p`), `cc` on Linux
+  with the distribution's package read off `/etc/os-release` — is a row
+  beside `msvc`'s (`toolchain::HOST_C_TOOLCHAINS`), and the setup plan
+  collapses to whichever is missing. A Mac's proxy is `scutil --proxy`
+  (`net::parse_scutil_proxy`, captured output as the fixture), read only
+  where no variable names one. And a Mac's data directory is
+  `~/Library/Application Support/rusty` only on a machine with no
+  `~/.config/rusty`: a user who has data keeps it where it is
+  (`config::macos_anchor`), and nothing is moved by anything but
+  Relocate.
 - **A font named in the theme is a font the platform may not have, and
   Slint says nothing when it has not.** `Theme.mono` was `Cascadia Mono`,
   which Windows ships and macOS does not; Slint drew the fallback — a

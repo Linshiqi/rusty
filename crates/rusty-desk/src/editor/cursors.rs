@@ -128,6 +128,31 @@ pub fn erased(text: &str, cursors: &[Cursor], forward: bool, word: bool) -> (Str
     })
 }
 
+/// The line before every caret gone (`before`), or the line after it —
+/// Cmd+Backspace and Cmd+Delete on a Mac. A caret already at the edge takes
+/// the line break, as the plain key would; a selection is simply deleted.
+pub fn killed(text: &str, cursors: &[Cursor], before: bool) -> (String, Vec<Cursor>) {
+    edit(text, cursors, |text, cursor| {
+        if !cursor.is_caret() {
+            return (cursor.start(), cursor.end(), String::new());
+        }
+        let at = cursor.head;
+        if before {
+            let start = line_start(text, at);
+            let from = if start == at {
+                previous(text, at)
+            } else {
+                start
+            };
+            (from, at, String::new())
+        } else {
+            let end = line_end(text, at);
+            let to = if end == at { next(text, at) } else { end };
+            (at, to, String::new())
+        }
+    })
+}
+
 /// A new line at every cursor, indented as far as the line it breaks.
 pub fn broken(text: &str, cursors: &[Cursor]) -> (String, Vec<Cursor>) {
     edit(text, cursors, |text, cursor| {

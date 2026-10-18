@@ -65,7 +65,10 @@ pub fn commands(query: &str, keys: &Keymap) -> Vec<(String, String, Pick)> {
             let action = listed[index];
             (
                 titles[index].clone(),
-                keys.chord(action.id).unwrap_or_default().to_string(),
+                crate::platform::pretty(
+                    keys.chord(action.id).unwrap_or_default(),
+                    crate::platform::is_macos(),
+                ),
                 Pick::Action(action.id),
             )
         })

@@ -22,7 +22,10 @@ export component AppWindow inherits Window {
     in property <string> caption: "rusty";
     title: root.caption;
     icon: @image-url("../icons/rusty.png");
-    no-frame: true;
+    // Rusty's own frame, except on a Mac, where the system's — transparent,
+    // its title hidden, the content drawn under it (`src/platform.rs`) —
+    // brings the traffic lights and native fullscreen.
+    no-frame: !Theme.macos;
     resize-border-width: 6px;
     preferred-width: 1280px;
     preferred-height: 820px;

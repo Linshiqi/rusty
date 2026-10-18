@@ -171,6 +171,7 @@ impl App {
         // A window of its own has a Theme of its own; the code's font is the
         // one the main window measured and chose.
         crate::font::adopt(&window);
+        crate::platform::mark_torn(&window);
         let surface = self.editor.beside(&window);
         self.wire_torn(&window, &surface);
         self.torn.borrow_mut().push(Torn {

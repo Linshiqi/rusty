@@ -213,7 +213,8 @@ export component TitleBar inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 6px;
+        // Past the traffic lights on a Mac, which sit over this bar.
+        padding-left: Theme.macos ? 78px : 6px;
         spacing: 2px;
         alignment: start;
         Logo {
@@ -256,30 +257,34 @@ export component TitleBar inherits Rectangle {
                 Shell.act("app.menu");
             }
         }
-        Rectangle {
+        // The window's buttons are the system's on a Mac.
+        if !Theme.macos: Rectangle {
             width: 10px;
         }
-        WindowButton {
+        if !Theme.macos: WindowButton {
             icon: Icons.minimize;
             tip: @tr("desk.minimize");
             clicked => {
                 root.minimize();
             }
         }
-        WindowButton {
+        if !Theme.macos: WindowButton {
             icon: root.maximized ? Icons.restore : Icons.maximize;
             tip: root.maximized ? @tr("desk.restore") : @tr("desk.maximize");
             clicked => {
                 root.toggle-maximize();
             }
         }
-        WindowButton {
+        if !Theme.macos: WindowButton {
             icon: Icons.close;
             tip: @tr("chrome.close");
             danger: true;
             clicked => {
                 root.close();
             }
+        }
+        if Theme.macos: Rectangle {
+            width: 6px;
         }
     }
 }

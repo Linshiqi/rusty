@@ -42,7 +42,11 @@ pub const NEW_WINDOW: &str = "--new-window";
 pub fn open(project: Option<&Path>) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let program = program(exe, std::env::var_os("APPIMAGE"));
+    // A Mac bundle's binary is started through `open`, so the Dock shows
+    // one rusty and not a second, nameless icon for a bare binary.
+    let (program, leading) = crate::platform::launcher(&program);
     let mut command = std::process::Command::new(&program);
+    command.args(&leading);
     match project {
         Some(root) => command.arg(root),
         None => command.arg(NEW_WINDOW),

@@ -187,7 +187,15 @@ const CLICK_SLOP: f32 = 4.0;
 /// Whether the code takes `stroke` for its own — Ctrl+D, Ctrl+Z — before
 /// the window's shortcuts hear it, while the code has the keys.
 pub fn takes(stroke: &crate::keys::Stroke) -> bool {
-    keymap::command(&stroke.text(), stroke.ctrl, stroke.alt, stroke.shift, 1).is_some()
+    keymap::command(
+        &stroke.text(),
+        stroke.ctrl,
+        stroke.alt,
+        stroke.shift,
+        1,
+        crate::platform::is_macos(),
+    )
+    .is_some()
 }
 
 pub struct Surface {
@@ -1114,7 +1122,22 @@ impl Surface {
                 return true;
             }
             let page = this.page();
-            match keymap::command(&event.text, m.control || m.meta, m.alt, m.shift, page) {
+            // The chord key: Ctrl, or Cmd on a Mac, where the physical Ctrl
+            // is `meta` and means nothing to these keys.
+            let mods = crate::platform::Modifiers::here(m.control, m.meta);
+            let ctrl = if crate::platform::is_macos() {
+                mods.command
+            } else {
+                m.control || m.meta
+            };
+            match keymap::command(
+                &event.text,
+                ctrl,
+                m.alt,
+                m.shift,
+                page,
+                crate::platform::is_macos(),
+            ) {
                 Some(command) if this.doc().is_some() => {
                     this.run(command);
                     true
@@ -1310,6 +1333,10 @@ impl Surface {
                 let (t, c) = cursors::erased(&text, &cursors, true, word);
                 Some((t, c, Kind::Deleting))
             }
+            Command::Kill { before } => {
+                let (t, c) = cursors::killed(&text, &cursors, before);
+                Some((t, c, Kind::Deleting))
+            }
             Command::Enter => Some(if single && primary.is_caret() {
                 applied(&text, pairs::on_enter(&text, primary.head), Kind::Other)
             } else {
@@ -1464,7 +1491,9 @@ impl Surface {
         // leaves the word, and the popup goes. The signature is asked
         // again, and goes when the caret has left the call.
         match command {
-            Command::Backspace { .. } | Command::Delete { .. } => self.after_typing(false),
+            Command::Backspace { .. } | Command::Delete { .. } | Command::Kill { .. } => {
+                self.after_typing(false)
+            }
             Command::Suggest => {}
             _ => {
                 self.close_completion();

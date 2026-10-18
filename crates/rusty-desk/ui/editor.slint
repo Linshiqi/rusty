@@ -611,20 +611,24 @@ component FindField inherits Rectangle {
                 Find.step(!event.modifiers.shift);
                 return accept;
             }
+            // Alt+C, W, R, L — and on a Mac, where Option types a character,
+            // the characters Option+C, W, R, L put on a US layout (ç, ∑, ®,
+            // ¬, and ⇧'s Ç, „, ‰, Ò), since the event carries the text and
+            // not the key.
             if (event.modifiers.alt && !event.modifiers.control) {
-                if (event.text == "c" || event.text == "C") {
+                if (event.text == "c" || event.text == "C" || event.text == "ç" || event.text == "Ç") {
                     Find.toggle("case");
                     return accept;
                 }
-                if (event.text == "w" || event.text == "W") {
+                if (event.text == "w" || event.text == "W" || event.text == "∑" || event.text == "„") {
                     Find.toggle("word");
                     return accept;
                 }
-                if (event.text == "r" || event.text == "R") {
+                if (event.text == "r" || event.text == "R" || event.text == "®" || event.text == "‰") {
                     Find.toggle("regex");
                     return accept;
                 }
-                if (event.text == "l" || event.text == "L") {
+                if (event.text == "l" || event.text == "L" || event.text == "¬" || event.text == "Ò") {
                     Find.toggle("scope");
                     return accept;
                 }

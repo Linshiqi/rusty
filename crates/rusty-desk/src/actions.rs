@@ -176,7 +176,18 @@ pub const ALL: &[Action] = &[
     action("debug.over", "debugger.step-over", Some("F10")),
     action("debug.into", "debugger.step-into", Some("F11")),
     action("debug.out", "debugger.step-out", Some("Shift+F11")),
-    action("app.exit", "desk.exit", None),
+    // Cmd+Q on a Mac, the window's own, since winit's menu bar — whose Quit
+    // ends the process behind the window's back — is left out there
+    // (`platform::select_backend`). Elsewhere the frame's close button.
+    action(
+        "app.exit",
+        "desk.exit",
+        if cfg!(target_os = "macos") {
+            Some("Ctrl+Q")
+        } else {
+            None
+        },
+    ),
     // Reached from a button, not looked for by name.
     Action {
         id: "run.rescan",

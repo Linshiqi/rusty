@@ -98,7 +98,11 @@ impl App {
                         .into(),
                     danger: false,
                     // The key in force: a rebound key is the key shown.
-                    chord: keys.chord(id).unwrap_or_default().into(),
+                    chord: crate::platform::pretty(
+                        keys.chord(id).unwrap_or_default(),
+                        crate::platform::is_macos(),
+                    )
+                    .into(),
                 }
             })
             .collect();

@@ -9,6 +9,38 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.4
+
+**A Mac's keys are a Mac's.** In the terminal the physical Ctrl key sends
+the control codes — Ctrl+C interrupts a program again — and Cmd+C and
+Cmd+V copy and paste, as in every Mac app. In the editor Cmd with an arrow
+goes to the start or end of the line or the file, Option with an arrow
+moves by word, Option+Backspace deletes a word and Cmd+Backspace the line
+before the caret. Shortcuts are shown with the Mac's symbols (`⌘⇧P`), and
+Cmd+Q asks about unsaved changes instead of ending the app behind its
+back. The find panel's Alt+C, W, R and L toggles work with the Option key
+on a US layout.
+
+**A Mac's window has its traffic lights.** The window keeps the system's
+frame on macOS — close, minimize and the green fullscreen button sit over
+rusty's own title bar — and New Window opens a second window of the app
+rather than a second, nameless Dock icon.
+
+**One-click installs on every platform.** esp-gdb and the RISC-V C
+toolchain can be installed from the Environment page on macOS and Linux
+too; Espressif publishes both, under names the installer had not known. A
+Mac without the Xcode Command Line Tools and a Linux without a C compiler
+are told so first, with the one command that fixes it, the way a Windows
+machine without the C++ build tools has been. A Mac's proxy settings are
+read, so downloads work behind a corporate proxy with no variable set. And
+a fresh install on a Mac keeps its data in `~/Library/Application Support`;
+an install that already has data in `~/.config/rusty` keeps it there.
+
+**Housekeeping.** One rule, in one small crate, for how every child process
+is started and where cargo, rustup and the user's home are — the rustfmt
+finder now checks what it found the way the rust-analyzer finder does — in
+place of six copies that had drifted apart.
+
 ## v0.7.3
 
 **Code is drawn in a monospace font on every platform.** The editor named

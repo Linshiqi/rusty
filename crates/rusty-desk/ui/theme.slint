@@ -8,6 +8,10 @@ import { Shell } from "shell.slint";
 export global Theme {
     // Dark when chosen, or when the system's is and nothing else was chosen.
     out property <bool> dark: Shell.theme-choice == "dark" || (Shell.theme-choice != "light" && Palette.color-scheme != ColorScheme.light);
+    // A Mac, set by Rust before the window shows (`src/platform.rs`): the
+    // window keeps the system's frame there, so the title bar leaves room
+    // for the traffic lights and draws no buttons of its own.
+    in-out property <bool> macos: false;
 
     // Surfaces, back to front.
     out property <color> window: dark ? #191715 : #ecebe8;

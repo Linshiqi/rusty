@@ -53,14 +53,63 @@ pub enum Command {
     Suggest,
     /// Ctrl+Shift+[ and ]: the block the caret is in collapsed, or opened.
     Fold(bool),
+    /// Cmd+Backspace and Cmd+Delete on a Mac: the line to the caret, or
+    /// from it; at the edge already, the line break.
+    Kill {
+        before: bool,
+    },
 }
 
 /// The command a key names, or `None` for the window's bindings to have it.
-pub fn command(text: &str, ctrl: bool, alt: bool, shift: bool, page: isize) -> Option<Command> {
+///
+/// `ctrl` is the chord key — Ctrl, or Cmd on a Mac, where Slint reports Cmd
+/// as `control` — and `macos` adds the Mac's own keys over VS Code's table:
+/// Cmd with an arrow goes to the line's or the document's edge and Option
+/// with one moves by word, Option+Backspace deletes a word and
+/// Cmd+Backspace the line before the caret. Passed in rather than read off
+/// `cfg!`, so both tables are tested on every platform.
+pub fn command(
+    text: &str,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    page: isize,
+    macos: bool,
+) -> Option<Command> {
     use Command::*;
     let ch = text.chars().next()?;
     let is = |key: Key| ch == char::from(key);
     let letter = (!ch.is_control()).then(|| ch.to_ascii_lowercase());
+    if macos {
+        let own = match (ctrl, alt) {
+            (true, false) => match () {
+                _ if is(Key::LeftArrow) => Some(Move(Motion::Home, shift)),
+                _ if is(Key::RightArrow) => Some(Move(Motion::End, shift)),
+                _ if is(Key::UpArrow) => Some(Edge {
+                    end: false,
+                    extend: shift,
+                }),
+                _ if is(Key::DownArrow) => Some(Edge {
+                    end: true,
+                    extend: shift,
+                }),
+                _ if is(Key::Backspace) => Some(Kill { before: true }),
+                _ if is(Key::Delete) => Some(Kill { before: false }),
+                _ => None,
+            },
+            (false, true) => match () {
+                _ if is(Key::LeftArrow) => Some(Move(Motion::WordLeft, shift)),
+                _ if is(Key::RightArrow) => Some(Move(Motion::WordRight, shift)),
+                _ if is(Key::Backspace) => Some(Backspace { word: true }),
+                _ if is(Key::Delete) => Some(Delete { word: true }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if own.is_some() {
+            return own;
+        }
+    }
     Some(match (ctrl, alt) {
         (false, false) => match () {
             _ if is(Key::LeftArrow) => Move(Motion::Left, shift),
@@ -150,55 +199,115 @@ mod tests {
     #[test]
     fn the_keys_are_vs_codes() {
         assert_eq!(
-            command("d", true, false, false, 30),
+            command("d", true, false, false, 30, false),
             Some(Command::NextMatch)
         );
         assert_eq!(
-            command("L", true, false, true, 30),
+            command("L", true, false, true, 30, false),
             Some(Command::AllMatches)
         );
         assert_eq!(
-            command("K", true, false, true, 30),
+            command("K", true, false, true, 30, false),
             Some(Command::DeleteLines)
         );
         assert_eq!(
-            command("/", true, false, false, 30),
+            command("/", true, false, false, 30, false),
             Some(Command::ToggleComment)
         );
         assert_eq!(
-            command(&key(Key::UpArrow), false, true, false, 30),
+            command(&key(Key::UpArrow), false, true, false, 30, false),
             Some(Command::MoveLines { up: true })
         );
         assert_eq!(
-            command(&key(Key::DownArrow), false, true, true, 30),
+            command(&key(Key::DownArrow), false, true, true, 30, false),
             Some(Command::CopyLines { up: false })
         );
         assert_eq!(
-            command(&key(Key::DownArrow), true, true, false, 30),
+            command(&key(Key::DownArrow), true, true, false, 30, false),
             Some(Command::AddCursor { up: false })
         );
         assert_eq!(
-            command(&key(Key::PageDown), false, false, true, 30),
+            command(&key(Key::PageDown), false, false, true, 30, false),
             Some(Command::Vertical(30, true))
         );
         // Shift turns a bracket into a brace on most layouts.
         assert_eq!(
-            command("{", true, false, true, 30),
+            command("{", true, false, true, 30, false),
             Some(Command::Fold(true))
         );
         assert_eq!(
-            command("]", true, false, true, 30),
+            command("]", true, false, true, 30, false),
             Some(Command::Fold(false))
         );
-        assert_eq!(command("[", true, false, false, 30), Some(Command::Outdent));
+        assert_eq!(
+            command("[", true, false, false, 30, false),
+            Some(Command::Outdent)
+        );
     }
 
     /// What the editor does not take reaches the window: Ctrl+S saves,
     /// Ctrl+P finds a file.
     #[test]
     fn the_windows_chords_are_left_alone() {
-        assert_eq!(command("s", true, false, false, 30), None);
-        assert_eq!(command("p", true, false, false, 30), None);
-        assert_eq!(command("P", true, false, true, 30), None);
+        assert_eq!(command("s", true, false, false, 30, false), None);
+        assert_eq!(command("p", true, false, false, 30, false), None);
+        assert_eq!(command("P", true, false, true, 30, false), None);
+        assert_eq!(command("s", true, false, false, 30, true), None);
+    }
+
+    /// A Mac's own keys: Cmd with an arrow is the line's or the document's
+    /// edge, Option with one is a word, and the deletes follow — where the
+    /// other platforms read Ctrl+Left as a word and Alt+Left as nothing.
+    #[test]
+    fn a_mac_has_its_own_arrows_and_deletes_over_the_shared_table() {
+        let left = key(Key::LeftArrow);
+        let up = key(Key::UpArrow);
+        let back = key(Key::Backspace);
+        assert_eq!(
+            command(&left, true, false, false, 30, true),
+            Some(Command::Move(Motion::Home, false))
+        );
+        assert_eq!(
+            command(&left, true, false, true, 30, true),
+            Some(Command::Move(Motion::Home, true))
+        );
+        assert_eq!(
+            command(&up, true, false, false, 30, true),
+            Some(Command::Edge {
+                end: false,
+                extend: false
+            })
+        );
+        assert_eq!(
+            command(&left, false, true, false, 30, true),
+            Some(Command::Move(Motion::WordLeft, false))
+        );
+        assert_eq!(
+            command(&back, true, false, false, 30, true),
+            Some(Command::Kill { before: true })
+        );
+        assert_eq!(
+            command(&back, false, true, false, 30, true),
+            Some(Command::Backspace { word: true })
+        );
+        // Letters and the line-moving keys are the shared table's on a Mac.
+        assert_eq!(
+            command("d", true, false, false, 30, true),
+            Some(Command::NextMatch)
+        );
+        assert_eq!(
+            command(&up, false, true, false, 30, true),
+            Some(Command::MoveLines { up: true })
+        );
+        assert_eq!(
+            command(&up, true, true, false, 30, true),
+            Some(Command::AddCursor { up: true })
+        );
+        // And the other platforms are what they were.
+        assert_eq!(
+            command(&left, true, false, false, 30, false),
+            Some(Command::Move(Motion::WordLeft, false))
+        );
+        assert_eq!(command(&left, false, true, false, 30, false), None);
     }
 }
