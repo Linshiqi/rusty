@@ -105,10 +105,10 @@ pub fn pretty(chord: &str, macos: bool) -> String {
 /// Replace. Quit is the window's own binding (`app.exit`, Cmd+Q there),
 /// which goes through `closing()`.
 pub fn select_backend() -> Result<(), slint::PlatformError> {
-    if !is_macos() {
-        return Ok(());
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
     }
-    let mut selector = slint::BackendSelector::new();
     #[cfg(target_os = "macos")]
     {
         use slint::winit_030::winit::platform::macos::{
@@ -117,16 +117,16 @@ pub fn select_backend() -> Result<(), slint::PlatformError> {
         let mut builder: slint::winit_030::EventLoopBuilder =
             slint::winit_030::winit::event_loop::EventLoop::with_user_event();
         builder.with_default_menu(false);
-        selector = selector
+        slint::BackendSelector::new()
             .with_winit_event_loop_builder(builder)
             .with_winit_window_attributes_hook(|attributes| {
                 attributes
                     .with_titlebar_transparent(true)
                     .with_title_hidden(true)
                     .with_fullsize_content_view(true)
-            });
+            })
+            .select()
     }
-    selector.select()
 }
 
 /// Tell the window which platform it is on, before it is shown: the title
