@@ -13,6 +13,17 @@
 //!
 //! Resolution order: `RUSTY_CONFIG_DIR` (tests, portable installs, CI) beats
 //! the pointer beats the anchor.
+//!
+//! **Where the anchor is, per platform.** `%APPDATA%\rusty` on Windows;
+//! `$XDG_CONFIG_HOME/rusty` or `~/.config/rusty` on Linux. On macOS the
+//! platform's own place is `~/Library/Application Support/rusty`, and rusty
+//! kept its data in `~/.config/rusty` for every release before this rule
+//! existed — so the anchor there is **the existing `~/.config/rusty` (or
+//! `$XDG_CONFIG_HOME/rusty`) if either exists, else the Library directory**.
+//! Nothing is moved silently: a user who already has boards and a
+//! `workbench.toml` keeps them exactly where they are, and only a machine
+//! with no rusty data at all starts in the Library. Relocation is still the
+//! one way data moves, by the user's hand ([`relocate`]).
 
 use std::path::{Path, PathBuf};
 
@@ -33,7 +44,13 @@ fn anchor_dir() -> Option<PathBuf> {
             .ok()
             .map(|base| PathBuf::from(base).join("rusty"))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        Some(macos_anchor(xdg.as_deref(), &home, &|dir| dir.is_dir()))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         if let Ok(base) = std::env::var("XDG_CONFIG_HOME") {
             return Some(PathBuf::from(base).join("rusty"));
@@ -42,6 +59,27 @@ fn anchor_dir() -> Option<PathBuf> {
             .ok()
             .map(|home| PathBuf::from(home).join(".config").join("rusty"))
     }
+}
+
+/// The macOS anchor, by the rule in the module header: a directory rusty
+/// already keeps data in wins — `$XDG_CONFIG_HOME/rusty` when the variable
+/// is set, then `~/.config/rusty` — and a machine with neither starts in
+/// `~/Library/Application Support/rusty`. `exists` is handed in so the rule
+/// is tested against a filesystem the test describes, not the one it runs on.
+#[cfg(any(target_os = "macos", test))]
+fn macos_anchor(xdg: Option<&Path>, home: &Path, exists: &dyn Fn(&Path) -> bool) -> PathBuf {
+    let legacy = xdg
+        .map(|base| base.join("rusty"))
+        .into_iter()
+        .chain(std::iter::once(home.join(".config").join("rusty")));
+    for dir in legacy {
+        if exists(&dir) {
+            return dir;
+        }
+    }
+    home.join("Library")
+        .join("Application Support")
+        .join("rusty")
 }
 
 /// Where the data actually is.
@@ -1177,6 +1215,53 @@ mod tests {
         assert_eq!(list.len(), 8);
         assert_eq!(list[0], "E:/new");
         assert!(!list.iter().any(|p| p == "E:/p7"), "the oldest falls off");
+    }
+
+    /// The macOS rule, against a filesystem the test states. The one thing
+    /// it must never do is move a user's data by choosing a new directory
+    /// over one that holds boards: an existing `~/.config/rusty` wins, and
+    /// the Library is for a machine with nothing.
+    #[test]
+    fn a_mac_keeps_its_old_data_where_it_is_and_a_fresh_one_uses_the_library() {
+        let home = Path::new("/Users/me");
+        let library = PathBuf::from("/Users/me/Library/Application Support/rusty");
+        let dot_config = PathBuf::from("/Users/me/.config/rusty");
+        let xdg = Path::new("/Users/me/xdg");
+
+        let nothing = |_: &Path| false;
+        assert_eq!(macos_anchor(None, home, &nothing), library);
+        assert_eq!(
+            macos_anchor(Some(xdg), home, &nothing),
+            library,
+            "XDG_CONFIG_HOME set but holding no rusty data does not keep a Mac off the \
+             platform's own directory",
+        );
+
+        let has_dot_config = |dir: &Path| dir == dot_config;
+        assert_eq!(macos_anchor(None, home, &has_dot_config), dot_config);
+        assert_eq!(
+            macos_anchor(Some(xdg), home, &has_dot_config),
+            dot_config,
+            "the existing data is found past an XDG directory that has none",
+        );
+
+        let has_xdg = |dir: &Path| dir == xdg.join("rusty");
+        assert_eq!(
+            macos_anchor(Some(xdg), home, &has_xdg),
+            xdg.join("rusty"),
+            "a user who pointed XDG_CONFIG_HOME at their data keeps it",
+        );
+        let has_both = |dir: &Path| dir == xdg.join("rusty") || dir == dot_config;
+        assert_eq!(
+            macos_anchor(Some(xdg), home, &has_both),
+            xdg.join("rusty"),
+            "and XDG wins over ~/.config, as it did before this rule existed",
+        );
+        assert_eq!(
+            macos_anchor(None, home, &|dir: &Path| dir == library),
+            library,
+            "the Library existing changes nothing: it is the default already",
+        );
     }
 
     #[test]

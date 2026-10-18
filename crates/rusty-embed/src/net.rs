@@ -29,9 +29,11 @@ pub fn effective_proxy() -> Option<String> {
 }
 
 /// Environment variables first (the cross-platform convention), then the
-/// Windows system proxy from the registry — which is what the browser and
-/// every GUI proxy tool (Clash and friends) configure. A tool that ignores
-/// it downloads into a wall on exactly the machines that need a proxy.
+/// system proxy — the Windows registry, or macOS's network settings through
+/// `scutil --proxy` — which is what the browser and every GUI proxy tool
+/// (Clash and friends) configure. A tool that ignores it downloads into a
+/// wall on exactly the machines that need a proxy. Linux has no one system
+/// setting: every desktop there exports the variables above.
 pub fn system_proxy() -> Option<String> {
     for key in [
         "HTTPS_PROXY",
@@ -48,6 +50,51 @@ pub fn system_proxy() -> Option<String> {
     }
     if cfg!(windows) {
         return windows_system_proxy();
+    }
+    if cfg!(target_os = "macos") {
+        return macos_system_proxy();
+    }
+    None
+}
+
+/// macOS keeps the proxy in the network settings, and `scutil --proxy`
+/// prints them as one dictionary — the same precedence as the registry's:
+/// https wins, then http, and the SOCKS entry is skipped.
+fn macos_system_proxy() -> Option<String> {
+    let mut command = crate::process::command("scutil");
+    command.arg("--proxy");
+    let out = command.output().ok()?;
+    parse_scutil_proxy(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The dictionary `scutil --proxy` prints: `  HTTPSEnable : 1` beside
+/// `HTTPSProxy : host` and `HTTPSPort : 8080`, the same three for HTTP,
+/// and lines this does not read (the exceptions list, PAC, SOCKS).
+///
+/// A protocol counts only when its `Enable` is `1` *and* both its host and
+/// port are there: a proxy with no port is not one this client can reach,
+/// and guessing 8080 would be a confident wrong route.
+fn parse_scutil_proxy(text: &str) -> Option<String> {
+    let field = |name: &str| -> Option<String> {
+        text.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim() == name).then(|| value.trim().to_string())
+        })
+    };
+    for protocol in ["HTTPS", "HTTP"] {
+        if field(&format!("{protocol}Enable")).as_deref() != Some("1") {
+            continue;
+        }
+        let (Some(host), Some(port)) = (
+            field(&format!("{protocol}Proxy")),
+            field(&format!("{protocol}Port")),
+        ) else {
+            continue;
+        };
+        if host.is_empty() || port.parse::<u16>().is_err() {
+            continue;
+        }
+        return Some(format!("http://{host}:{port}"));
     }
     None
 }
@@ -231,6 +278,67 @@ mod tests {
             "this client does not speak socks, so naming one is not an answer",
         );
         assert_eq!(parse_proxy_server("  "), None);
+    }
+
+    /// `scutil --proxy` as it printed on a Mac with Clash on 7897: every
+    /// protocol enabled on one port, exceptions list and all.
+    const SCUTIL_CLASH: &str = "<dictionary> {
+  ExceptionsList : <array> {
+    0 : 127.0.0.1
+    1 : 192.168.0.0/16
+    2 : 10.0.0.0/8
+    3 : 172.16.0.0/12
+    4 : localhost
+    5 : *.local
+    6 : *.crashlytics.com
+    7 : <local>
+  }
+  FTPPassive : 1
+  HTTPEnable : 1
+  HTTPPort : 7897
+  HTTPProxy : 127.0.0.1
+  HTTPSEnable : 1
+  HTTPSPort : 7897
+  HTTPSProxy : 127.0.0.1
+  ProxyAutoConfigEnable : 0
+  SOCKSEnable : 1
+  SOCKSPort : 7897
+  SOCKSProxy : 127.0.0.1
+}
+";
+
+    /// And a Mac with no proxy configured at all, which is what most print.
+    const SCUTIL_NONE: &str = "<dictionary> {
+  FTPPassive : 1
+}
+";
+
+    #[test]
+    fn the_mac_network_settings_name_a_proxy_or_do_not() {
+        assert_eq!(
+            parse_scutil_proxy(SCUTIL_CLASH).as_deref(),
+            Some("http://127.0.0.1:7897"),
+            "the captured output: https, host and port joined",
+        );
+        assert_eq!(parse_scutil_proxy(SCUTIL_NONE), None);
+        assert_eq!(parse_scutil_proxy(""), None);
+
+        // Only HTTP enabled, HTTPS switched off: http stands in.
+        let http_only = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 3128\n  \
+                         HTTPProxy : proxy.corp.example\n  HTTPSEnable : 0\n  \
+                         HTTPSPort : 3128\n  HTTPSProxy : proxy.corp.example\n}\n";
+        assert_eq!(
+            parse_scutil_proxy(http_only).as_deref(),
+            Some("http://proxy.corp.example:3128"),
+        );
+        // Enabled with the host but no port is not a proxy this client can
+        // reach; it is refused rather than given a port.
+        let no_port = "<dictionary> {\n  HTTPSEnable : 1\n  HTTPSProxy : 10.0.0.1\n}\n";
+        assert_eq!(parse_scutil_proxy(no_port), None);
+        // SOCKS alone is not an answer either — this client does not speak it.
+        let socks = "<dictionary> {\n  SOCKSEnable : 1\n  SOCKSPort : 1080\n  \
+                     SOCKSProxy : 127.0.0.1\n}\n";
+        assert_eq!(parse_scutil_proxy(socks), None);
     }
 
     #[test]
