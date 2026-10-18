@@ -87,9 +87,7 @@ impl Default for Math {
 
 /// A row's colour, the view's palette.
 fn colour(index: usize) -> slint::Color {
-    let hex = PALETTE[index % PALETTE.len()];
-    let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
-    slint::Color::from_rgb_u8((value >> 16) as u8, (value >> 8) as u8, value as u8)
+    super::colour::hex(PALETTE[index % PALETTE.len()])
 }
 
 /// Whether any row reads the firmware or the plant — asked of the text, so

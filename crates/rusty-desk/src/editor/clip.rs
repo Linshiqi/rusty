@@ -29,9 +29,10 @@ fn boundary(text: &str, at: usize) -> usize {
 /// the end of the text on the last line.
 fn line_bounds(text: &str, at: usize) -> (usize, usize) {
     let at = boundary(text, at);
-    let start = text[..at].rfind('\n').map_or(0, |i| i + 1);
-    let end = text[at..].find('\n').map_or(text.len(), |i| at + i);
-    (start, end)
+    (
+        super::cursors::line_start(text, at),
+        super::cursors::line_end(text, at),
+    )
 }
 
 /// What Ctrl+C with nothing selected puts on the clipboard: the caret's line

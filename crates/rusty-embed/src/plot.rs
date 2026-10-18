@@ -20,6 +20,32 @@ pub enum TraceClock {
     Host,
 }
 
+impl TraceClock {
+    /// The moment a report lands at. A trace takes its clock at its first
+    /// report — the firmware's when that one carried a stamp, the host's
+    /// otherwise — and from then on a stamp is the firmware's moment, an
+    /// unstamped report on a firmware-clocked trace takes `newest`, the
+    /// newest moment already in it, rather than mixing the two clocks, and a
+    /// host-clocked trace takes `host_us`. The plot and the waves stamp alike.
+    pub fn stamp(
+        clock: &mut Option<TraceClock>,
+        at_us: Option<u64>,
+        host_us: u64,
+        newest: impl FnOnce() -> u64,
+    ) -> u64 {
+        let clock = *clock.get_or_insert(if at_us.is_some() {
+            TraceClock::Firmware
+        } else {
+            TraceClock::Host
+        });
+        match (clock, at_us) {
+            (TraceClock::Firmware, Some(us)) => us,
+            (TraceClock::Firmware, None) => newest(),
+            (TraceClock::Host, _) => host_us,
+        }
+    }
+}
+
 /// Named numeric channels over time — the analog half of the trace.
 ///
 /// Kept per channel rather than as rows of samples because that is how it is
@@ -53,21 +79,13 @@ impl Plot {
     /// the newest time already in it, rather than mixing the two clocks.
     /// Each channel keeps its newest [`CAP`] samples.
     pub fn record(&mut self, sample: Telemetry, host_us: u64) {
-        let clock = *self.clock.get_or_insert(if sample.at_us.is_some() {
-            TraceClock::Firmware
-        } else {
-            TraceClock::Host
-        });
-        let at = match (clock, sample.at_us) {
-            (TraceClock::Firmware, Some(us)) => us,
-            (TraceClock::Firmware, None) => self
-                .channels
+        let at = TraceClock::stamp(&mut self.clock, sample.at_us, host_us, || {
+            self.channels
                 .iter()
                 .filter_map(|(_, points)| points.last().map(|(t, _)| *t))
                 .max()
-                .unwrap_or(0),
-            (TraceClock::Host, _) => host_us,
-        };
+                .unwrap_or(0)
+        });
         let mut dropped = false;
         for (name, value) in sample.channels {
             let points = self.channel(&name);

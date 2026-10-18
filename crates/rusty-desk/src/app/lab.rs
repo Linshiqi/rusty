@@ -168,8 +168,7 @@ struct Run {
 }
 
 fn colour(hex: &str) -> slint::Color {
-    let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
-    slint::Color::from_rgb_u8((value >> 16) as u8, (value >> 8) as u8, value as u8)
+    super::colour::hex(hex)
 }
 
 fn window_of(index: i32) -> Window {

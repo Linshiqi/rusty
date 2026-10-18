@@ -58,7 +58,9 @@ pub struct Showing {
     pub incomplete: bool,
 }
 
-fn is_word(ch: char) -> bool {
+/// A character of an identifier: what a word in code is made of, for
+/// the completion, the search and the cursors alike.
+pub fn is_word(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 

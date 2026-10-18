@@ -160,6 +160,25 @@ const NAMED: [(Key, &str); 26] = [
     (Key::F12, "F12"),
 ];
 
+/// Whether a key is a modifier pressed on its own — Ctrl, Shift, Alt,
+/// AltGr or the Windows key — which is no chord and no key to put a card
+/// away for.
+pub fn is_modifier(text: &str) -> bool {
+    const MODIFIERS: [Key; 8] = [
+        Key::Control,
+        Key::ControlR,
+        Key::Shift,
+        Key::ShiftR,
+        Key::Alt,
+        Key::AltGr,
+        Key::Meta,
+        Key::MetaR,
+    ];
+    text.chars()
+        .next()
+        .is_some_and(|ch| MODIFIERS.iter().any(|key| char::from(*key) == ch))
+}
+
 /// A key's name in a chord: letters upper case, the named keys by name.
 /// Slint sends the letter for Ctrl+P, not a control character, and keeps
 /// the control range for keys of its own — 0x10 is Shift.
@@ -172,17 +191,7 @@ fn name(text: &str) -> Option<String> {
     if let Some((_, name)) = NAMED.iter().find(|(key, _)| char::from(*key) == ch) {
         return Some((*name).to_string());
     }
-    let modifiers = [
-        Key::Control,
-        Key::ControlR,
-        Key::Shift,
-        Key::ShiftR,
-        Key::Alt,
-        Key::AltGr,
-        Key::Meta,
-        Key::MetaR,
-    ];
-    if modifiers.iter().any(|key| char::from(*key) == ch) {
+    if is_modifier(text) {
         return None;
     }
     if ch.is_control() {

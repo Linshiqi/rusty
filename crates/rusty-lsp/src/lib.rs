@@ -39,3 +39,4 @@ pub mod watched;
 pub use client::{Events, LspClient};
 pub use discover::{find_clangd, find_rust_analyzer};
 pub use error::{Error, Result};
+pub use uri::percent_decode;

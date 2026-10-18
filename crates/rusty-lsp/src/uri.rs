@@ -32,7 +32,7 @@ pub(crate) fn path_to_uri(path: &Path) -> String {
 /// Percent escapes undone, as UTF-8. `None` for a truncated escape, a
 /// non-hex digit, or bytes that do not form text — a path this process could
 /// not open anyway, and better refused here than mangled into one it can.
-fn percent_decode(text: &str) -> Option<String> {
+pub fn percent_decode(text: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(text.len());
     let mut input = text.bytes();
     while let Some(byte) = input.next() {

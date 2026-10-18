@@ -25,16 +25,9 @@ impl Trace {
     /// unstamped report in a firmware-clocked trace takes the last moment
     /// already there, which keeps the event without inventing a time.
     pub fn record(&mut self, report: GpioReport, host_us: u64) {
-        let clock = *self.clock.get_or_insert(if report.at_us.is_some() {
-            TraceClock::Firmware
-        } else {
-            TraceClock::Host
+        let at = TraceClock::stamp(&mut self.clock, report.at_us, host_us, || {
+            self.events.last().map(|(t, ..)| *t).unwrap_or(0)
         });
-        let at = match (clock, report.at_us) {
-            (TraceClock::Firmware, Some(us)) => us,
-            (TraceClock::Firmware, None) => self.events.last().map(|(t, ..)| *t).unwrap_or(0),
-            (TraceClock::Host, _) => host_us,
-        };
         for (pin, level) in report.pins {
             self.events.push((at, pin, level));
         }

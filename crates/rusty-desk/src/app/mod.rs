@@ -25,6 +25,7 @@ mod board;
 mod build;
 mod calls;
 mod clone;
+mod colour;
 mod context;
 mod crates;
 mod debug;

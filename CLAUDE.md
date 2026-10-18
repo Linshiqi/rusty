@@ -3579,6 +3579,22 @@ is no browser storage, and what the window remembers between runs is
 
 ## Hard-won specifics
 
+- **A test fixture copied six times is six fixtures.** `pin`, `symbol`,
+  `place` and `wire` sat in the circuit's, the period's, the live loop's,
+  the generator's, the nets' and the board editor's test modules, byte for
+  byte or with one number changed, and the probes carried `send`, `chord`,
+  `snapshot` and `until` in four files and the modifier helper in six.
+  `rusty_embed::fixtures` (`#[cfg(test)]`) is the one sheet fixture, with
+  what differed as a `Shape` — pin offset, alternating sides, angled or
+  not, the body — so every test keeps its geometry by naming it; and
+  `probe_surfaces::Run` is the one way a probe presses a key, with
+  `chord_on` for a torn-off window. The check that the probe refactor
+  changed nothing is the probe itself: `RUSTY_PROBE` before and after
+  produces the same twenty-seven photographs. Smaller copies went the same
+  way: `TraceClock::stamp` for the plot's and the waves' clock, `app::
+  colour::hex` for `#rrggbb`, `rusty_lsp::complete::is_word` for the word
+  characters, `rusty_lsp::percent_decode` for the Markdown page's links,
+  `keys::is_modifier` for the hover card's, the lsp tests' `common` module.
 - **Slint swaps the two modifier flags on a Mac: `modifiers.control` is
   Cmd and `modifiers.meta` is the physical Ctrl** (i-slint-core's
   `input.rs` says so in one comment). The window's bindings read `Ctrl+S`

@@ -41,11 +41,8 @@ fn source() -> String {
     .join("\n")
 }
 
-fn line_of(text: &str, needle: &str) -> u32 {
-    text.lines()
-        .position(|line| line.contains(needle))
-        .unwrap_or_else(|| panic!("no line contains {needle}")) as u32
-}
+mod common;
+use common::line_of;
 
 /// Retry a request while the index warms up. Cold rust-analyzer answers
 /// slowly, emptily, or with "content modified" — none of which is a failure,

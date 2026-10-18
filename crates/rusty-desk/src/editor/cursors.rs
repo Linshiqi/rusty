@@ -308,7 +308,7 @@ pub fn merged(cursors: &[Cursor]) -> Vec<Cursor> {
 /// The word around `at`, or the one just before it: what Ctrl+D starts from
 /// when nothing is selected.
 pub fn word_at(text: &str, at: usize) -> Option<(usize, usize)> {
-    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let is_word = rusty_lsp::complete::is_word;
     let at = boundary(text, at.min(text.len()));
     let start = text[..at]
         .char_indices()
@@ -330,7 +330,7 @@ pub fn word_at(text: &str, at: usize) -> Option<(usize, usize)> {
 /// selected itself: `gain` is not in `gain2`.
 fn matches<'a>(text: &'a str, needle: &'a str) -> impl Iterator<Item = usize> + 'a {
     let word = needle.chars().all(|c| c.is_alphanumeric() || c == '_');
-    let is_word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let is_word = |c: Option<char>| c.is_some_and(rusty_lsp::complete::is_word);
     text.match_indices(needle)
         .map(|(i, _)| i)
         .filter(move |&i| {

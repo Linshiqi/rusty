@@ -198,10 +198,7 @@ pub(super) fn pieces_of(drawn: Vec<scene::Drawn>) -> Vec<DrawPiece> {
 }
 
 pub(super) fn ink_of(ink: Ink) -> (i32, slint::Color) {
-    let rgb = |hex: &str| {
-        let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
-        slint::Color::from_rgb_u8((value >> 16) as u8, (value >> 8) as u8, value as u8)
-    };
+    let rgb = super::colour::hex;
     match ink {
         Ink::AxisX => (10, rgb("#e5484d")),
         Ink::AxisY => (10, rgb("#30a46c")),

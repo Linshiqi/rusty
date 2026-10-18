@@ -94,19 +94,7 @@ fn is_ctrl(text: &str) -> bool {
 /// Whether a key is a modifier pressed on its own, which is no key to put
 /// the hover card or the link away for.
 pub(super) fn is_modifier(text: &str) -> bool {
-    let keys = [
-        Key::Control,
-        Key::ControlR,
-        Key::Shift,
-        Key::ShiftR,
-        Key::Alt,
-        Key::AltGr,
-        Key::Meta,
-        Key::MetaR,
-    ];
-    text.chars()
-        .next()
-        .is_some_and(|ch| keys.iter().any(|key| char::from(*key) == ch))
+    crate::keys::is_modifier(text)
 }
 
 impl Surface {

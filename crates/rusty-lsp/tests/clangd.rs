@@ -29,11 +29,8 @@ fn source() -> String {
     .join("\n")
 }
 
-fn line_of(text: &str, needle: &str) -> u32 {
-    text.lines()
-        .position(|line| line.contains(needle))
-        .unwrap_or_else(|| panic!("no line contains {needle}")) as u32
-}
+mod common;
+use common::line_of;
 
 #[test]
 fn clangd_end_to_end() {

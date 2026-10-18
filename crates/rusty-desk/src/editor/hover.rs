@@ -249,26 +249,37 @@ impl Surface {
         Some((line, d.lines.byte(&d.text, line, col)))
     }
 
+    /// The problems and the failed tests at `col` on `line`: what the card
+    /// shows at once, and reads afresh when the server's answer comes.
+    fn marks_at(
+        &self,
+        d: &super::Document,
+        line: usize,
+        col: usize,
+    ) -> (Vec<FileDiagnostic>, Vec<super::Failed>) {
+        let text = d.lines.text(&d.text, line);
+        let problems = self
+            .problems
+            .borrow()
+            .get(&d.path)
+            .map(|items| {
+                problems_at(items, line as u32, text, col as u32)
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        (problems, self.failures_at(d, line, col))
+    }
+
     /// Show the card for the byte `at` on `line`: the problems there at
     /// once, and the server's account of the name when it comes.
     fn hover_at(self: &Rc<Self>, line: usize, at: usize) {
         let Some(doc) = self.doc() else { return };
         let (path, col, problems, failed, word, version, draft_text) = {
             let d = doc.borrow();
-            let text = d.lines.text(&d.text, line);
             let col = d.lines.position(&d.text, at).1;
-            let problems: Vec<FileDiagnostic> = self
-                .problems
-                .borrow()
-                .get(&d.path)
-                .map(|items| {
-                    problems_at(items, line as u32, text, col as u32)
-                        .into_iter()
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            let failed = self.failures_at(&d, line, col);
+            let (problems, failed) = self.marks_at(&d, line, col);
             let word = super::cursors::word_at(&d.text, at)
                 .filter(|&(from, to)| from <= at && at < to.max(from + 1));
             (
@@ -343,20 +354,8 @@ impl Surface {
         // since.
         let (problems, failed) = {
             let d = doc.borrow();
-            let text = d.lines.text(&d.text, line);
             let col = d.lines.position(&d.text, from).1;
-            let problems: Vec<FileDiagnostic> = self
-                .problems
-                .borrow()
-                .get(&d.path)
-                .map(|items| {
-                    problems_at(items, line as u32, text, col as u32)
-                        .into_iter()
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            (problems, self.failures_at(&d, line, col))
+            self.marks_at(&d, line, col)
         };
         match info.filter(|info| !info.text.trim().is_empty()) {
             Some(info) => self.show_card(line, from, &problems, &failed, Some(&info.text)),

@@ -131,9 +131,7 @@ impl Query {
     }
 }
 
-fn is_word(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
+use rusty_lsp::complete::is_word;
 
 /// VS Code's whole word: each end of the match is the text's end, a
 /// character that is not a word's, or the match's own first or last

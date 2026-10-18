@@ -523,24 +523,11 @@ fn picture_path(place: Option<&(PathBuf, String)>, src: &str) -> Result<PathBuf,
     })
 }
 
-/// `%20` and friends, as a link writes a path with spaces in it.
+/// `%20` and friends, as a link writes a path with spaces in it — the
+/// language server's decoder, which refuses a broken escape; a link that
+/// holds one is kept as written rather than mangled.
 fn percent_decoded(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] == b'%'
-            && let Some(hex) = s.get(at + 1..at + 3)
-            && let Ok(byte) = u8::from_str_radix(hex, 16)
-        {
-            out.push(byte);
-            at += 3;
-            continue;
-        }
-        out.push(bytes[at]);
-        at += 1;
-    }
-    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+    rusty_lsp::percent_decode(s).unwrap_or_else(|| s.to_string())
 }
 
 impl super::App {
