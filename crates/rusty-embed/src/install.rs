@@ -68,6 +68,7 @@ const RUSTY_QEMU_TAG: &str = "qemu-v10";
 /// An archive to fetch: where to put it, the URLs to try in order, and the
 /// extraction step. One shape for QEMU, the debuggers and the C toolchain —
 /// the name says so, where `QemuDownload` used to claim only the first.
+#[derive(Debug)]
 pub struct ToolDownload {
     pub archive: PathBuf,
     pub urls: Vec<String>,
@@ -197,24 +198,103 @@ pub fn gdb_download(tool: &str) -> Result<ToolDownload> {
     Ok(plan)
 }
 
-/// [`gdb_download`] against a tools directory the caller names — the pure
-/// half, which is what the tests exercise so they never touch the real data
-/// directory.
+/// [`gdb_download`] against a tools directory the caller names and this
+/// host's platform — the pure half is [`gdb_download_for`].
 fn gdb_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
+    gdb_download_for(tool, tools::host_platform(), tools)
+}
+
+/// The esp-gdb asset for a platform, in the release's own spelling.
+///
+/// Transcribed from the release page's asset list and checked with a HEAD
+/// request each (2026-10-18), because the spelling is not what the platform
+/// name predicts: **Espressif stamps the macOS archives with the Darwin
+/// release they were built on** — `aarch64-apple-darwin21.1`,
+/// `x86_64-apple-darwin14` — so the plain `aarch64-apple-darwin` every other
+/// Espressif asset uses answers 404 there, which is exactly how this
+/// installer, the bundle script and a sentence in CLAUDE.md all came to say
+/// "Espressif publishes no macOS esp-gdb". It publishes both families for
+/// both Macs. Every archive unpacks to `<family>/bin/…`, the shape
+/// `tools::find` walks.
+fn gdb_asset(tool: &str, platform: &str) -> Option<String> {
+    let suffix = match platform {
+        "x86_64-w64-mingw32" => "x86_64-w64-mingw32.zip",
+        "x86_64-linux-gnu" => "x86_64-linux-gnu.tar.gz",
+        "aarch64-linux-gnu" => "aarch64-linux-gnu.tar.gz",
+        "aarch64-apple-darwin" => "aarch64-apple-darwin21.1.tar.gz",
+        "x86_64-apple-darwin" => "x86_64-apple-darwin14.tar.gz",
+        _ => return None,
+    };
+    Some(format!("{tool}-{GDB_VERSION}-{suffix}"))
+}
+
+/// The crosstool-NG asset for a platform: a zip on Windows and a `.tar.xz`
+/// everywhere else, under the platform's plain name — checked the same way
+/// as the gdb table's, all five answering 200.
+fn gcc_asset(platform: &str) -> Option<String> {
+    let suffix = match platform {
+        "x86_64-w64-mingw32" => "x86_64-w64-mingw32.zip",
+        "x86_64-linux-gnu" => "x86_64-linux-gnu.tar.xz",
+        "aarch64-linux-gnu" => "aarch64-linux-gnu.tar.xz",
+        "aarch64-apple-darwin" => "aarch64-apple-darwin.tar.xz",
+        "x86_64-apple-darwin" => "x86_64-apple-darwin.tar.xz",
+        _ => return None,
+    };
+    Some(format!("riscv32-esp-elf-{GCC_VERSION}-{suffix}"))
+}
+
+/// The archive's extension, read off the asset's name so the file on disk
+/// unpacks as what it is: `tar` reads the format off the bytes, but a
+/// `.zip` saved as `.tar.gz` is a dock line nobody can read.
+fn archive_extension(asset: &str) -> &'static str {
+    if asset.ends_with(".zip") {
+        ".zip"
+    } else if asset.ends_with(".tar.xz") {
+        ".tar.xz"
+    } else {
+        ".tar.gz"
+    }
+}
+
+/// Whether Espressif publishes the esp-gdb archives for this host, which is
+/// what decides whether an Install button is drawn rather than a link.
+pub fn gdb_available() -> bool {
+    tools::host_platform()
+        .is_some_and(|platform| gdb_asset("riscv32-esp-elf-gdb", platform).is_some())
+}
+
+/// The same for the RISC-V C toolchain.
+pub fn gcc_available() -> bool {
+    tools::host_platform().is_some_and(|platform| gcc_asset(platform).is_some())
+}
+
+/// "Not published" as a refusal with the page to fetch from by hand — never
+/// a URL assembled for a platform the release does not carry, which 404s
+/// exactly like a network problem.
+fn not_published(what: &str, project: &str, release: &str) -> Error {
+    Error::refused(format!(
+        "Espressif publishes no {what} for {}-{} — see \
+         https://github.com/espressif/{project}/releases/tag/{release} for what exists, and \
+         unpack a build into the data directory's tools/",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    ))
+}
+
+/// The plan for a gdb family on `platform` (`None` for a host Espressif's
+/// naming has no word for), against a tools directory the caller names —
+/// pure, so the table above is tested platform by platform with no network
+/// and without touching the real data directory.
+fn gdb_download_for(tool: &str, platform: Option<&str>, tools: &Path) -> Result<ToolDownload> {
     if tool != "xtensa-esp-elf-gdb" && tool != "riscv32-esp-elf-gdb" {
         return Err(Error::refused(format!(
             "{tool} is not a gdb this installer knows"
         )));
     }
-    if !cfg!(windows) {
-        return Err(Error::refused(format!(
-            "one-click install only knows the Windows build so far — download {tool} from \
-             https://github.com/espressif/binutils-gdb/releases/tag/{GDB_RELEASE} and unpack \
-             it into the data directory's tools/"
-        )));
-    }
-    let asset = format!("{tool}-{GDB_VERSION}-x86_64-w64-mingw32.zip");
-    let archive = tools.join(format!("{tool}.zip"));
+    let asset = platform
+        .and_then(|platform| gdb_asset(tool, platform))
+        .ok_or_else(|| not_published(tool, "binutils-gdb", GDB_RELEASE))?;
+    let archive = tools.join(format!("{tool}{}", archive_extension(&asset)));
     Ok(ToolDownload {
         urls: espressif_urls("binutils-gdb", GDB_RELEASE, &asset),
         extract: extract_step(
@@ -243,21 +323,20 @@ pub fn gcc_download(tool: &str) -> Result<ToolDownload> {
 }
 
 fn gcc_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
+    gcc_download_for(tool, tools::host_platform(), tools)
+}
+
+/// [`gcc_download_into`]'s pure half, as [`gdb_download_for`] is for gdb.
+fn gcc_download_for(tool: &str, platform: Option<&str>, tools: &Path) -> Result<ToolDownload> {
     if tool != "riscv32-esp-elf-gcc" {
         return Err(Error::refused(format!(
             "{tool} is not a C toolchain this installer knows"
         )));
     }
-    if !cfg!(windows) {
-        return Err(Error::refused(format!(
-            "one-click install only knows the Windows build so far — download \
-             riscv32-esp-elf from \
-             https://github.com/espressif/crosstool-NG/releases/tag/{GCC_RELEASE} and put \
-             its bin/ on PATH"
-        )));
-    }
-    let asset = format!("riscv32-esp-elf-{GCC_VERSION}-x86_64-w64-mingw32.zip");
-    let archive = tools.join("riscv32-esp-elf.zip");
+    let asset = platform
+        .and_then(gcc_asset)
+        .ok_or_else(|| not_published("riscv32-esp-elf toolchain", "crosstool-NG", GCC_RELEASE))?;
+    let archive = tools.join(format!("riscv32-esp-elf{}", archive_extension(&asset)));
     Ok(ToolDownload {
         urls: espressif_urls("crosstool-NG", GCC_RELEASE, &asset),
         extract: extract_step(
@@ -945,6 +1024,96 @@ mod tests {
                 rusty_qemu_asset(absent).is_none(),
                 "{absent} is Espressif's to serve",
             );
+        }
+    }
+
+    /// The plan for every platform rusty runs on names the asset Espressif
+    /// publishes — the names the release page lists, each checked with a
+    /// HEAD request, the macOS ones under the Darwin-stamped spelling that
+    /// a plain platform name misses. Both mirrors, the archive named for
+    /// what it is, and nothing on disk until a download is about to land.
+    #[test]
+    fn the_gdb_and_gcc_plans_name_the_asset_espressif_publishes_per_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = dir.path().join("tools");
+        for (platform, gdb_suffix, gcc_suffix) in [
+            (
+                "x86_64-w64-mingw32",
+                "x86_64-w64-mingw32.zip",
+                "x86_64-w64-mingw32.zip",
+            ),
+            (
+                "x86_64-linux-gnu",
+                "x86_64-linux-gnu.tar.gz",
+                "x86_64-linux-gnu.tar.xz",
+            ),
+            (
+                "aarch64-linux-gnu",
+                "aarch64-linux-gnu.tar.gz",
+                "aarch64-linux-gnu.tar.xz",
+            ),
+            (
+                "aarch64-apple-darwin",
+                "aarch64-apple-darwin21.1.tar.gz",
+                "aarch64-apple-darwin.tar.xz",
+            ),
+            (
+                "x86_64-apple-darwin",
+                "x86_64-apple-darwin14.tar.gz",
+                "x86_64-apple-darwin.tar.xz",
+            ),
+        ] {
+            for family in ["riscv32-esp-elf-gdb", "xtensa-esp-elf-gdb"] {
+                let plan = gdb_download_for(family, Some(platform), &tools)
+                    .unwrap_or_else(|e| panic!("{family} on {platform}: {e}"));
+                let asset = format!("{family}-{GDB_VERSION}-{gdb_suffix}");
+                assert_eq!(plan.urls.len(), 2, "{platform}: GitHub and the mirror");
+                assert!(
+                    plan.urls.iter().all(|url| url.ends_with(&asset)),
+                    "{platform}: {:?}",
+                    plan.urls
+                );
+                assert!(plan.urls[0].contains(GDB_RELEASE));
+                assert_eq!(
+                    plan.archive,
+                    tools.join(format!("{family}{}", archive_extension(&asset))),
+                    "{platform}: the archive is named for what it is",
+                );
+                assert!(
+                    plan.extract.display.contains("-U -xf"),
+                    "{}",
+                    plan.extract.display
+                );
+            }
+            let plan = gcc_download_for("riscv32-esp-elf-gcc", Some(platform), &tools)
+                .unwrap_or_else(|e| panic!("gcc on {platform}: {e}"));
+            let asset = format!("riscv32-esp-elf-{GCC_VERSION}-{gcc_suffix}");
+            assert!(
+                plan.urls.iter().all(|url| url.ends_with(&asset)),
+                "{platform}: {:?}",
+                plan.urls
+            );
+            assert!(plan.urls[1].contains("dl.espressif.com"));
+        }
+        assert!(!tools.exists(), "planning creates nothing");
+
+        // A host Espressif's naming has no word for is refused with the
+        // release page, never handed a URL that would 404 like a bad network.
+        for (what, result) in [
+            ("gdb", gdb_download_for("riscv32-esp-elf-gdb", None, &tools)),
+            ("gcc", gcc_download_for("riscv32-esp-elf-gcc", None, &tools)),
+            (
+                "gdb on a platform without an asset",
+                gdb_download_for("xtensa-esp-elf-gdb", Some("powerpc64-linux-gnu"), &tools),
+            ),
+        ] {
+            match result {
+                Err(Error::Refused { detail }) => assert!(
+                    detail.contains("publishes no") && detail.contains("releases/tag/"),
+                    "{what}: {detail}"
+                ),
+                other => panic!("{what}: expected a refusal, got {other:?}"),
+            }
         }
     }
 

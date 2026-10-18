@@ -254,6 +254,81 @@ fn msvc_linker() -> Option<PathBuf> {
     }
 }
 
+/// The rows that stand for the host's own C toolchain — the compiler and
+/// linker every `cargo install` and every host build goes through, one row
+/// per platform: Visual Studio's linker on an `-msvc` host, the Xcode
+/// Command Line Tools on macOS, a `cc` on Linux. Each is `required`, none
+/// is installable by rusty, and the setup plan collapses to whichever is
+/// missing (`setup::plan`), because nothing it would install can be linked
+/// without it. The list is here so the plan, the Environment page's
+/// grouping and the report agree on the names.
+pub const HOST_C_TOOLCHAINS: [&str; 3] = ["msvc", "xcode-clt", "cc"];
+
+/// What installs the Xcode Command Line Tools: Apple's own prompt, which
+/// this one command opens. Not something rusty runs — the dialog asks for
+/// an agreement and a password, and it is the user's to answer.
+pub const XCODE_CLT_INSTALL: &str = "xcode-select --install";
+
+/// The active developer directory, as `xcode-select -p` names it — the
+/// Command Line Tools' or a full Xcode's — when the command succeeds *and*
+/// the directory is there. A Mac without either has no `cc`, no `git` and
+/// no `clangd`, and `xcode-select -p` says so with exit 2. `None` off macOS.
+fn xcode_developer_dir() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let said = run("xcode-select", &["-p"], None)?;
+    let dir = PathBuf::from(said.trim());
+    dir.is_dir().then_some(dir)
+}
+
+/// A `cc` that answers `--version`: the path it was found at. On Linux the
+/// compiler is a package of the distribution's, and a machine without it
+/// fails every `cargo install` with `linker cc not found` after a minute of
+/// compiling. `None` off Linux.
+fn linux_cc() -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let path = tools::find("cc")?;
+    probe_version(&path).map(|_| path)
+}
+
+/// The line that installs a C compiler on this Linux, read off
+/// `/etc/os-release`'s `ID` and `ID_LIKE` — the package has a different name
+/// on every family, and "install gcc" sends an Ubuntu user to a package
+/// that exists and does not bring `make` or the headers. The family is
+/// matched on `ID_LIKE` as well as `ID`, since Mint says `ubuntu debian`
+/// there and `linuxmint` in `ID`. A distribution this does not know gets
+/// the two common names, labelled, rather than one guessed command.
+pub(crate) fn linux_c_toolchain_fix(os_release: &str) -> &'static str {
+    let mut family = String::new();
+    for line in os_release.lines() {
+        if let Some(value) = line
+            .strip_prefix("ID=")
+            .or_else(|| line.strip_prefix("ID_LIKE="))
+        {
+            family.push(' ');
+            family.push_str(&value.trim().trim_matches('"').to_ascii_lowercase());
+        }
+    }
+    let has = |name: &str| family.split_whitespace().any(|word| word == name);
+    if has("debian") || has("ubuntu") {
+        "sudo apt install build-essential"
+    } else if has("fedora") || has("rhel") || has("centos") {
+        "sudo dnf install gcc"
+    } else if has("arch") {
+        "sudo pacman -S base-devel"
+    } else if has("suse") || has("opensuse") {
+        "sudo zypper install gcc"
+    } else if has("alpine") {
+        "sudo apk add build-base"
+    } else {
+        "install your distribution's C compiler package (build-essential on Debian and \
+         Ubuntu, gcc on Fedora)"
+    }
+}
+
 /// How to install one of the tools rusty drives, as one line to type.
 ///
 /// The table already knew this and only the toolchain panel was reading it, so
@@ -486,10 +561,10 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             path: path.map(|found| found.display().to_string()),
             install_command: install.to_string(),
             // The RISC-V one downloads like QEMU and the debuggers do, on
-            // the platform whose asset has been checked. The Xtensa one is
-            // espup's to install, and clicking Install on *this* row could
-            // not say so — its own row can.
-            installable: binary == "riscv32-esp-elf-gcc" && cfg!(windows),
+            // every platform Espressif publishes its archive for. The
+            // Xtensa one is espup's to install, and clicking Install on
+            // *this* row could not say so — its own row can.
+            installable: binary == "riscv32-esp-elf-gcc" && crate::install::gcc_available(),
             // A CMake project cannot build without it; for a Cargo one only
             // projects that actually speak C need it, and the detection that
             // knows whether this one does lives in `project::detect`.
@@ -547,6 +622,43 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             version: None,
             path: msvc_linker().map(|found| found.display().to_string()),
             install_command: MSVC_BUILD_TOOLS.to_string(),
+            installable: false,
+            required: true,
+        });
+    }
+
+    // The same row for the other two hosts, each by the check its platform
+    // has. A Mac without the Command Line Tools has no `cc`, no `git` and no
+    // `clangd`, and `cargo install` dies there with `xcrun: error: invalid
+    // active developer path`; a Linux without a C compiler dies with
+    // `linker cc not found`. Both after a minute of compiling, both on the
+    // first run, both fixed by one line the row carries. Not installable by
+    // rusty: Apple's dialog and the distribution's package manager each ask
+    // the user something rusty must not answer for them.
+    if cfg!(target_os = "macos") {
+        status.tools.push(ToolStatus {
+            name: "xcode-clt".to_string(),
+            purpose: "The Xcode Command Line Tools — the C compiler and linker every `cargo \
+                      install` and every host build needs, and git with them"
+                .to_string(),
+            version: None,
+            path: xcode_developer_dir().map(|found| found.display().to_string()),
+            install_command: XCODE_CLT_INSTALL.to_string(),
+            installable: false,
+            required: true,
+        });
+    }
+    if cfg!(target_os = "linux") {
+        let path = linux_cc();
+        let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+        status.tools.push(ToolStatus {
+            name: "cc".to_string(),
+            purpose: "The C compiler and linker (cc) — every `cargo install` and every host \
+                      build links through it"
+                .to_string(),
+            version: path.as_ref().and_then(|found| probe_version(found)),
+            path: path.map(|found| found.display().to_string()),
+            install_command: linux_c_toolchain_fix(&os_release).to_string(),
             installable: false,
             required: true,
         });
@@ -1137,6 +1249,55 @@ mod tests {
 
     /// The text beside a missing tool is the recipe, not a second spelling of
     /// it: what the button runs is what the panel says.
+    /// The package that brings a C compiler is named per family, read off
+    /// `/etc/os-release` as real distributions write it — and a family this
+    /// does not know gets the two common names labelled, never one guessed.
+    #[test]
+    fn the_linux_c_toolchain_fix_names_the_distributions_own_package() {
+        let ubuntu = "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nID=ubuntu\n\
+                      ID_LIKE=debian\nVERSION_ID=\"24.04\"\n";
+        assert_eq!(
+            linux_c_toolchain_fix(ubuntu),
+            "sudo apt install build-essential"
+        );
+        let mint = "NAME=\"Linux Mint\"\nID=linuxmint\nID_LIKE=\"ubuntu debian\"\n";
+        assert_eq!(
+            linux_c_toolchain_fix(mint),
+            "sudo apt install build-essential",
+            "the family is read off ID_LIKE when ID is a derivative's own name",
+        );
+        let fedora = "NAME=\"Fedora Linux\"\nID=fedora\nVERSION_ID=40\n";
+        assert_eq!(linux_c_toolchain_fix(fedora), "sudo dnf install gcc");
+        let rocky = "ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n";
+        assert_eq!(linux_c_toolchain_fix(rocky), "sudo dnf install gcc");
+        assert_eq!(
+            linux_c_toolchain_fix("ID=arch\n"),
+            "sudo pacman -S base-devel"
+        );
+        assert_eq!(
+            linux_c_toolchain_fix("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"),
+            "sudo zypper install gcc"
+        );
+        assert_eq!(
+            linux_c_toolchain_fix("ID=alpine\n"),
+            "sudo apk add build-base"
+        );
+        let unknown = linux_c_toolchain_fix("ID=nixos\n");
+        assert!(
+            unknown.contains("build-essential") && unknown.contains("gcc"),
+            "an unknown family is told both names, not sold one: {unknown}",
+        );
+        assert!(
+            !unknown.starts_with("sudo"),
+            "and nothing is offered as a command to run: {unknown}"
+        );
+        assert_eq!(
+            linux_c_toolchain_fix(""),
+            unknown,
+            "no file reads as unknown"
+        );
+    }
+
     #[test]
     fn the_install_text_is_the_recipe_it_describes() {
         assert_eq!(

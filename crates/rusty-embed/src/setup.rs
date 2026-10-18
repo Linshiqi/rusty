@@ -86,27 +86,48 @@ pub fn plan(report: &ToolchainReport) -> Vec<SetupStep> {
         }];
     }
 
-    // Then the linker, alone, for the same reason: an `-msvc` rustc links
-    // through Visual Studio's, and without the C++ build tools every `cargo
-    // install` below compiles for a minute and dies with "linker `link.exe`
-    // not found" — on the first run, on the machine of somebody who has just
-    // installed Rust and has no idea what a linker is. The row exists only on
-    // hosts where it applies, so this arm is never reached elsewhere.
-    if let Some(missing) = missing_tool(&report.status, "msvc") {
+    // Then the host's C toolchain, alone, for the same reason: an `-msvc`
+    // rustc links through Visual Studio's, a Mac's through the Xcode Command
+    // Line Tools', a Linux's through `cc`, and without it every `cargo
+    // install` below compiles for a minute and dies with "linker not found"
+    // — on the first run, on the machine of somebody who has just installed
+    // Rust and has no idea what a linker is. Each row exists only on the host
+    // it applies to (`toolchain::HOST_C_TOOLCHAINS`), so at most one of these
+    // arms is ever reached.
+    for name in crate::toolchain::HOST_C_TOOLCHAINS {
+        let Some(missing) = missing_tool(&report.status, name) else {
+            continue;
+        };
+        let manual = match name {
+            "msvc" => "The Windows C++ build tools are not installed, so nothing `cargo \
+                       install` compiles can be linked. Install Build Tools for Visual \
+                       Studio with the \"Desktop development with C++\" workload — \
+                       https://visualstudio.microsoft.com/visual-cpp-build-tools/ — then \
+                       rusty can do the rest."
+                .to_string(),
+            "xcode-clt" => format!(
+                "The Xcode Command Line Tools are not installed, so this Mac has no C \
+                 compiler or linker for anything `cargo install` builds — and no git. Run \
+                 `{}` in a terminal (Apple's own dialog takes it from there), then rusty \
+                 can do the rest.",
+                crate::toolchain::XCODE_CLT_INSTALL
+            ),
+            // The row carries the distribution's own package line, read off
+            // /etc/os-release where the report was made.
+            _ => format!(
+                "No C compiler answers on this machine, so nothing `cargo install` \
+                 compiles can be linked. Install your distribution's C toolchain — {} — \
+                 then rusty can do the rest.",
+                missing.install_command
+            ),
+        };
         return vec![SetupStep {
-            tool: "msvc".to_string(),
+            tool: name.to_string(),
             purpose: missing.purpose.clone(),
             command: String::new(),
             destination: Destination::Manual,
             slow: false,
-            manual: Some(
-                "The Windows C++ build tools are not installed, so nothing `cargo install` \
-                 compiles can be linked. Install Build Tools for Visual Studio with the \
-                 \"Desktop development with C++\" workload — \
-                 https://visualstudio.microsoft.com/visual-cpp-build-tools/ — then rusty \
-                 can do the rest."
-                    .to_string(),
-            ),
+            manual: Some(manual),
         }];
     }
 
@@ -272,8 +293,11 @@ pub fn section_of(tool: &str) -> Section {
     if tool.ends_with("-gcc") {
         return Section::Build;
     }
+    if crate::toolchain::HOST_C_TOOLCHAINS.contains(&tool) {
+        return Section::Build;
+    }
     match tool {
-        "msvc" | "ldproxy" | "pio" | "cmake" | "ninja" | "idf.py" => Section::Build,
+        "ldproxy" | "pio" | "cmake" | "ninja" | "idf.py" => Section::Build,
         "espflash" | "probe-rs" | "wlink" | "codelldb" => Section::Device,
         _ => Section::Editor,
     }
@@ -349,7 +373,10 @@ pub fn can_install(report: &ToolchainReport, name: &str) -> bool {
 pub enum Verdict {
     /// Rust itself is absent: nothing else can be installed until it is.
     NeedsRust,
-    /// An `-msvc` host without the Visual Studio linker.
+    /// A host without its own C toolchain: the Visual Studio linker on an
+    /// `-msvc` host, the Xcode Command Line Tools on macOS, a `cc` on Linux
+    /// (`toolchain::HOST_C_TOOLCHAINS`). Nothing `cargo install` builds can
+    /// be linked without it, so it is the one item, like a missing rustup.
     NeedsLinker,
     /// Things this project needs, by name.
     Missing(Vec<String>),
@@ -365,7 +392,9 @@ pub fn verdict(report: &ToolchainReport) -> Verdict {
     {
         return Verdict::NeedsRust;
     }
-    if steps.iter().any(|s| s.tool == "msvc" && s.manual.is_some()) {
+    if steps.iter().any(|s| {
+        crate::toolchain::HOST_C_TOOLCHAINS.contains(&s.tool.as_str()) && s.manual.is_some()
+    }) {
         return Verdict::NeedsLinker;
     }
     let needed = needed(report);
@@ -457,27 +486,39 @@ mod tests {
         assert!(blocked(&r));
     }
 
-    /// An `-msvc` host without the C++ build tools can install nothing:
-    /// every `cargo install` compiles and then fails to link. So, like a
-    /// missing rustup, it is the one item — and a link rather than a button.
+    /// A host without its C toolchain can install nothing: every `cargo
+    /// install` compiles and then fails to link. So, like a missing rustup,
+    /// it is the one item — and a link rather than a button — on each of the
+    /// three hosts, with each host's own fix in the sentence.
     #[test]
     fn a_machine_without_the_linker_is_told_that_first() {
-        let r = report(vec![
-            tool("rustup", true, true),
-            tool("msvc", false, true),
-            tool("espflash", false, true),
-        ]);
-        let steps = plan(&r);
-        assert_eq!(steps.len(), 1, "{steps:?}");
-        assert_eq!(steps[0].tool, "msvc");
-        assert_eq!(steps[0].destination, Destination::Manual);
-        assert!(
-            steps[0]
-                .manual
-                .as_ref()
-                .is_some_and(|m| m.contains("visual-cpp-build-tools"))
-        );
-        assert!(blocked(&r));
+        for (row, fix) in [
+            ("msvc", "visual-cpp-build-tools"),
+            ("xcode-clt", "xcode-select --install"),
+            ("cc", "sudo apt install build-essential"),
+        ] {
+            let mut missing = tool(row, false, true);
+            missing.installable = false;
+            // The Linux row carries the distribution's package line, which
+            // the plan repeats rather than respelling.
+            missing.install_command = "sudo apt install build-essential".to_string();
+            let r = report(vec![
+                tool("rustup", true, true),
+                missing,
+                tool("espflash", false, true),
+            ]);
+            let steps = plan(&r);
+            assert_eq!(steps.len(), 1, "{row}: {steps:?}");
+            assert_eq!(steps[0].tool, row);
+            assert_eq!(steps[0].destination, Destination::Manual);
+            assert!(
+                steps[0].manual.as_ref().is_some_and(|m| m.contains(fix)),
+                "{row}: {:?}",
+                steps[0].manual
+            );
+            assert!(blocked(&r), "{row}");
+            assert_eq!(verdict(&r), Verdict::NeedsLinker, "{row}");
+        }
     }
 
     /// The espup step runs what the recipe table says, pinned version and
@@ -734,6 +775,8 @@ mod tests {
             assert_eq!(section_of("espflash"), Section::Device);
             assert_eq!(section_of("probe-rs"), Section::Device);
             assert_eq!(section_of("msvc"), Section::Build);
+            assert_eq!(section_of("xcode-clt"), Section::Build);
+            assert_eq!(section_of("cc"), Section::Build);
             assert_eq!(section_of("riscv32-esp-elf-gcc"), Section::Build);
             assert_eq!(section_of("arm-none-eabi-gcc"), Section::Build);
             assert_eq!(section_of("pio"), Section::Build);
