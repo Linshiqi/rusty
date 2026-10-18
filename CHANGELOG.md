@@ -9,6 +9,30 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.6
+
+**Pull works on a branch that has diverged.** Newer versions of git
+refuse a plain `git pull` until you have told them whether to merge or
+rebase, and the Git panel's Pull used to stop at that refusal. It merges
+now unless your git config says otherwise (`pull.rebase`), which the panel
+then follows.
+
+**A conflict is resolved in the editor.** When a pull or a merge stops on
+a conflict, each conflicted block in the file carries *Accept Current
+Change | Accept Incoming Change | Accept Both Changes* above its first
+marker, as VS Code does, with the two sides tinted so you can see where
+each begins and ends. One click resolves the block and one Ctrl+Z puts it
+back. Clicking a conflicted file in the Changes list opens the file
+itself rather than its diff.
+
+**Text on a Markdown page can be selected and copied.** Drag to select
+down to the character, double-click a word, Shift+click to extend, and
+Ctrl+C, Ctrl+A and Escape do what they do everywhere else; the right-click
+menu has Copy and Select all. A formula copies as its TeX between dollar
+signs, a table's cells as tab-separated text, and a selection across a
+wrapped line keeps the space the line was broken at. Clicking a link
+still opens it.
+
 ## v0.7.5
 
 **Housekeeping, continued.** Nothing you can see changes; what repeated in
