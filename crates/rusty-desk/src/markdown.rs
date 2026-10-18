@@ -19,6 +19,9 @@
 pub mod flow;
 pub mod html;
 pub mod math;
+/// Selecting on the page: places in its laid-out blocks, and what a drag
+/// and a copy mean against them.
+pub mod select;
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -585,7 +588,9 @@ fn withholds(name: &str) -> bool {
 
 /// Runs as the Markdown `StyledText` reads — a formula as its source in a
 /// code span, which is what a reader without the formula's picture sees —
-/// and the runs themselves when one of them is a formula.
+/// and the runs themselves, which the page lays out into lines itself so
+/// that it knows where every character stands (`flow`): a selection is
+/// measured against that, and a formula drawn at it.
 fn written(runs: Vec<Run>) -> (String, Vec<Run>) {
     let mut inline = String::new();
     for run in &runs {
@@ -595,8 +600,7 @@ fn written(runs: Vec<Run>) -> (String, Vec<Run>) {
             Run::Break => inline.push('\n'),
         }
     }
-    let flows = runs.iter().any(|run| matches!(run, Run::Math(_)));
-    (inline, if flows { runs } else { Vec::new() })
+    (inline, runs)
 }
 
 /// Text with every character `StyledText`'s reader would take for markup
@@ -669,24 +673,30 @@ mod tests {
         let blocks = blocks(
             "# Title\n\nSome *words* and `code`.\n\n- one\n- two\n  1. deep\n\n> quoted\n\n```rust\nfn main() {}\n```\n\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
         );
+        let plain = |text: &str| Run::Text {
+            text: text.into(),
+            style: Style::default(),
+        };
         assert_eq!(
             blocks[0],
             Block::Heading {
                 level: 1,
                 inline: "Title".into(),
-                flow: vec![]
+                flow: vec![plain("Title")]
             }
         );
-        assert_eq!(
-            blocks[1],
-            Block::Text {
-                inline: "Some *words* and `code`.".into(),
-                quote: 0,
-                item: None,
-                caption: false,
-                flow: vec![]
-            }
-        );
+        let Block::Text {
+            inline,
+            quote: 0,
+            item: None,
+            caption: false,
+            flow,
+        } = &blocks[1]
+        else {
+            panic!("a paragraph: {:?}", blocks[1]);
+        };
+        assert_eq!(inline, "Some *words* and `code`.");
+        assert_eq!(flow.len(), 5, "every run kept: {flow:?}");
         let items: Vec<(String, u32)> = blocks
             .iter()
             .filter_map(|b| match b {
@@ -718,7 +728,7 @@ mod tests {
         );
         let cell = |s: &str| Cell {
             inline: s.into(),
-            flow: vec![],
+            flow: vec![plain(s)],
         };
         assert!(blocks.contains(&Block::Table {
             rows: vec![vec![cell("a"), cell("b")], vec![cell("1"), cell("2")]]
@@ -759,7 +769,14 @@ mod tests {
         let Block::Text { flow, .. } = &read[1] else {
             panic!("a paragraph")
         };
-        assert!(flow.is_empty(), "only a paragraph with a formula flows");
+        assert_eq!(
+            flow,
+            &[Run::Text {
+                text: "no formula here".into(),
+                style: Style::default()
+            }],
+            "every paragraph keeps its runs: the page lays them all out"
+        );
     }
 
     /// `$$…$$` is a block of its own between the paragraphs round it.

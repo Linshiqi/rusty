@@ -59,11 +59,47 @@ pub struct TextLine {
 }
 
 /// A line, laid out: its height and what is on it, each placed from the
-/// line's top left.
+/// line's top left — the pieces the view draws, and every atom on the line
+/// with where it stands, which is what a selection is measured against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Line {
     pub height: f32,
     pub pieces: Vec<Piece>,
+    pub placed: Vec<Placed>,
+}
+
+/// One atom of a paragraph on a line: which atom, where it stands across
+/// the line, what it is copied as, and how its text is measured.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Placed {
+    /// The atom's index in its paragraph (`atom_texts`), which a selection
+    /// names it by: a line's worth of atoms changes with the width, an
+    /// atom does not.
+    pub atom: usize,
+    pub x: f32,
+    pub width: f32,
+    /// A word, a space, or a formula's TeX.
+    pub text: String,
+    pub style: Style,
+    /// A formula, drawn or standing as its source: selected whole or not at
+    /// all, never a character of it.
+    pub formula: bool,
+}
+
+/// What each atom of a paragraph is copied as, by index: a word, a space,
+/// a formula as `$…$`, a hard break as a line break. The same atoms
+/// `lay_out` places, so a selection in atoms reads the same text whatever
+/// width the paragraph was laid out for — the spaces a line was broken at
+/// included, which stand on no line.
+pub fn atom_texts(runs: &[Run]) -> Vec<String> {
+    atoms(runs)
+        .into_iter()
+        .map(|atom| match atom.kind {
+            Kind::Formula(_) | Kind::Source(_) => format!("${}$", atom.text.trim()),
+            Kind::Break => "\n".to_string(),
+            Kind::Word | Kind::Space => atom.text,
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -213,12 +249,8 @@ fn atoms(runs: &[Run]) -> Vec<Atom> {
                     out.push(atom(Kind::Space, " ".into(), style));
                 }
             }
-            Run::Math(_) => {
-                out.push(atom(
-                    Kind::Formula(formula),
-                    String::new(),
-                    &Style::default(),
-                ));
+            Run::Math(tex) => {
+                out.push(atom(Kind::Formula(formula), tex.clone(), &Style::default()));
                 formula += 1;
             }
             Run::Break => out.push(atom(Kind::Break, String::new(), &Style::default())),
@@ -280,7 +312,7 @@ pub fn lay_out(
     }
     lines(&atoms, width)
         .into_iter()
-        .map(|range| place(&atoms[range], text))
+        .map(|range| place(&atoms[range.clone()], range.start, text))
         .collect()
 }
 
@@ -358,7 +390,7 @@ fn lines(atoms: &[Atom], width: f32) -> Vec<std::ops::Range<usize>> {
 /// One line's atoms, placed: text gathered into pieces, every piece on the
 /// line's baseline. A formula taller than the text keeps the text's own
 /// leading above and below it, so it never touches the line next to it.
-fn place(atoms: &[Atom], text: TextLine) -> Line {
+fn place(atoms: &[Atom], first: usize, text: TextLine) -> Line {
     let lead = text.height * LEAD;
     let mut ascent = text.baseline;
     let mut descent = text.height - text.baseline;
@@ -370,6 +402,7 @@ fn place(atoms: &[Atom], text: TextLine) -> Line {
     }
     let text_y = ascent - text.baseline;
     let mut pieces = Vec::new();
+    let mut placed = Vec::new();
     let mut x = 0.0;
     let mut gathered: Vec<&Atom> = Vec::new();
     let mut gathered_x = 0.0;
@@ -393,7 +426,24 @@ fn place(atoms: &[Atom], text: TextLine) -> Line {
         });
         gathered.clear();
     };
-    for atom in atoms {
+    for (at, atom) in atoms.iter().enumerate() {
+        if atom.kind != Kind::Break {
+            let formula = matches!(atom.kind, Kind::Formula(_) | Kind::Source(_));
+            placed.push(Placed {
+                atom: first + at,
+                x,
+                width: atom.width,
+                // As `atom_texts` copies it, so a spot's offset means one
+                // thing in both.
+                text: if formula {
+                    format!("${}$", atom.text.trim())
+                } else {
+                    atom.text.clone()
+                },
+                style: atom.style.clone(),
+                formula,
+            });
+        }
         match atom.kind {
             Kind::Space if gathered.is_empty() => {}
             Kind::Word | Kind::Space => {
@@ -429,6 +479,7 @@ fn place(atoms: &[Atom], text: TextLine) -> Line {
     Line {
         height: ascent + descent,
         pieces,
+        placed,
     }
 }
 
@@ -527,6 +578,37 @@ mod tests {
             ascent: 6.0,
             descent: 1.0,
         }
+    }
+
+    /// Every atom on a line stands where the text before it ends, under
+    /// its index in the paragraph; the space a line was broken at stands
+    /// on no line and is still in the paragraph's texts, so a selection
+    /// across the break copies it.
+    #[test]
+    fn placed_atoms_keep_their_index_and_the_break_keeps_its_space() {
+        let runs = [plain("one two three")];
+        let lines = lay_out(&runs, &[], 9.0, TEXT, &mut Units);
+        let placed: Vec<(usize, f32, &str)> = lines
+            .iter()
+            .flat_map(|l| l.placed.iter().map(|p| (p.atom, p.x, p.text.as_str())))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                (0, 0.0, "one"),
+                (1, 3.0, " "),
+                (2, 4.0, "two"),
+                (4, 0.0, "three")
+            ]
+        );
+        assert_eq!(atom_texts(&runs), ["one", " ", "two", " ", "three"]);
+        let with_formula = [
+            plain("a "),
+            Run::Math(" x^2 ".into()),
+            Run::Break,
+            plain("b"),
+        ];
+        assert_eq!(atom_texts(&with_formula), ["a", " ", "$x^2$", "\n", "b"]);
     }
 
     /// Latin text breaks at spaces and never inside a word; no line begins

@@ -41,6 +41,7 @@ mod git_view;
 mod lab;
 mod lab_words;
 mod markdown_view;
+mod page_select;
 pub(crate) use markdown_view::doc_blocks;
 mod math;
 mod math_words;
@@ -609,7 +610,16 @@ impl App {
             .term_select(kind, col, row));
         on!(on_content_zoom, |app, what, delta| app
             .content_zoom(&what, delta));
-        on!(on_page_click, |app, x, y| app.page_click(x, y));
+        on!(on_md_placed, |app, key, x, y, w, h, size| app
+            .md_placed(key, x, y, w, h, size));
+        on!(on_page_press, |app, x, y, shift| app
+            .page_press(x, y, shift));
+        on!(on_page_drag, |app, x, y| app.page_drag(x, y));
+        on!(on_page_release, |app, x, y| app.page_release(x, y));
+        on!(on_page_double, |app, x, y| app.page_double(x, y));
+        on!(on_page_hover, |app, x, y| app.page_hover(x, y));
+        let weak = Rc::downgrade(self);
+        shell.on_page_key(move |verb| weak.upgrade().is_some_and(|app| app.page_key(&verb)));
         on!(on_surface_menu, |app, surface, what, row, x, y| app
             .surface_menu(&surface, &what, row, x, y));
         let weak = Rc::downgrade(self);

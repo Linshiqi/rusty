@@ -337,15 +337,19 @@ pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
 /// Who commits would be signed as. `git config --get` exits 1 for a key that
 /// is not set, which here is an answer rather than a failure.
 pub fn identity(root: &Path) -> Result<crate::model::GitIdentity> {
-    let get = |key: &str| -> Result<Option<String>> {
-        let value = run_allowing(root, &["config", "--get", key], &[0, 1])?;
-        let value = value.trim();
-        Ok((!value.is_empty()).then(|| value.to_string()))
-    };
     Ok(crate::model::GitIdentity {
-        name: get("user.name")?,
-        email: get("user.email")?,
+        name: config_value(root, "user.name")?,
+        email: config_value(root, "user.email")?,
     })
+}
+
+/// One key of the config as git resolves it for `root` — the repository's,
+/// the user's or the system's. `git config --get` exits 1 for a key that
+/// is not set, which is an answer: `None`.
+pub fn config_value(root: &Path, key: &str) -> Result<Option<String>> {
+    let value = run_allowing(root, &["config", "--get", key], &[0, 1])?;
+    let value = value.trim();
+    Ok((!value.is_empty()).then(|| value.to_string()))
 }
 
 /// Whether `dir` holds a git repository that has never had a commit: a

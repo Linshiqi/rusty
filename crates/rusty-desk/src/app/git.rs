@@ -564,7 +564,7 @@ impl App {
             "refresh" => self.git_load(),
             "history" => self.git_open_history(),
             "fetch" => self.git(args(&["fetch", "--all", "--prune"])),
-            "pull" => self.git(args(&["pull"])),
+            "pull" => self.git_pull(),
             "push" => self.git_push(),
             "init" => self.git_then(args(&["init"]), |app, ended| {
                 if ended == crate::run::Ended::Done {
@@ -607,6 +607,22 @@ impl App {
             "head" => self.git_reveal_head(),
             _ => {}
         }
+    }
+
+    /// Pull. git refuses a plain `pull` on branches that have diverged until
+    /// `pull.rebase` says how to reconcile them, so with the setting unset
+    /// the pull merges (`plan::pull_args`); set, it is the user's. One
+    /// `config --get` off the UI thread before the line runs.
+    fn git_pull(self: &Rc<Self>) {
+        let Some(root) = self.root() else { return };
+        crate::work::spawn(
+            move || {
+                rusty_git::repo::config_value(&root, "pull.rebase")
+                    .ok()
+                    .flatten()
+            },
+            |app, setting| app.git(rusty_git::plan::pull_args(setting.as_deref())),
+        );
     }
 
     /// Push the branch checked out. With no upstream yet, set one; with no
@@ -741,7 +757,12 @@ impl App {
                 .and_then(|s| s.entries.iter().find(|e| e.path == path).cloned())
         };
         let untracked = entry.as_ref().is_some_and(|e| e.untracked);
+        let conflicted = entry.as_ref().is_some_and(|e| e.conflicted);
         match verb {
+            // A file in conflict is resolved in the editor, where each
+            // block carries its lens; its diff is a combined one nobody
+            // can act on.
+            "diff" if conflicted => self.open_file(path),
             "diff" => self.git_show_diff(path, staged),
             "stage" => self.git_stage(vec![path], true),
             "unstage" => self.git_stage(vec![path], false),

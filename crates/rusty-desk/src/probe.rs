@@ -128,7 +128,12 @@
 //! moved by the drag (`dividers`).
 //! With `RUSTY_PROBE_BOOK`, on a chapter of a Markdown book, it photographs the
 //! page's formulas and figures in both themes, the pictures beside it as
-//! pages of their own, and the book's symbol table (`book` below).
+//! pages of their own, and the book's symbol table (`book` below), and
+//! drags a selection across a page and selects all of it.
+//! With `RUSTY_PROBE_CONFLICT`, on a file git left conflict markers in, it
+//! photographs the lenses and the tints in both themes, resolves the first
+//! block to its incoming side through the lens's own callback, prints the
+//! text, and undoes it.
 //! With `RUSTY_PROBE_UNLINKED`, on a copy of a Cargo project opened on a file
 //! under `src/` that no `mod` declares, it waits for the scan, photographs
 //! the file greyed in the tree and on its tab and its code faint, rests the
@@ -319,6 +324,7 @@ pub fn start(window: &AppWindow) {
     let frames: Rc<RefCell<Vec<(String, image::RgbaImage)>>> = Rc::default();
     let reading_book = std::env::var_os("RUSTY_PROBE_BOOK").is_some();
     let unlinking = std::env::var_os("RUSTY_PROBE_UNLINKED").is_some();
+    let conflicting = std::env::var_os("RUSTY_PROBE_CONFLICT").is_some();
     let failing = std::env::var_os("RUSTY_PROBE_TESTFAIL").is_some();
     let chapter: Rc<RefCell<String>> = Rc::default();
     let picking_devices = std::env::var_os("RUSTY_PROBE_DEVICES").is_some();
@@ -566,6 +572,9 @@ pub fn start(window: &AppWindow) {
                 }
                 if unlinking {
                     step.set(7100);
+                }
+                if conflicting {
+                    step.set(8000);
                 }
                 if outputs {
                     step.set(7500);
@@ -3085,6 +3094,70 @@ pub fn start(window: &AppWindow) {
             // tab, its code faint in the main window and in a window of its
             // own, the reason on the pointer, and rust-analyzer's own fix on
             // the hover card, after which it is drawn as any other file.
+            // With `RUSTY_PROBE_CONFLICT`, on a file git left conflict
+            // markers in: the lenses and the tints photographed, the first
+            // block resolved to its incoming side through the lens's own
+            // callback, and the text after.
+            8000 if conflicting => {
+                if shell.get_active_kind() != "file" {
+                    step.set(8000);
+                    return;
+                }
+                shell.invoke_close_tab("page:welcome".into());
+                shell.set_theme_choice("light".into());
+            }
+            8004 if conflicting => {
+                let text = app
+                    .editor()
+                    .current_path()
+                    .and_then(|path| app.editor().draft_of(&path))
+                    .map(|(text, ..)| text)
+                    .unwrap_or_default();
+                let found = rusty_edit::conflict::find(&text);
+                eprintln!("conflict: {} block(s): {found:?}", found.len());
+                snapshot(&window, &dir.join("conflict-light.png"));
+                shell.set_theme_choice("dark".into());
+            }
+            8008 if conflicting => {
+                snapshot(&window, &dir.join("conflict-dark.png"));
+                let text = app
+                    .editor()
+                    .current_path()
+                    .and_then(|path| app.editor().draft_of(&path))
+                    .map(|(text, ..)| text)
+                    .unwrap_or_default();
+                if let Some(first) = rusty_edit::conflict::find(&text).first() {
+                    code.invoke_lens(first.start as i32, "incoming".into());
+                }
+            }
+            8012 if conflicting => {
+                let text = app
+                    .editor()
+                    .current_path()
+                    .and_then(|path| app.editor().draft_of(&path))
+                    .map(|(text, ..)| text)
+                    .unwrap_or_default();
+                eprintln!(
+                    "conflict: after Accept Incoming on the first block, {} left; text:\n{text}",
+                    rusty_edit::conflict::find(&text).len()
+                );
+                snapshot(&window, &dir.join("conflict-resolved.png"));
+                window.invoke_focus_code();
+                chord(&[Key::Control], "z".into());
+            }
+            8016 if conflicting => {
+                let text = app
+                    .editor()
+                    .current_path()
+                    .and_then(|path| app.editor().draft_of(&path))
+                    .map(|(text, ..)| text)
+                    .unwrap_or_default();
+                eprintln!(
+                    "conflict: after undo, {} block(s) again",
+                    rusty_edit::conflict::find(&text).len()
+                );
+                app.act("app.exit");
+            }
             7100 if unlinking => {
                 let (_, _, scans, _) = app.unlinked_now();
                 if shell.get_active_kind() != "file" || scans == 0 {
@@ -5181,6 +5254,62 @@ fn book(
                 page_sizes(&shell)
             );
             photo("page-zoom-1.2.png");
+        }
+        // A drag across the page's first line selects, as a press on the
+        // touch over the page; what is selected is what a copy would put
+        // on the clipboard, and the page says so with its own highlight.
+        6513 => {
+            let height = shell
+                .get_md_blocks()
+                .row_data(0)
+                .and_then(|block| block.flow.row_data(0))
+                .map_or(20.0, |line| line.height);
+            let (x, top) = page_origin(window, &shell);
+            let y = top + height / 2.0;
+            let from = slint::LogicalPosition::new(x + 2.0, y);
+            let to = slint::LogicalPosition::new(x + 150.0, y);
+            let button = PointerEventButton::Left;
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerMoved { position: from });
+            window.window().dispatch_event(WindowEvent::PointerPressed {
+                position: from,
+                button,
+            });
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerMoved { position: to });
+        }
+        6514 => {
+            eprintln!(
+                "book: dragged across the first line, selected {:?}",
+                app.page_selected_text()
+            );
+            photo("page-selected.png");
+            let (x, top) = page_origin(window, &shell);
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerReleased {
+                    position: slint::LogicalPosition::new(x + 150.0, top + 8.0),
+                    button: PointerEventButton::Left,
+                });
+            // Select all, which reaches the display formula's block too,
+            // then let it go.
+            let all = app.page_key("all");
+            let text = app.page_selected_text();
+            eprintln!(
+                "book: select all {all}: {} characters, starting {:?}",
+                text.chars().count(),
+                text.chars().take(40).collect::<String>()
+            );
+        }
+        6515 => {
+            photo("page-selected-all.png");
+            eprintln!(
+                "book: Escape clears {}, left {:?}",
+                app.page_key("clear"),
+                app.page_selected_text()
+            );
         }
         6520 => {
             app.open_file(format!("{}figures/fig-16-e1mini.png", folder()));

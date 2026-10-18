@@ -913,22 +913,51 @@ export component EditorArea inherits Rectangle {
                                     padding-bottom: 28px;
                                     padding-left: max(32px, (md-area.width - 820px * Shell.page-zoom) / 2);
                                     padding-right: max(32px, (md-area.width - 820px * Shell.page-zoom) / 2);
-                                    MarkdownView {
+                                    md-view := MarkdownView {
                                         blocks: Shell.md-blocks;
                                         font-size: Theme.body * Shell.page-zoom;
                                     }
                                 }
                             }
-                            // Over the page, short of its scrollbar: Ctrl and the wheel
-                            // size its text, and a right-click opens its menu — the text
-                            // takes every press itself, so nothing under it would hear the
-                            // right button. A click is made again underneath, with this
-                            // stepped aside, so a link still answers; and where the pointer
-                            // is goes to `PagePointer`, so a tip under it still shows.
+                            // The page's keys, taken by a press on it: Ctrl+C copies the
+                            // selection, Ctrl+A selects the page, Escape lets it go.
+                            page-keys := FocusScope {
+                                width: 0px;
+                                height: 0px;
+                                key-pressed(event) => {
+                                    if ((event.modifiers.control || event.modifiers.meta) && !event.modifiers.alt) {
+                                        if (event.text == "c" || event.text == "C" || event.text == Key.Insert) {
+                                            return Shell.page-key("copy") ? accept : reject;
+                                        }
+                                        if (event.text == "a" || event.text == "A") {
+                                            return Shell.page-key("all") ? accept : reject;
+                                        }
+                                    }
+                                    if (event.text == Key.Escape) {
+                                        return Shell.page-key("clear") ? accept : reject;
+                                    }
+                                    reject
+                                }
+                            }
+                            // Over the page, short of its scrollbar: the text takes every
+                            // press itself, so nothing under it would hear the right
+                            // button, Ctrl and the wheel, or a drag. So this hears them:
+                            // Ctrl and the wheel size the text, a right-click opens the
+                            // menu, a press and a drag select — each point handed over
+                            // from the page's own top left, which is what the blocks
+                            // reported their places from — and a click without a drag
+                            // opens the link under it. Where the pointer is goes to
+                            // `PagePointer`, so a tip under it still shows.
                             TouchArea {
                                 x: 0;
                                 width: parent.width - 14px;
-                                enabled: !Shell.page-through;
+                                mouse-cursor: Shell.page-cursor == 1 ? MouseCursor.text : Shell.page-cursor == 2 ? MouseCursor.pointer : MouseCursor.default;
+                                function page-x() -> length {
+                                    return self.absolute-position.x + self.mouse-x - md-view.absolute-position.x;
+                                }
+                                function page-y() -> length {
+                                    return self.absolute-position.y + self.mouse-y - md-view.absolute-position.y;
+                                }
                                 changed has-hover => {
                                     PagePointer.inside = self.has-hover;
                                 }
@@ -943,13 +972,25 @@ export component EditorArea inherits Rectangle {
                                     if (event.kind == PointerEventKind.move) {
                                         PagePointer.x = self.absolute-position.x + self.mouse-x;
                                         PagePointer.y = self.absolute-position.y + self.mouse-y;
+                                        if (self.pressed) {
+                                            Shell.page-drag(page-x(), page-y());
+                                        } else {
+                                            Shell.page-hover(page-x(), page-y());
+                                        }
                                     }
                                     if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                                         Shell.surface-menu("page", "", -1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                                     }
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        page-keys.focus();
+                                        Shell.page-press(page-x(), page-y(), event.modifiers.shift);
+                                    }
+                                    if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                                        Shell.page-release(page-x(), page-y());
+                                    }
                                 }
-                                clicked => {
-                                    Shell.page-click(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                double-clicked => {
+                                    Shell.page-double(page-x(), page-y());
                                 }
                             }
                         }

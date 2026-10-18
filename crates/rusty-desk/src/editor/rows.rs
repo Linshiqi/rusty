@@ -37,6 +37,10 @@ pub struct Rows {
     lenses: ByVersion<Lenses>,
     /// What can fold, by header, for the document and version they are of.
     regions: ByVersion<Vec<rusty_edit::Region>>,
+    /// The merge conflicts git left in the text, for the document and
+    /// version they are of: a lens on each block's first marker, and each
+    /// side tinted.
+    conflicts: ByVersion<Vec<rusty_edit::conflict::Conflict>>,
 }
 
 /// Something worked out from one version of one document, kept until the
@@ -97,6 +101,7 @@ impl Rows {
             levels: RefCell::default(),
             lenses: RefCell::default(),
             regions: RefCell::default(),
+            conflicts: RefCell::default(),
         }
     }
 
@@ -147,6 +152,32 @@ impl Rows {
         let found = Rc::new(found);
         *cached = Some((doc.path.clone(), doc.version, found.clone()));
         found
+    }
+
+    /// The merge conflicts in `doc`, found once per version.
+    pub fn conflicts(&self, doc: &Document) -> Rc<Vec<rusty_edit::conflict::Conflict>> {
+        let mut cached = self.conflicts.borrow_mut();
+        if let Some((path, version, found)) = cached.as_ref()
+            && *path == doc.path
+            && *version == doc.version
+        {
+            return found.clone();
+        }
+        let found = Rc::new(rusty_edit::conflict::find(&doc.text));
+        *cached = Some((doc.path.clone(), doc.version, found.clone()));
+        found
+    }
+
+    /// The conflict whose first marker is on `row` of the document on
+    /// screen.
+    pub fn conflict_at(&self, row: usize) -> Option<rusty_edit::conflict::Conflict> {
+        let doc = self.doc.borrow().clone()?;
+        let doc = doc.borrow();
+        let line = doc.line_at_row(row) as u32;
+        self.conflicts(&doc)
+            .iter()
+            .find(|c| c.start == line)
+            .copied()
     }
 
     /// What the lens on `row` of the document on screen runs.
@@ -295,6 +326,27 @@ impl Model for Rows {
             }
             None => (0, 0.0, 0),
         };
+        // A conflict's lens on its first marker, VS Code's three verbs; the
+        // marks that tint each side are gathered with the others below.
+        let conflicts = self.conflicts(&doc);
+        let (lens, lens_x) = if lens == 0 && conflicts.iter().any(|c| c.start == line) {
+            (4, lens_after + metrics.ascii() * 3.0)
+        } else {
+            (lens, lens_x)
+        };
+        let conflict_side =
+            conflicts
+                .iter()
+                .map(rusty_edit::conflict::sides)
+                .find_map(|(current, incoming)| {
+                    if current.contains(&line) {
+                        Some(12)
+                    } else if incoming.contains(&line) {
+                        Some(13)
+                    } else {
+                        None
+                    }
+                });
         // Whether a block opens here, and whether it is collapsed: the
         // chevron beside the number, and the ellipsis after the line.
         let fold = if doc.folds.is_folded(line) {
@@ -333,6 +385,11 @@ impl Model for Rows {
                 let mut all: Vec<Mark> = (0..level)
                     .map(|k| mark(f32::from(k) * tab, 1.0, 8))
                     .collect();
+                // A conflict's side is washed across the whole row, behind
+                // everything else.
+                if let Some(kind) = conflict_side {
+                    all.insert(0, mark(0.0, 1.0e6, kind));
+                }
                 let problems = self.problems.borrow();
                 let found = problems.get(&doc.path).map_or(&[][..], Vec::as_slice);
                 // A failed test's place is squiggled as a problem is, and

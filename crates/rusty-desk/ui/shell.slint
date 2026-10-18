@@ -400,8 +400,12 @@ export struct CodeSpan {
     kind: int,
 }
 
+// A line of a code block: its spans, and where the page's selection crosses
+// it (`sel-w` 0 where it does not).
 export struct CodeLine {
     spans: [CodeSpan],
+    sel-x: length,
+    sel-w: length,
 }
 
 // A piece of a line of a paragraph that holds a formula, placed by Rust
@@ -419,9 +423,13 @@ export struct MdPiece {
     tip: string,
 }
 
+// A line a paragraph was laid out into, and where the page's selection
+// crosses it (`sel-w` 0 where it does not).
 export struct MdLine {
     height: length,
     pieces: [MdPiece],
+    sel-x: length,
+    sel-w: length,
 }
 
 // A cell: its text, or its lines when it holds a formula (`key` names it
@@ -1145,9 +1153,25 @@ export global Shell {
     in property <bool> md-file;
     in property <bool> md-page;
     in property <[MdBlock]> md-blocks;
-    // A paragraph with a formula, laid out for the width and text size it
-    // reports here — as it appears and whenever either changes.
+    // A paragraph, laid out for the width and text size it reports here —
+    // as it appears and whenever either changes.
     callback md-flow-width(int, length, length);
+    // Where a paragraph or a code block stands on the page — from the
+    // page's own top left, so scrolling moves nothing — its size and its
+    // text size, reported as it is placed and whenever that moves: what a
+    // press on the page is measured against (`app/page_select.rs`).
+    callback md-placed(int, length, length, length, length, length);
+    // The page's selection: a press, a drag, a release and a double-click,
+    // each a point from the page's own top left; the pointer resting, for
+    // its shape — `page-cursor` 1 over text, 2 over a link; and a key —
+    // "copy", "all", "clear" — which says whether it did anything.
+    callback page-press(length, length, bool);
+    callback page-drag(length, length);
+    callback page-release(length, length);
+    callback page-double(length, length);
+    callback page-hover(length, length);
+    callback page-key(string) -> bool;
+    in property <int> page-cursor;
     // A picture: a picture file opened from the tree, or an SVG's picture
     // over its source (`picture-page`). Not shown, `picture-note` says why.
     in property <bool> picture-page;
@@ -1416,11 +1440,6 @@ export global Shell {
     // larger. A Markdown page's text has its own scale.
     callback content-zoom(string, length);
     in property <float> page-zoom: 1;
-    // A click on the page, made again underneath with the page's own touch
-    // stepped aside, so a link hears it: the text takes every press, so
-    // nothing under it could hear the right button.
-    in property <bool> page-through;
-    callback page-click(length, length);
     // A right-click on a surface with a menu of its own (`app/context.rs`):
     // which surface, what on it, which row, and where in the window.
     callback surface-menu(string, string, int, length, length);

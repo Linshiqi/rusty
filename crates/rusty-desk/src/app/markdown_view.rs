@@ -6,9 +6,12 @@
 //! A `.md` file's page also draws what the assistant's answers do not:
 //! formulas, by RaTeX, rendered off the UI thread and kept by their source;
 //! the pictures the page names, read the way a picture file opened on its
-//! own is (`pictures.rs`); and every paragraph holding a formula broken into
-//! lines here (`markdown::flow`), for the width its view reports back — as
-//! it appears, and whenever the width or the text size changes.
+//! own is (`pictures.rs`); and every paragraph, heading, caption and cell
+//! broken into lines here (`markdown::flow`), for the width its view
+//! reports back — as it appears, and whenever the width or the text size
+//! changes. Laid out here rather than by Slint so that where every
+//! character stands is known, which is what a formula is placed by and a
+//! selection is measured against (`page_select.rs`).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -21,13 +24,14 @@ use rusty_edit::Files;
 use rusty_i18n::t;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use super::pictures::Pic;
+use super::{page_select::PageBox, pictures::Pic};
 use crate::{
     AppWindow, CodeLine, CodeSpan, MdBlock, MdCell, MdLine, MdPiece, MdRow,
     markdown::{
         self, Block, Cell,
-        flow::{self, Boxed, Measure, Piece, Run, Style, TextLine},
+        flow::{self, Boxed, Line, Measure, Piece, Run, Style, TextLine},
         math,
+        select::Selection,
     },
 };
 
@@ -58,10 +62,30 @@ pub(super) enum Drawn {
 /// lays out again without reading the file again.
 #[derive(Default)]
 pub(super) struct Page {
-    read: Vec<Block>,
+    pub(super) read: Vec<Block>,
+    /// The file the page is of, so another file starts with no selection.
+    path: Option<String>,
     /// The project's root and the page's folder in it.
     place: Option<(PathBuf, String)>,
     rows: Option<Rc<VecModel<MdBlock>>>,
+    /// Where each paragraph, cell and code block stands on the page, as
+    /// its view reported (`page_select.rs`).
+    pub(super) boxes: HashMap<i32, PageBox>,
+    /// Each paragraph's lines as last laid out, by key; a code block's,
+    /// measured for the text size its box reported, the first time a press
+    /// asks about it.
+    pub(super) laid_lines: HashMap<i32, Rc<Vec<Line>>>,
+    pub(super) code_lines: HashMap<i32, (f32, Rc<Vec<Line>>)>,
+    /// The rows each block's lines are drawn from, by key, so the
+    /// selection is drawn by changing a row rather than making the block
+    /// again; and what each last drew of it.
+    pub(super) line_models: HashMap<i32, Rc<VecModel<MdLine>>>,
+    pub(super) code_models: HashMap<i32, Rc<VecModel<CodeLine>>>,
+    pub(super) drawn: HashMap<i32, Vec<Option<(f32, f32)>>>,
+    pub(super) selection: Option<Selection>,
+    pub(super) press: Option<super::page_select::Press>,
+    /// Code measured in the code block's font, by size and text.
+    pub(super) mono: HashMap<(u32, String), f32>,
     /// Each flowing paragraph's width and text size as its view last
     /// reported them, by key; and what it was last laid out for.
     widths: HashMap<i32, (f32, f32)>,
@@ -69,7 +93,7 @@ pub(super) struct Page {
     reflow_due: bool,
     /// Text widths, by size, style and text; a line of text's height and
     /// baseline, by size.
-    measures: HashMap<(u32, Style, String), f32>,
+    pub(super) measures: HashMap<(u32, Style, String), f32>,
     text_lines: HashMap<u32, TextLine>,
     /// Formulas by their source and whether they are set apart.
     formulas: HashMap<(String, bool), Drawn>,
@@ -224,9 +248,10 @@ fn code_of(tex: &str) -> String {
     )
 }
 
-fn code(files: &Files, lang: &str, lines: &[String]) -> MdBlock {
+/// A code block's lines, painted by the editor's own highlighter.
+fn code_rows(files: &Files, lang: &str, lines: &[String]) -> Vec<CodeLine> {
     let painted = files.highlight_snippet(lang, &lines.join("\n"));
-    let lines: Vec<CodeLine> = painted
+    painted
         .into_iter()
         .map(|line| CodeLine {
             spans: ModelRc::new(VecModel::from(
@@ -238,12 +263,16 @@ fn code(files: &Files, lang: &str, lines: &[String]) -> MdBlock {
                     })
                     .collect::<Vec<_>>(),
             )),
+            ..CodeLine::default()
         })
-        .collect();
+        .collect()
+}
+
+fn code(files: &Files, lang: &str, lines: &[String]) -> MdBlock {
     MdBlock {
         kind: 2,
         marker: lang.into(),
-        lines: ModelRc::new(VecModel::from(lines)),
+        lines: ModelRc::new(VecModel::from(code_rows(files, lang, lines))),
         ..MdBlock::default()
     }
 }
@@ -252,7 +281,7 @@ fn code(files: &Files, lang: &str, lines: &[String]) -> MdBlock {
 /// `None` for a cell drawn as plain styled text.
 fn table(
     rows: &[Vec<Cell>],
-    mut flowed: impl FnMut(usize, &Cell) -> Option<(i32, Vec<MdLine>)>,
+    mut flowed: impl FnMut(usize, &Cell) -> Option<(i32, Rc<VecModel<MdLine>>)>,
 ) -> MdBlock {
     let mut at = 0;
     let rows: Vec<MdRow> = rows
@@ -270,9 +299,9 @@ fn table(
                             header: row == 0,
                             flowing: lines.is_some(),
                             key: lines.as_ref().map_or(-1, |(key, _)| *key),
-                            flow: ModelRc::new(VecModel::from(
-                                lines.map(|(_, lines)| lines).unwrap_or_default(),
-                            )),
+                            flow: lines
+                                .map(|(_, lines)| ModelRc::from(lines))
+                                .unwrap_or_default(),
                         }
                     })
                     .collect::<Vec<_>>(),
@@ -287,10 +316,32 @@ fn table(
 }
 
 /// Text measured by the window's own text layout, at one size.
-struct Probe<'a> {
-    window: &'a AppWindow,
-    size: f32,
-    measures: &'a mut HashMap<(u32, Style, String), f32>,
+pub(super) struct Probe<'a> {
+    pub(super) window: &'a AppWindow,
+    pub(super) size: f32,
+    pub(super) measures: &'a mut HashMap<(u32, Style, String), f32>,
+}
+
+/// Code measured as a code block draws it: the code font, at one size,
+/// by the window's own text layout.
+pub(super) struct MonoProbe<'a> {
+    pub(super) window: &'a AppWindow,
+    pub(super) size: f32,
+    pub(super) measures: &'a mut HashMap<(u32, String), f32>,
+}
+
+impl Measure for MonoProbe<'_> {
+    fn width(&mut self, text: &str, _: &Style) -> f32 {
+        let key = (self.size.to_bits(), text.to_string());
+        if let Some(width) = self.measures.get(&key) {
+            return *width;
+        }
+        self.window.set_md_probe_size(self.size);
+        self.window.set_md_code_probe_text(text.into());
+        let width = self.window.get_md_code_probe_width();
+        self.measures.insert(key, width);
+        width
+    }
 }
 
 impl Probe<'_> {
@@ -347,12 +398,16 @@ fn text_line(window: &AppWindow, size: f32, known: &mut HashMap<u32, TextLine>) 
 
 impl Page {
     /// A paragraph's lines for the width and size its view reported, or
-    /// none until it has.
-    fn lines(&mut self, window: &AppWindow, key: i32, runs: &[Run]) -> Vec<MdLine> {
+    /// none until it has — centred in the width when `centred`, a figure's
+    /// caption. The lines are kept for the selection to be measured
+    /// against, and each carries the selection's share of it.
+    fn lines(&mut self, window: &AppWindow, key: i32, runs: &[Run], centred: bool) -> Vec<MdLine> {
         let Some(&(width, size)) = self.widths.get(&key) else {
+            self.laid_lines.remove(&key);
             return Vec::new();
         };
         if width < 1.0 || size <= 0.0 {
+            self.laid_lines.remove(&key);
             return Vec::new();
         }
         self.laid.insert(key, (width, size));
@@ -383,7 +438,7 @@ impl Page {
             .collect();
         let text = text_line(window, size, &mut self.text_lines);
         let scale = window.window().scale_factor();
-        let laid = flow::lay_out(
+        let mut laid = flow::lay_out(
             runs,
             &boxes,
             width,
@@ -394,17 +449,42 @@ impl Page {
                 measures: &mut self.measures,
             },
         );
-        laid.into_iter()
-            .map(|line| MdLine {
+        if centred {
+            for line in &mut laid {
+                let used = line.placed.last().map_or(0.0, |p| p.x + p.width);
+                let shift = ((width - used) / 2.0).max(0.0);
+                for piece in &mut line.pieces {
+                    match piece {
+                        Piece::Text { x, .. }
+                        | Piece::Formula { x, .. }
+                        | Piece::Source { x, .. } => *x += shift,
+                    }
+                }
+                for placed in &mut line.placed {
+                    placed.x += shift;
+                }
+            }
+        }
+        let marks = self.selection_marks(window, key, size, &laid);
+        self.drawn.insert(key, marks.clone());
+        let rows = laid
+            .iter()
+            .zip(marks)
+            .map(|(line, mark)| MdLine {
                 height: line.height,
                 pieces: ModelRc::new(VecModel::from(
                     line.pieces
-                        .into_iter()
+                        .iter()
+                        .cloned()
                         .map(|piece| self.piece(piece, &sources, em, pad, scale))
                         .collect::<Vec<_>>(),
                 )),
+                sel_x: mark.map_or(0.0, |m| m.0),
+                sel_w: mark.map_or(0.0, |m| m.1),
             })
-            .collect()
+            .collect();
+        self.laid_lines.insert(key, Rc::new(laid));
+        rows
     }
 
     fn piece(&self, piece: Piece, sources: &[&str], em: f32, pad: f32, scale: f32) -> MdPiece {
@@ -567,8 +647,24 @@ impl super::App {
         self.want_pictures(&read, place.as_ref());
         {
             let mut state = self.state.borrow_mut();
-            state.page.read = read;
-            state.page.place = place;
+            let page = &mut state.page;
+            // Another file, or this one changed under it: a selection in
+            // its atoms names nothing now.
+            if page.path.as_deref() != Some(path.as_str()) || page.read != read {
+                page.selection = None;
+                page.press = None;
+            }
+            page.path = Some(path.clone());
+            page.read = read;
+            page.place = place;
+            // The blocks are made again below, and say where they stand
+            // again as they are placed.
+            page.boxes.clear();
+            page.laid_lines.clear();
+            page.code_lines.clear();
+            page.line_models.clear();
+            page.code_models.clear();
+            page.drawn.clear();
         }
         let count = self.state.borrow().page.read.len();
         let rows: Vec<MdBlock> = (0..count)
@@ -588,24 +684,31 @@ impl super::App {
         let Some(block) = page.read.get(index).cloned() else {
             return MdBlock::default();
         };
-        match &block {
-            Block::Text { flow: runs, .. } if !runs.is_empty() => {
+        let mut kept: Vec<(i32, Rc<VecModel<MdLine>>)> = Vec::new();
+        let made = match &block {
+            Block::Text {
+                flow: runs,
+                caption,
+                ..
+            } if !runs.is_empty() => {
                 let key = key(index, 0);
-                let lines = page.lines(window, key, runs);
+                let lines = Rc::new(VecModel::from(page.lines(window, key, runs, *caption)));
+                kept.push((key, lines.clone()));
                 MdBlock {
                     flowing: true,
                     key,
-                    flow: ModelRc::new(VecModel::from(lines)),
+                    flow: ModelRc::from(lines),
                     ..plain(&self.files, &block)
                 }
             }
             Block::Heading { flow: runs, .. } if !runs.is_empty() => {
                 let key = key(index, 0);
-                let lines = page.lines(window, key, runs);
+                let lines = Rc::new(VecModel::from(page.lines(window, key, runs, false)));
+                kept.push((key, lines.clone()));
                 MdBlock {
                     flowing: true,
                     key,
-                    flow: ModelRc::new(VecModel::from(lines)),
+                    flow: ModelRc::from(lines),
                     ..plain(&self.files, &block)
                 }
             }
@@ -614,8 +717,23 @@ impl super::App {
                     return None;
                 }
                 let key = key(index, at);
-                Some((key, page.lines(window, key, &cell.flow)))
+                let lines = Rc::new(VecModel::from(page.lines(window, key, &cell.flow, false)));
+                kept.push((key, lines.clone()));
+                Some((key, lines))
             }),
+            Block::Code { lang, lines } => {
+                let key = key(index, 0);
+                let rows = Rc::new(VecModel::from(code_rows(&self.files, lang, lines)));
+                page.code_models.insert(key, rows.clone());
+                page.drawn.remove(&key);
+                MdBlock {
+                    kind: 2,
+                    key,
+                    marker: lang.as_str().into(),
+                    lines: ModelRc::from(rows),
+                    ..MdBlock::default()
+                }
+            }
             Block::Image { src, alt, figure } => {
                 let shown_as = if alt.is_empty() {
                     src.clone()
@@ -678,7 +796,11 @@ impl super::App {
                 _ => plain(&self.files, &block),
             },
             _ => plain(&self.files, &block),
+        };
+        for (key, lines) in kept {
+            page.line_models.insert(key, lines);
         }
+        made
     }
 
     /// Draw every formula of `read` not drawn yet, off the UI thread and on

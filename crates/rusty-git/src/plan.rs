@@ -37,6 +37,21 @@ pub fn pick_remote(upstream: Option<&str>, known: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// The arguments that pull. git 2.33 and later refuse a plain `git pull`
+/// on branches that have diverged until `pull.rebase` says how to
+/// reconcile them (`fatal: Need to specify how to reconcile divergent
+/// branches`), which from a button is a refusal with no way out. With the
+/// setting unset a pull merges, as Fork's and GitHub Desktop's Pull do and
+/// as git itself did before 2.33; set — `false`, `true`, `merges`,
+/// `interactive` — it is the user's decision and the plain `pull` honours
+/// it.
+pub fn pull_args(pull_rebase: Option<&str>) -> Vec<String> {
+    match pull_rebase {
+        Some(_) => args(&["pull"]),
+        None => args(&["pull", "--no-rebase"]),
+    }
+}
+
 /// The arguments that check out `name`. A local branch by name; a remote
 /// one through the local branch of the same name when there is one, and a
 /// new local branch tracking it otherwise — checking a remote branch out by
@@ -276,5 +291,14 @@ mod prompt_tests {
             clash.shown_problem(&remotes),
             Some(PromptProblem::Remote(RemoteProblem::Exists))
         );
+    }
+
+    /// A pull with nothing configured would be refused on diverged branches;
+    /// one the user configured is theirs.
+    #[test]
+    fn a_pull_merges_unless_the_user_said_how_to_reconcile() {
+        assert_eq!(pull_args(None), vec!["pull", "--no-rebase"]);
+        assert_eq!(pull_args(Some("true")), vec!["pull"]);
+        assert_eq!(pull_args(Some("false")), vec!["pull"]);
     }
 }

@@ -26,9 +26,10 @@ export struct Piece {
 // squiggle under what a server found: an error (5), a warning (6),
 // something to know (7), whose line is `path`; an indent guide (8); the
 // bracket beside the caret or its partner, outlined (9); another place
-// the name under the caret occurs, washed (10); and the line under a name
+// the name under the caret occurs, washed (10); the line under a name
 // drawn as a link while Ctrl is held (11), whose characters are drawn in
-// the link colour too (a piece of kind 11).
+// the link colour too (a piece of kind 11); and a merge conflict's current
+// side (12) and incoming side (13), washed across the row.
 export struct Mark {
     x: length,
     width: length,
@@ -59,7 +60,8 @@ export struct Row {
     // The debugger stopped here.
     stopped: bool,
     // A lens on the line: 1 a test, 3 a module of them (Run | Debug), 2 an
-    // example's main (Run); where it starts; and the last run's
+    // example's main (Run), 4 a merge conflict's first marker (Accept
+    // current | incoming | both); where it starts; and the last run's
     // verdict, 1 passed, 2 failed.
     lens: int,
     lens-x: length,
@@ -863,7 +865,7 @@ component RowPaint inherits Rectangle {
         // indent guide (8) a hairline.
         width: mark.kind == 1 ? 2px : mark.kind == 8 ? 1px : max(mark.width, 2px);
         height: mark.kind == 11 ? 1px : mark.kind == 1 ? parent.height - 4px : mark.kind >= 5 && mark.kind <= 7 ? 3px : mark.kind == 9 ? parent.height - 2px : parent.height;
-        background: mark.kind == 11 ? Theme.link : mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind == 9 ? Theme.bracket-fill : mark.kind == 10 ? Theme.occurrence : mark.kind >= 5 ? transparent : Theme.text-selection;
+        background: mark.kind == 12 ? Theme.patina-fill : mark.kind == 13 ? Theme.slate-fill : mark.kind == 11 ? Theme.link : mark.kind == 1 ? Theme.rust : mark.kind == 2 ? Theme.find-match : mark.kind == 3 ? Theme.find-current : mark.kind == 4 ? Theme.find-scope : mark.kind == 8 ? Theme.line : mark.kind == 9 ? Theme.bracket-fill : mark.kind == 10 ? Theme.occurrence : mark.kind >= 5 ? transparent : Theme.text-selection;
         // The bracket pair is a box round each, as VS Code draws it.
         border-width: mark.kind == 9 ? 1px : 0;
         border-color: Theme.bracket-match;
@@ -1214,9 +1216,65 @@ export component CodeView inherits Rectangle {
                     }
                 }
             }
+            // Accept current | Accept incoming | Accept both over a merge
+            // conflict's first marker, VS Code's three verbs.
+            if row.lens == 4: HorizontalLayout {
+                x: root.gutter + row.lens-x;
+                width: self.preferred-width;
+                height: parent.height;
+                spacing: 4px;
+                Text {
+                    text: @tr("files.lens-current");
+                    color: current-touch.has-hover ? Theme.rust : Theme.label-3;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                    current-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Code.lens(index, "current");
+                        }
+                    }
+                }
+                Text {
+                    text: "|";
+                    color: Theme.label-4;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: @tr("files.lens-incoming");
+                    color: incoming-touch.has-hover ? Theme.rust : Theme.label-3;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                    incoming-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Code.lens(index, "incoming");
+                        }
+                    }
+                }
+                Text {
+                    text: "|";
+                    color: Theme.label-4;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: @tr("files.lens-both");
+                    color: both-touch.has-hover ? Theme.rust : Theme.label-3;
+                    font-size: Code.font-size * 0.85;
+                    vertical-alignment: center;
+                    both-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Code.lens(index, "both");
+                        }
+                    }
+                }
+            }
             // ▶ Run Test | Debug beside a test, where VS Code puts it; the
             // last run's verdict before it.
-            if row.lens > 0: HorizontalLayout {
+            if row.lens > 0 && row.lens != 4: HorizontalLayout {
                 x: root.gutter + row.lens-x;
                 // Its own width: given the row's, the layout spread the
                 // verbs across the whole line.

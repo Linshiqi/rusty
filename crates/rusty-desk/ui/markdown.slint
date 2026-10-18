@@ -4,7 +4,7 @@
 // `src/app/markdown_view.rs`.
 
 import { Theme } from "theme.slint";
-import { Shell, MdBlock, MdLine } from "shell.slint";
+import { Shell, MdBlock, MdLine, CodeLine } from "shell.slint";
 import { Tip } from "widgets.slint";
 
 // Where the pointer is over a Markdown page read as a page. The touch laid
@@ -39,31 +39,60 @@ component TipArea inherits TouchArea {
     }
 }
 
-// A paragraph that holds a formula: lines Rust broke it into for the width
-// and text size this reports — when it appears and whenever either changes
-// — each piece placed on the line's baseline. Its own width is whatever the
-// layout gives it, never what its text would like.
+// A paragraph: lines Rust broke it into for the width and text size this
+// reports — when it appears and whenever either changes — each piece placed
+// on the line's baseline. Its own width is whatever the layout gives it,
+// never what its text would like. Where it stands on the page is reported
+// too, from the page's top left (`view-x`, `view-y` are the page's), so a
+// press on the page finds the line and the character under it; a
+// selection crossing a line is drawn behind its pieces.
 component Flow inherits VerticalLayout {
     in property <[MdLine]> lines;
     in property <int> key;
     in property <length> font-size;
     in property <brush> color;
+    in property <length> view-x;
+    in property <length> view-y;
     min-width: 0px;
     preferred-width: 0px;
     horizontal-stretch: 1;
+    property <length> left: self.absolute-position.x - root.view-x;
+    property <length> top: self.absolute-position.y - root.view-y;
+    function placed() {
+        Shell.md-placed(root.key, root.left, root.top, root.width, root.height, root.font-size);
+    }
     init => {
         Shell.md-flow-width(root.key, root.width, root.font-size);
+        placed();
     }
     changed width => {
         Shell.md-flow-width(root.key, root.width, root.font-size);
+        placed();
     }
     changed font-size => {
         Shell.md-flow-width(root.key, root.width, root.font-size);
+        placed();
+    }
+    changed left => {
+        placed();
+    }
+    changed top => {
+        placed();
+    }
+    changed height => {
+        placed();
     }
     for line in root.lines: Rectangle {
         height: line.height;
         min-width: 0px;
         preferred-width: 0px;
+        if line.sel-w > 0px: Rectangle {
+            x: line.sel-x;
+            y: 0;
+            width: line.sel-w;
+            height: parent.height;
+            background: Theme.text-selection;
+        }
         for piece in line.pieces: Rectangle {
             x: piece.x;
             y: piece.y;
@@ -88,6 +117,67 @@ component Flow inherits VerticalLayout {
             }
             if piece.kind == 2: TipArea {
                 tip: piece.tip;
+            }
+        }
+    }
+}
+
+// A code block: its lines in the editor's colours, where it stands on the
+// page reported as a paragraph's is, and the selection drawn behind a line
+// it crosses. The lines start 8 px in from its corner and are each
+// `font-size * 1.45` tall, which is what Rust measures a press against.
+component CodeBox inherits Rectangle {
+    in property <[CodeLine]> lines;
+    in property <int> key;
+    in property <length> font-size;
+    in property <length> view-x;
+    in property <length> view-y;
+    border-radius: 6px;
+    background: Theme.sunken;
+    clip: true;
+    property <length> left: self.absolute-position.x - root.view-x;
+    property <length> top: self.absolute-position.y - root.view-y;
+    function placed() {
+        Shell.md-placed(root.key, root.left, root.top, root.width, root.height, root.font-size);
+    }
+    init => {
+        placed();
+    }
+    changed width => {
+        placed();
+    }
+    changed height => {
+        placed();
+    }
+    changed font-size => {
+        placed();
+    }
+    changed left => {
+        placed();
+    }
+    changed top => {
+        placed();
+    }
+    VerticalLayout {
+        padding: 8px;
+        for line in root.lines: Rectangle {
+            height: root.font-size * 1.45;
+            if line.sel-w > 0px: Rectangle {
+                x: line.sel-x;
+                y: 0;
+                width: line.sel-w;
+                height: parent.height;
+                background: Theme.text-selection;
+            }
+            HorizontalLayout {
+                alignment: start;
+                for span in line.spans: Text {
+                    text: span.text;
+                    color: Theme.token(span.kind);
+                    font-family: Theme.mono;
+                    font-size: root.font-size * 0.95;
+                    vertical-alignment: center;
+                }
             }
         }
     }
@@ -131,6 +221,8 @@ export component MarkdownView inherits VerticalLayout {
                 }
             }
             if block.flowing: Flow {
+                view-x: root.absolute-position.x;
+                view-y: root.absolute-position.y;
                 lines: block.flow;
                 key: block.key;
                 font-size: root.font-size;
@@ -153,6 +245,8 @@ export component MarkdownView inherits VerticalLayout {
                 }
             }
             if block.flowing: Flow {
+                view-x: root.absolute-position.x;
+                view-y: root.absolute-position.y;
                 lines: block.flow;
                 key: block.key;
                 font-size: root.font-size * 0.92;
@@ -169,30 +263,20 @@ export component MarkdownView inherits VerticalLayout {
                 link-color: Theme.slate;
             }
             if block.flowing: Flow {
+                view-x: root.absolute-position.x;
+                view-y: root.absolute-position.y;
                 lines: block.flow;
                 key: block.key;
                 font-size: parent.size;
                 color: Theme.label;
             }
         }
-        if block.kind == 2: Rectangle {
-            border-radius: 6px;
-            background: Theme.sunken;
-            clip: true;
-            VerticalLayout {
-                padding: 8px;
-                for line in block.lines: HorizontalLayout {
-                    height: root.font-size * 1.45;
-                    alignment: start;
-                    for span in line.spans: Text {
-                        text: span.text;
-                        color: Theme.token(span.kind);
-                        font-family: Theme.mono;
-                        font-size: root.font-size * 0.95;
-                        vertical-alignment: center;
-                    }
-                }
-            }
+        if block.kind == 2: CodeBox {
+            lines: block.lines;
+            key: block.key;
+            font-size: root.font-size;
+            view-x: root.absolute-position.x;
+            view-y: root.absolute-position.y;
         }
         if block.kind == 3: Rectangle {
             height: 1px;
@@ -314,6 +398,8 @@ export component MarkdownView inherits VerticalLayout {
                                 default-font-size: root.font-size;
                             }
                             if cell.flowing: Flow {
+                                view-x: root.absolute-position.x;
+                                view-y: root.absolute-position.y;
                                 lines: cell.flow;
                                 key: cell.key;
                                 font-size: root.font-size;

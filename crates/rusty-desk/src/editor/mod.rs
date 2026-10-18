@@ -594,6 +594,32 @@ impl Surface {
         }
     }
 
+    /// The conflict whose first marker is on `row` resolved to `choice`:
+    /// the block, markers and all, replaced by the side chosen, one undo
+    /// step, the caret at the top of what was kept.
+    fn resolve_conflict(&self, row: usize, choice: rusty_edit::conflict::Choice) {
+        let Some(doc) = self.doc() else { return };
+        let Some(conflict) = self.rows.conflict_at(row) else {
+            return;
+        };
+        let change = {
+            let mut d = doc.borrow_mut();
+            let Some(((from, to), with)) =
+                rusty_edit::conflict::resolve(&d.text, &conflict, choice)
+            else {
+                return;
+            };
+            let mut text = String::with_capacity(d.text.len());
+            text.push_str(&d.text[..from]);
+            text.push_str(&with);
+            text.push_str(&d.text[to..]);
+            d.edit(text, vec![Cursor::caret(from)], Kind::Other)
+        };
+        if let Some(change) = change {
+            self.edited(&doc, change);
+        }
+    }
+
     /// A document changed by something other than a key: on screen it is
     /// redrawn as a key's edit is; off screen it is painted and said.
     fn edited(&self, doc: &Rc<RefCell<Document>>, change: Change) {
@@ -1192,6 +1218,11 @@ impl Surface {
         let this = Rc::downgrade(self);
         code.on_lens(move |row, verb| {
             let Some(this) = this.upgrade() else { return };
+            // A conflict's lens is an edit, not a run: it resolves here.
+            if let Some(choice) = rusty_edit::conflict::Choice::parse(&verb) {
+                this.resolve_conflict(row.max(0) as usize, choice);
+                return;
+            }
             let Some(runnable) = this.rows.runnable_at(row.max(0) as usize) else {
                 return;
             };

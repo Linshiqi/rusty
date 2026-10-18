@@ -62,6 +62,10 @@ export component AppWindow inherits Window {
     out property <length> md-probe-height: md-probe.preferred-height;
     out property <length> md-probe-ascent: md-metrics.font-metrics.ascent;
     out property <length> md-probe-descent: md-metrics.font-metrics.descent;
+    // The same for a code block's lines, in its own font: a press in one
+    // is measured against this.
+    in property <string> md-code-probe-text;
+    out property <length> md-code-probe-width: md-code-probe.preferred-width;
 
     public function focus-code() {
         area.focus-code();
@@ -127,6 +131,13 @@ export component AppWindow inherits Window {
     md-metrics := Text {
         visible: false;
         text: "Hg";
+        font-size: root.md-probe-size;
+    }
+
+    md-code-probe := Text {
+        visible: false;
+        text: root.md-code-probe-text;
+        font-family: Theme.mono;
         font-size: root.md-probe-size;
     }
 

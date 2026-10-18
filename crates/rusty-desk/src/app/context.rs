@@ -19,10 +19,7 @@ use std::{
 };
 
 use rusty_i18n::t;
-use slint::{
-    ComponentHandle, LogicalPosition, Model,
-    platform::{PointerEventButton, WindowEvent},
-};
+use slint::{ComponentHandle, Model};
 
 use super::{App, Tab, git::copy_text};
 use crate::{ProblemRow, Shell, docks::Dock};
@@ -150,29 +147,6 @@ impl App {
         self.save_layout();
     }
 
-    /// A click on the page, made again underneath with the page's own touch
-    /// stepped aside, so the link under it answers: the text takes every
-    /// press, so the touch over it is the only way the right button and
-    /// the wheel are heard there. After this event, never inside it.
-    pub(super) fn page_click(self: &Rc<Self>, x: f32, y: f32) {
-        let weak = Rc::downgrade(self);
-        slint::Timer::single_shot(Duration::ZERO, move || {
-            let Some(app) = weak.upgrade() else { return };
-            let Some(window) = app.window() else { return };
-            let shell = window.global::<Shell>();
-            shell.set_page_through(true);
-            let position = LogicalPosition::new(x, y);
-            let button = PointerEventButton::Left;
-            window
-                .window()
-                .dispatch_event(WindowEvent::PointerPressed { position, button });
-            window
-                .window()
-                .dispatch_event(WindowEvent::PointerReleased { position, button });
-            shell.set_page_through(false);
-        });
-    }
-
     // ---- the menus -------------------------------------------------------
 
     /// A right-click on `surface`, on `what` and `row` there, at a point of
@@ -204,18 +178,24 @@ impl App {
     ) -> Option<(Target, Vec<(String, String, bool)>)> {
         let row = usize::try_from(row).ok();
         match surface {
-            // VS Code's preview has no selection here to copy: the page's
-            // text cannot be selected, so its menu has no Copy.
+            // The page's selection (`page_select.rs`): Copy when there is
+            // one, Select all always, then the file's own rows.
             "page" => {
                 let Some(Tab::File(path)) = self.active_tab() else {
                     return None;
                 };
-                let mut items = vec![
+                let mut items = Vec::new();
+                if self.page_has_selection() {
+                    items.push(item("copy", t!("context.copy")));
+                }
+                items.push(item("select-all", t!("context.select-all")));
+                items.push(divider());
+                items.extend([
                     item("source", t!("markdown.show-source")),
                     divider(),
                     item("copy-path", t!("context.tree-copy-path")),
                     item("copy-relative", t!("context.tree-copy-relative-path")),
-                ];
+                ]);
                 if self.state.borrow().layout.page_zoom != 1.0 {
                     items.push(divider());
                     items.push(item("zoom-reset", t!("desk.page-zoom-reset")));
@@ -398,6 +378,12 @@ impl App {
         };
         match target {
             Target::Page(path) => match id {
+                "copy" => {
+                    self.page_key("copy");
+                }
+                "select-all" => {
+                    self.page_key("all");
+                }
                 "source" => self.markdown_toggle(),
                 "copy-path" => self.tree_copy_path(&path, false),
                 "copy-relative" => self.tree_copy_path(&path, true),

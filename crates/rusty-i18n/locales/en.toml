@@ -393,6 +393,10 @@ lens-run-test = "Run Test"
 lens-run-tests = "Run Tests"
 lens-run = "Run"
 lens-debug = "Debug"
+# Over a merge conflict's first marker: which side the block is resolved to.
+lens-current = "Accept Current Change"
+lens-incoming = "Accept Incoming Change"
+lens-both = "Accept Both Changes"
 # On the pointer over a greyed Rust file in the tree and on its tab.
 unlinked = "No mod line declares this file, so it is in no crate and rust-analyzer answers nothing in it."
 # Under a failed test's message on the hover card: which test said it.

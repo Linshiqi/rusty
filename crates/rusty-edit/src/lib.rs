@@ -18,6 +18,9 @@ pub mod modules;
 pub mod tests_in;
 
 pub use fold::{Folded, Region};
+/// Merge conflicts as git leaves them: each block of markers, and what
+/// resolving it one way puts in its place.
+pub mod conflict;
 pub mod guides;
 pub mod lens;
 /// The minimap's arithmetic: runs of ink, and where it stands.

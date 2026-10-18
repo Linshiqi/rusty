@@ -2093,6 +2093,23 @@ two. A file's diff is a page of its own. `app/git.rs` reads and writes,
 - **Branch delete is `-d`, never `-D`.** A branch whose work is merged
   nowhere is refused, and that refusal in the dock is the right answer;
   force-deleting is a decision for a terminal, not a button.
+- **Pull merges unless `pull.rebase` is set** (`plan::pull_args`, one
+  `config --get` before the line). git 2.33 and later refuse a plain
+  `git pull` on branches that have diverged — `fatal: Need to specify how
+  to reconcile divergent branches` — until the setting says how, which
+  from a button was a refusal with nothing to click. Unset, the pull is
+  `--no-rebase`, as Fork's and GitHub Desktop's Pull are and as git itself
+  was before 2.33; set, it is the user's decision and the plain `pull`
+  honours it. **And a pull that stops on a conflict is resolved in the
+  editor**: `rusty_edit::conflict` (pure, tested) finds every `<<<<<<<` …
+  `=======` … `>>>>>>>` block — a diff3 `|||||||` base between, which no
+  choice keeps — and the editor draws VS Code's *Accept Current Change |
+  Accept Incoming Change | Accept Both Changes* on the first marker (lens
+  kind 4, `editor/rows.rs`) with each side washed across its rows (marks
+  12 and 13); a choice is one edit through `Document::edit`, one undo. A
+  conflicted file's row in Changes opens the file rather than its diff,
+  which is a combined diff nobody can act on; the panel's banner, with
+  Continue and Abort, was already there.
 - **A push with no upstream sets one** (`-u origin <head>`), because a bare
   `git push` on a new branch refuses with a hint nobody reads. Stash is
   `push --include-untracked` — "everything I have" is what the button says.
@@ -3245,8 +3262,37 @@ The book they are measured against is a flight-control textbook in Chinese:
   begin with a comma), and set as one non-wrapping `StyledText` per run of
   text and a picture per formula, all on the line's baseline: a tall
   formula grows its line, never overlaps the next. Too wide, it is shrunk to
-  the column, never cut. Paragraphs without a formula stay one wrapping
-  `StyledText`, as before.
+  the column, never cut. **Every paragraph, heading, caption and cell goes
+  this way now, formula or not**: the one that does not is the one whose
+  characters stand nowhere rusty knows, which is what a selection is
+  measured against (next section but one). A paragraph without a formula
+  used to stay one wrapping `StyledText`, for the cost; the cost is each
+  distinct word measured once, which a 4,500-formula chapter had already
+  paid for most of its paragraphs.
+- **The page's text is selected and copied by rusty, not by Slint**
+  (`markdown/select.rs`, pure and tested; `app/page_select.rs` the
+  window's half), because Slint's text cannot be. Every `Flow` and every
+  code block reports where it stands from the page's own top left
+  (`Shell.md-placed`, so scrolling moves nothing) and its text size; a
+  press on the touch over the page is a point in those coordinates, the
+  block under it is found among the boxes, the line and the atom among
+  its lines, and the character inside a word by measuring the word's
+  prefixes with the measure that placed it — a code block's lines in the
+  code font (`md-code-probe`). **A place is an atom and an offset, never
+  a line and an x**: the lines change with the width and the atoms do
+  not, so the selection outlives a reflow and a zoom. The highlight is
+  each line's own `sel-x`/`sel-w`, changed in the rows the block is drawn
+  from (`line_models`, `code_models`) rather than by making the block
+  again — a block made again is a press lost under the pointer, the tree
+  box's lesson. A drag past a block reaches its end; a double-click takes
+  the word; Shift+click extends; Ctrl+C (the page's own `FocusScope`, a
+  press gives it the keys), Ctrl+A and Escape do what they do in the diff;
+  the menu's Copy and Select all are the same. Copied across a wrap, the
+  space the line was broken at — which stands on no line — is in the
+  paragraph's atom texts and so in the text; a formula copies as `$tex$`;
+  cells of one row join with a tab, rows with a line, blocks with a blank
+  line. A click that never became a drag opens the link under it, which
+  is why the click is no longer sent through to the text underneath.
 - **The width comes back from the view.** A flowing paragraph's `Flow`
   reports its width and text size as it appears and whenever either
   changes (`Shell.md-flow-width`); the page lays out again, on the next
@@ -3442,8 +3488,8 @@ rules it settled, each the answer to something that went wrong.
   hit opens, copies its line and its path; a Markdown page shows its source
   and copies its path; a picture copies its path and reveals it — and an
   SVG's shows its source; a dock's tab hides its panel. A row that would do
-  nothing is not there — the page's text cannot be selected, so its menu has
-  no Copy. **A path is copied as the tree copies one** (`tree_copy_path`):
+  nothing is not there — the page's Copy is listed only while something on
+  it is selected. **A path is copied as the tree copies one** (`tree_copy_path`):
   VS Code's *Copy path*, absolute, and *Copy relative path*, both with the
   system's separator. The Git menus' *Copy path* is still Fork's, relative,
   beside *Copy full path* — one name meaning two things, left for the
@@ -4907,13 +4953,15 @@ is no browser storage, and what the window remembers between runs is
   `ContextMenuArea` would have fared no better — it, too, hears only what
   its children leave. So the page has a touch area *over* it, short of the
   scrollbar, which takes the right button and Ctrl and the wheel, and
-  passes the wheel alone on; a left click it hears is made again underneath
-  with the touch area stepped aside (`Shell.page-through`,
-  `App::page_click`, after the event and never inside it), which is how a
-  link still answers — a link in a paragraph laid round its formulas as
-  well, whose pieces are text like any other. What it costs is the pointer
-  hand over a link, which the text sets on a move the touch area now takes;
-  and hover under it, which it took from the page's tips too (a refused
+  passes the wheel alone on, and whose presses and drags are the page's
+  selection (`app/page_select.rs`). A left click that never became a drag
+  used to be made again underneath with the touch area stepped aside, so
+  the text's own link heard it; rusty knows which atom the click landed on
+  now, so it opens the link itself (`Shell.open-link`, which the probe
+  listens at). What the touch area costs is the pointer's shape, which the
+  text under it would have set: `Shell.page-cursor` is set from what is
+  under the pointer on every move (an I-beam over text, a hand over a
+  link); and hover under it, which it took from the page's tips too (a refused
   formula's reason, a picture not shown) until the touch area put where the
   pointer is in `PagePointer` (`ui/markdown.slint`) and a `TipArea` counted
   as pointed at when that point is inside it as well as when it is
