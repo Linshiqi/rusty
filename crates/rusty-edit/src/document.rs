@@ -248,16 +248,10 @@ impl Files {
 
 /// Whether a path is somewhere dependency source lives.
 pub fn is_library_source(path: &std::path::Path) -> bool {
-    let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
+    let (Some(cargo), Some(rustup)) = (rusty_spawn::cargo_home(), rusty_spawn::rustup_home())
+    else {
         return false;
     };
-    let home = std::path::PathBuf::from(home);
-    let cargo = std::env::var_os("CARGO_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".cargo"));
-    let rustup = std::env::var_os("RUSTUP_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".rustup"));
 
     [
         cargo.join("registry").join("src"),

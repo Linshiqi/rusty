@@ -8,7 +8,7 @@
 //! edition it is told.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::OnceLock;
 
 use crate::error::{Error, Result};
@@ -22,7 +22,7 @@ use crate::model::Formatted;
 pub fn format_rust(root: &Path, rel_path: &str, text: &str) -> Result<Formatted> {
     let edition = edition_of(root, rel_path);
 
-    let mut command = Command::new(rustfmt_binary());
+    let mut command = rusty_spawn::quiet(rustfmt_binary());
     command
         .arg("--edition")
         .arg(&edition)
@@ -31,7 +31,6 @@ pub fn format_rust(root: &Path, rel_path: &str, text: &str) -> Result<Formatted>
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    no_window(&mut command);
 
     let mut child = command.spawn().map_err(|source| Error::Format {
         message: if source.kind() == std::io::ErrorKind::NotFound {
@@ -121,7 +120,7 @@ pub fn format_c(root: &Path, rel_path: &str, text: &str) -> Result<Formatted> {
             text: text.to_string(),
         });
     }
-    let mut command = Command::new("clang-format");
+    let mut command = rusty_spawn::quiet("clang-format");
     command
         .arg("-style=file")
         .arg(format!(
@@ -132,7 +131,6 @@ pub fn format_c(root: &Path, rel_path: &str, text: &str) -> Result<Formatted> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    no_window(&mut command);
     let mut child = command.spawn().map_err(|source| Error::Format {
         message: if source.kind() == std::io::ErrorKind::NotFound {
             "the project has a .clang-format and clang-format is not installed — \
@@ -183,12 +181,14 @@ fn unparsed(code: Option<i32>, stderr: &str) -> bool {
     }
 }
 
-/// The rustfmt to run: stable's own binary when rustup can name it, else
-/// whatever `rustfmt` resolves to on PATH.
+/// The rustfmt to run: the component's own binary where
+/// `rusty_spawn::rustup_component` finds one that answers as rustfmt —
+/// stable's first, then PATH — else whatever `rustfmt` resolves to on PATH,
+/// whose failure to run is then reported like any other.
 ///
-/// Resolved once per process. This runs on every format-on-save, and
-/// `rustup which` is a process spawn — tens of milliseconds between Ctrl+S
-/// and the text moving, paid to learn the same path every time. Only a
+/// Resolved once per process. This runs on every format-on-save, and the
+/// finder is two process spawns — tens of milliseconds between Ctrl+S and
+/// the text moving, paid to learn the same path every time. Only a
 /// successful answer is kept: a machine that gains the component while the
 /// app is open gets it on the next save rather than on the next launch.
 fn rustfmt_binary() -> String {
@@ -196,17 +196,10 @@ fn rustfmt_binary() -> String {
     if let Some(path) = RESOLVED.get() {
         return path.clone();
     }
-    let mut command = Command::new("rustup");
-    command.args(["which", "--toolchain", "stable", "rustfmt"]);
-    no_window(&mut command);
-    if let Ok(output) = command.output()
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            let _ = RESOLVED.set(path.clone());
-            return path;
-        }
+    if let Some(path) = rusty_spawn::rustup_component("rustfmt") {
+        let path = path.to_string_lossy().into_owned();
+        let _ = RESOLVED.set(path.clone());
+        return path;
     }
     "rustfmt".to_string()
 }
@@ -265,17 +258,6 @@ fn edition_in(manifest: &str) -> EditionKey {
     EditionKey::Absent
 }
 
-fn no_window(command: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(not(windows))]
-    let _ = command;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,9 +271,8 @@ mod tests {
     /// machine, and a test that fails there for want of a tool teaches
     /// people to ignore the suite.
     fn rustfmt_available() -> bool {
-        let mut command = Command::new(rustfmt_binary());
+        let mut command = rusty_spawn::quiet(rustfmt_binary());
         command.arg("--version");
-        no_window(&mut command);
         let present = command.output().is_ok_and(|out| out.status.success());
         if !present {
             eprintln!("skipping: rustfmt is not installed on this machine");

@@ -322,23 +322,9 @@ fn tool_families(tools: &Path) -> Vec<PathBuf> {
     families
 }
 
-pub(crate) fn home_dir() -> Option<PathBuf> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
-}
-
-/// cargo's home — `$CARGO_HOME`, else `~/.cargo` — where `cargo install` puts
-/// binaries and where the registry keeps its sources.
-pub(crate) fn cargo_home() -> Option<PathBuf> {
-    cargo_home_from(
-        std::env::var_os("CARGO_HOME").map(PathBuf::from),
-        home_dir(),
-    )
-}
-
-/// `cargo_home`'s rule, over values a test can choose.
-fn cargo_home_from(configured: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
-    configured.or_else(|| home.map(|home| home.join(".cargo")))
-}
+// The user's home and cargo's — `rusty_spawn`'s rules, named here because
+// the ladder above and half this crate read them as the tools' own.
+pub(crate) use rusty_spawn::{cargo_home, home_dir};
 
 pub(crate) fn cargo_bin() -> Option<PathBuf> {
     cargo_home().map(|home| home.join("bin"))
@@ -611,24 +597,5 @@ mod tests {
             find_in_roots("cargo", &[]).is_some(),
             "and without a tools directory the ladder still reaches PATH",
         );
-    }
-
-    /// `CARGO_HOME` outranks the home directory, as it does for cargo itself;
-    /// the pin map honoured this and the espflash finder did not, so the two
-    /// disagreed about where cargo's binaries were.
-    #[test]
-    fn cargo_home_is_the_variable_when_set_and_the_home_directory_otherwise() {
-        assert_eq!(
-            cargo_home_from(
-                Some(PathBuf::from("/opt/cargo")),
-                Some(PathBuf::from("/home/me"))
-            ),
-            Some(PathBuf::from("/opt/cargo")),
-        );
-        assert_eq!(
-            cargo_home_from(None, Some(PathBuf::from("/home/me"))),
-            Some(PathBuf::from("/home/me").join(".cargo")),
-        );
-        assert_eq!(cargo_home_from(None, None), None);
     }
 }

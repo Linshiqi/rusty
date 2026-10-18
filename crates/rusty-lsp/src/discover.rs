@@ -24,7 +24,14 @@ use std::{
 /// The bare name on PATH is rustup's proxy, which dispatches by the pinned
 /// toolchain — and `rust-toolchain.toml` pinning `esp` (every Xtensa project)
 /// makes the proxy fail with "unknown binary in toolchain 'esp'". So: stable's
-/// real binary first, the active toolchain's second, PATH last.
+/// real binary first, the active toolchain's second, PATH last — and each
+/// only when it answers `--version` as rust-analyzer, since the file found on
+/// PATH is usually that proxy, which exists on every machine with rustup
+/// whether or not the component does. That rule is every component's
+/// (`rusty_spawn::rustup_component`: the CI runner taught it here — no
+/// component, a proxy on PATH, and a test written to skip without
+/// rust-analyzer running instead); what is this finder's own is the binary
+/// the caller names.
 pub fn find_rust_analyzer(named: Option<&Path>) -> Option<PathBuf> {
     // A binary the user named wins over every rung below, because the rungs
     // answer "which one is installed" and this answers "which one I want
@@ -42,63 +49,11 @@ pub fn find_rust_analyzer(named: Option<&Path>) -> Option<PathBuf> {
         // Checked like any other candidate: a path that is not a
         // rust-analyzer is a typo, and falling through to the ladder is
         // kinder than spawning something that answers nothing.
-        if path.is_file() && answers_as_rust_analyzer(&path) {
+        if path.is_file() && rusty_spawn::verified_component("rust-analyzer", &path).is_some() {
             return Some(path);
         }
     }
-    for toolchain in [Some("stable"), None] {
-        let mut command = Command::new("rustup");
-        command.arg("which");
-        if let Some(toolchain) = toolchain {
-            command.args(["--toolchain", toolchain]);
-        }
-        command.arg("rust-analyzer");
-        no_console_window(&mut command);
-        if let Ok(out) = command.output()
-            && out.status.success()
-        {
-            let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-            if path.is_file() && answers_as_rust_analyzer(&path) {
-                return Some(path);
-            }
-        }
-    }
-
-    // No rustup: take PATH literally — but not on faith. The file found there
-    // is usually rustup's own proxy, which exists on every machine with
-    // rustup whether or not the component does; with it missing, the proxy
-    // starts, prints an error and exits, and a client that trusted the file
-    // spawned it, lost it, and reported "spawn rust-analyzer" failed. That
-    // was the CI runner: no component, a proxy on PATH, and a test that was
-    // written to skip without rust-analyzer running instead.
-    let path = std::env::var_os("PATH")?;
-    let name = if cfg!(windows) {
-        "rust-analyzer.exe"
-    } else {
-        "rust-analyzer"
-    };
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file() && answers_as_rust_analyzer(candidate))
-}
-
-/// Whether the file is rust-analyzer itself: it answers `--version` with its
-/// own name. rustup's proxy for a missing component answers with an error
-/// and a non-zero exit; a stale or foreign binary with neither.
-fn answers_as_rust_analyzer(candidate: &Path) -> bool {
-    let mut command = Command::new(candidate);
-    command.arg("--version");
-    command.env_remove("RUSTUP_TOOLCHAIN");
-    no_console_window(&mut command);
-    command.output().is_ok_and(|out| {
-        out.status.success() && is_rust_analyzer_version(&String::from_utf8_lossy(&out.stdout))
-    })
-}
-
-/// What `rust-analyzer --version` prints begins with the name; what the
-/// rustup proxy prints for a missing component does not (and goes to stderr).
-fn is_rust_analyzer_version(stdout: &str) -> bool {
-    stdout.trim_start().starts_with("rust-analyzer")
+    rusty_spawn::rustup_component("rust-analyzer")
 }
 
 /// clangd, for a project's C and C++: one the caller names (the
@@ -135,9 +90,8 @@ pub fn find_clangd(named: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn answers_as_clangd(candidate: &Path) -> bool {
-    let mut command = Command::new(candidate);
+    let mut command = rusty_spawn::quiet(candidate);
     command.arg("--version");
-    no_console_window(&mut command);
     command.output().is_ok_and(|out| {
         out.status.success() && is_clangd_version(&String::from_utf8_lossy(&out.stdout))
     })
@@ -173,7 +127,14 @@ pub(crate) fn clangd_args(compile_commands: Option<&Path>, query_driver: &[Strin
 /// The server process, ready to spawn: stdio piped, and the environment as
 /// the project would want it.
 pub(crate) fn command_for(binary: &Path, root: &Path) -> Command {
-    let mut command = Command::new(binary);
+    // Under every crate's rules (`rusty_spawn::quiet`): no console window,
+    // and no `RUSTUP_TOOLCHAIN` — the rustup shim exports it for rusty's own
+    // build, and rust-analyzer has no business inheriting it: the server
+    // runs `cargo metadata` in the project, and rustup lets the variable
+    // outrank `rust-toolchain.toml`, so an esp-pinned project would be read
+    // with stable, the same leak that made a spawned cargo fail with "can't
+    // find crate for `core`".
+    let mut command = rusty_spawn::quiet(binary);
     command
         .current_dir(root)
         .stdin(Stdio::piped())
@@ -187,12 +148,6 @@ pub(crate) fn command_for(binary: &Path, root: &Path) -> Command {
         } else {
             Stdio::null()
         });
-    // The rustup shim exports this for rusty's own build, and rust-analyzer
-    // has no business inheriting it: the server runs `cargo metadata` in the
-    // project, and rustup lets the variable outrank `rust-toolchain.toml`,
-    // so an esp-pinned project would be read with stable — the same leak
-    // that made a spawned cargo fail with "can't find crate for `core`".
-    command.env_remove("RUSTUP_TOOLCHAIN");
     // `CARGO` is the same leak in another spelling: a rusty started by
     // `cargo run` carries one naming the toolchain that *built rusty*, so a
     // development build would hand the server stable's cargo for an
@@ -200,7 +155,6 @@ pub(crate) fn command_for(binary: &Path, root: &Path) -> Command {
     // no sysroot — with one it prefers rustup's proxy, measured — but an
     // inherited value that is right by accident is not a reason to keep it.
     command.env_remove("CARGO");
-    no_console_window(&mut command);
     command
 }
 
@@ -285,35 +239,9 @@ pub(crate) fn linked_projects(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Same reason as everywhere else a process is spawned on Windows: without
-/// this, every rust-analyzer start flashes a console window over the app.
-pub(crate) fn no_console_window(command: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(not(windows))]
-    let _ = command;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The real binary names itself; the proxy's complaint, and an empty
-    /// answer, are not it.
-    #[test]
-    fn only_a_binary_that_names_itself_is_rust_analyzer() {
-        assert!(is_rust_analyzer_version(
-            "rust-analyzer 1.98.0 (88d9e12ae 2026-08-18)\n"
-        ));
-        assert!(!is_rust_analyzer_version(""));
-        assert!(!is_rust_analyzer_version(
-            "error: 'rust-analyzer' is not installed for the toolchain 'stable-x86_64-pc-windows-msvc'\n"
-        ));
-    }
 
     /// LLVM's clangd and Apple's both name themselves, each in its own
     /// words; a shell's complaint about a missing command does not.

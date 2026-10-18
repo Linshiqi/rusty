@@ -66,8 +66,9 @@ use crate::{
 ///   bindgen needs it for `esp-idf-sys`, and espup set it for shells that were
 ///   not this process.
 pub fn command(program: impl AsRef<OsStr>) -> Command {
-    let mut command = Command::new(program);
-    command.env_remove("RUSTUP_TOOLCHAIN");
+    // The first two rules are every crate's (`rusty_spawn::quiet`); the
+    // rest below are this crate's, because they need its tool ladder.
+    let mut command = rusty_spawn::quiet(program);
 
     let esp = crate::esp_env::esp_env();
     let mut extra = crate::tools::tool_bin_dirs();
@@ -82,10 +83,13 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
     {
         command.env("LIBCLANG_PATH", libclang);
     }
-
-    no_console_window(&mut command);
     command
 }
+
+/// Keep a child process from flashing a console window: `rusty_spawn`'s
+/// rule, re-exported for the one caller that builds its `Command` some
+/// other way (the window's `instances.rs`).
+pub use rusty_spawn::no_console_window;
 
 /// Whether a planned program is git, by its file name: `git`, `git.exe`, or
 /// a path ending in either.
@@ -105,20 +109,6 @@ fn child_path(existing: &OsStr, extra: Vec<PathBuf>) -> Option<std::ffi::OsStrin
     }
     std::env::join_paths(paths).ok()
 }
-
-/// Keep a child process from flashing a console window.
-///
-/// Part of [`command`]; on its own only for the one caller that builds its
-/// `Command` some other way.
-#[cfg(windows)]
-pub fn no_console_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-pub fn no_console_window(_command: &mut Command) {}
 
 /// A running child process — or something that behaves as one.
 ///

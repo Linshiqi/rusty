@@ -22,6 +22,8 @@
 
 use std::path::{Path, PathBuf};
 
+use rusty_spawn::rustup_home;
+
 /// What espup asks a shell to export.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct EspEnv {
@@ -129,13 +131,6 @@ fn layout(rustup_home: Option<&Path>) -> EspEnv {
         ],
         libclang: None,
     }
-}
-
-/// `$RUSTUP_HOME`, else `~/.rustup` — rustup's own rule.
-fn rustup_home() -> Option<PathBuf> {
-    std::env::var_os("RUSTUP_HOME")
-        .map(PathBuf::from)
-        .or_else(|| crate::tools::home_dir().map(|home| home.join(".rustup")))
 }
 
 /// Only what is actually on disk: a toolchain removed since the file was

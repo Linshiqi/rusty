@@ -9,7 +9,6 @@
 //! index.lock", the panel's read beating the user's write.
 
 use std::path::Path;
-use std::process::Command;
 
 use super::{Error, Result};
 
@@ -18,12 +17,11 @@ use super::{Error, Result};
 /// with an Initialize button, from every other failure. Not by reading
 /// git's message: that is translated when the user's git is.
 fn inside_work_tree(root: &Path) -> bool {
-    let mut command = Command::new("git");
+    let mut command = rusty_spawn::quiet("git");
     command
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(root)
         .env("GIT_OPTIONAL_LOCKS", "0");
-    no_window(&mut command);
     command.output().ok().is_some_and(|out| {
         out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true"
     })
@@ -43,12 +41,11 @@ pub(super) fn run_allowing<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -
 /// The invocation itself, stdout as bytes — what [`blob`](super::blob)
 /// needs, and what every text reader lossily decodes.
 pub(super) fn run_bytes<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -> Result<Vec<u8>> {
-    let mut command = Command::new("git");
+    let mut command = rusty_spawn::quiet("git");
     command
         .args(["-c", "core.quotepath=off", "-c", "color.ui=never"])
         .args(args.iter().map(AsRef::as_ref))
-        .current_dir(root)
-        .env_remove("RUSTUP_TOOLCHAIN");
+        .current_dir(root);
     // The pager and the editor must never be consulted: this is a machine
     // asking, and a git that waited on either would hang the panel. And no
     // optional lock: see the module header.
@@ -56,7 +53,6 @@ pub(super) fn run_bytes<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -> R
         .env("GIT_PAGER", "cat")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0");
-    no_window(&mut command);
     let output = command.output().map_err(|source| Error::Spawn { source })?;
     let accepted = output.status.code().is_some_and(|code| ok.contains(&code));
     if !accepted {
@@ -113,17 +109,6 @@ fn failure_detail(stderr: &str) -> String {
         return "no message".to_string();
     }
     chosen.into_iter().take(6).collect::<Vec<_>>().join("\n")
-}
-
-/// No console window for a child of the GUI on Windows.
-fn no_window(command: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    #[cfg(not(windows))]
-    let _ = command;
 }
 
 #[cfg(test)]

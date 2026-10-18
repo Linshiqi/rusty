@@ -8,6 +8,9 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# How a debugger is spawned — no console window, no leaked
+# `RUSTUP_TOOLCHAIN` — the same rule every crate here spawns under.
+rusty-spawn = { path = "../rusty-spawn" }
 serde = { version = "1.0.229", features = ["derive"] }
 
 # The session side: a gdb to talk to, and a thread to pump it. Same major as

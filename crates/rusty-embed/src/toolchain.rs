@@ -941,40 +941,25 @@ fn list_installed_targets(rustup: &RustupContext<'_>) -> Vec<String> {
 
 /// Where a rustup component's binary is and what it says it is — or nothing.
 ///
-/// The bare name on PATH is rustup's proxy, which exists on every machine
-/// with rustup whether or not the component does; with the component missing
-/// the proxy starts, prints an error and exits. So presence is not a file: it
-/// is the binary `rustup which --toolchain stable` names (the copy the editor
-/// runs), or failing that the one on PATH, answering `--version` with the
-/// component's own name. The editor's rust-analyzer discovery has followed
-/// this rule since the CI runners taught it; the panel did not, and the two
-/// disagreed on screen — a setup sheet declaring the machine ready above a
-/// status bar saying rust-analyzer was missing.
+/// `rusty_spawn`'s rule, the one the editor's rust-analyzer discovery and
+/// the formatter follow too: presence is not a file — rustup's proxy is a
+/// file called `rust-analyzer` on every machine with rustup — but a binary
+/// answering `--version` with the component's own name, looked for where
+/// `rustup which` points and then on PATH. The panel once had its own
+/// reading of this and disagreed with the editor on screen — a setup sheet
+/// declaring the machine ready above a status bar saying rust-analyzer was
+/// missing. This crate's tool ladder is one more place to look, after the
+/// shared rung: the data directory's `tools/` and the bundle are not on
+/// PATH.
 fn component_binary(component: &str) -> (Option<PathBuf>, Option<String>) {
-    let from_rustup = run(
-        "rustup",
-        &["which", "--toolchain", "stable", component],
-        None,
-    )
-    .map(|out| PathBuf::from(out.trim()));
-    for candidate in [from_rustup, tools::find(component)].into_iter().flatten() {
-        if !candidate.is_file() {
-            continue;
-        }
-        if let Some(version) =
-            probe_version(&candidate).filter(|said| is_component_version(component, said))
-        {
-            return (Some(candidate), Some(version));
-        }
-    }
-    (None, None)
-}
-
-/// What a component prints for `--version` begins with its name; what
-/// rustup's proxy prints for a missing one is an error, on stderr, with a
-/// non-zero exit — which `run` already turns into nothing.
-fn is_component_version(component: &str, said: &str) -> bool {
-    said.trim_start().starts_with(component)
+    rusty_spawn::component_candidates(component)
+        .into_iter()
+        .chain(tools::find(component))
+        .find_map(|candidate| {
+            rusty_spawn::verified_component(component, &candidate)
+                .map(|version| (Some(candidate), Some(version)))
+        })
+        .unwrap_or((None, None))
 }
 
 /// First line of `<tool> --version`, or `None` when it would not run.
@@ -1152,29 +1137,6 @@ mod tests {
 
     /// The text beside a missing tool is the recipe, not a second spelling of
     /// it: what the button runs is what the panel says.
-    /// rustup's proxy is a file called `rust-analyzer` on every machine with
-    /// rustup; only the real component answers `--version` with its name.
-    #[test]
-    fn a_component_is_present_when_its_version_says_so_not_when_a_file_exists() {
-        assert!(is_component_version(
-            "rust-analyzer",
-            "rust-analyzer 1.98.0 (5f3ac7d 2026-08-30)"
-        ));
-        assert!(is_component_version(
-            "rust-analyzer",
-            "  rust-analyzer 0.3.2500-standalone"
-        ));
-        assert!(!is_component_version(
-            "rust-analyzer",
-            "error: unknown binary 'rust-analyzer' in toolchain 'esp'"
-        ));
-        assert!(!is_component_version("rust-analyzer", ""));
-        assert!(!is_component_version(
-            "rust-analyzer",
-            "rustfmt 1.8.0-stable"
-        ));
-    }
-
     #[test]
     fn the_install_text_is_the_recipe_it_describes() {
         assert_eq!(

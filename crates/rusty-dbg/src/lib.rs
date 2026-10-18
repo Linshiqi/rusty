@@ -14,7 +14,6 @@ pub use model::*;
 pub mod any;
 pub mod dap;
 pub mod session;
-mod spawn;
 pub use any::AnySession;
 pub use dap::{Board, DapLaunch, DapSession};
 pub use session::{Debugger, Error, Events, Launch, Target};

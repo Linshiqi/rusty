@@ -8,6 +8,9 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# How a child is spawned, where the homes are and where rustfmt is: one
+# rule for every crate.
+rusty-spawn = { path = "../rusty-spawn" }
 # Reading and writing a file in the encoding it was written in — a vendor
 # SDK's GBK, a Windows tool's UTF-16 (`text_file`).
 encoding_rs = "0.8.35"

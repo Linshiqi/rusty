@@ -186,24 +186,12 @@ pub fn workspace_root(dir: &Path) -> Result<PathBuf> {
 /// The host toolchain's target triple, as `rustc -vV` reports it — asked in
 /// the project, so a `rust-toolchain.toml` pin answers rather than the default.
 pub fn host_triple(root: &Path) -> Result<String> {
-    let output = process::command("rustc")
-        .arg("-vV")
-        .current_dir(root)
-        .output()
-        .map_err(|source| Error::Spawn {
-            tool: "rustc".to_string(),
-            source,
-        })?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .find_map(|line| line.strip_prefix("host: "))
-        .map(|host| host.trim().to_string())
-        .ok_or_else(|| {
-            Error::refused(
-                "`rustc -vV` did not report a host triple, so whether gdb can read what it \
-                 builds cannot be said.",
-            )
-        })
+    rusty_spawn::host_triple(Some(root)).ok_or_else(|| {
+        Error::refused(
+            "`rustc -vV` did not report a host triple, so whether gdb can read what it \
+             builds cannot be said.",
+        )
+    })
 }
 
 /// A gdb for this machine's own binaries. The chips' debuggers —

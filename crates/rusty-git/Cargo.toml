@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# How a child is spawned: one rule for every crate.
+rusty-spawn = { path = "../rusty-spawn" }
 serde = { version = "1.0.229", features = ["derive"] }
 
 # The repository side: running `git` and reading what it says. Same major as

@@ -168,7 +168,7 @@ pub fn remove_cargo_cache(label: &str) -> Result<SweepReport> {
 /// git checkouts are re-fetched, so those three are removable; the index and
 /// the git object databases are not offered.
 pub(super) fn cargo_home_items() -> Vec<DiskItem> {
-    let Some(home) = cargo_home() else {
+    let Some(home) = rusty_spawn::cargo_home() else {
         return Vec::new();
     };
     [
@@ -194,13 +194,4 @@ pub(super) fn cargo_home_items() -> Vec<DiskItem> {
         })
     })
     .collect()
-}
-
-pub(super) fn cargo_home() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("CARGO_HOME") {
-        return Some(PathBuf::from(home));
-    }
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(|home| PathBuf::from(home).join(".cargo"))
 }

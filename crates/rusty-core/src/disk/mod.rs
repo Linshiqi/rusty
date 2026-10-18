@@ -46,7 +46,8 @@ use guppy::graph::{PackageGraph, PackageSource};
 use crate::model::{DiskItem, DiskReport, KEEP_VARIANTS, StaleReason};
 
 use fs::{inside, measure, same_dir, sorted_entries};
-use sweep::{cargo_home, cargo_home_items};
+use rusty_spawn::cargo_home;
+use sweep::cargo_home_items;
 use tree::TreeScan;
 
 pub use fs::volume_of;

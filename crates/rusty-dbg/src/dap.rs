@@ -672,7 +672,7 @@ fn launch_arguments(launch: &DapLaunch) -> Value {
 }
 
 fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
-    let mut command = crate::spawn::command(&launch.adapter);
+    let mut command = rusty_spawn::quiet(&launch.adapter);
     if launch.board.is_some() {
         // One session and then gone, as an IDE expects of an adapter it
         // started; without it probe-rs waits for the next client for ever.

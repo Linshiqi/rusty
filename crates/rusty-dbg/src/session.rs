@@ -205,7 +205,7 @@ impl Debugger {
     /// after the fact means parsing a banner in the first one.
     pub fn start(launch: &Launch) -> Result<(Self, Events)> {
         let host = launch.target.is_host();
-        let mut command = crate::spawn::command(&launch.gdb);
+        let mut command = rusty_spawn::quiet(&launch.gdb);
         command
             .arg("--interpreter=mi3")
             .arg("--quiet")

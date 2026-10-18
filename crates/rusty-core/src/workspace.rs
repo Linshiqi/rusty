@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use camino::Utf8Path;
 use guppy::{MetadataCommand, graph::PackageGraph};
@@ -41,7 +41,7 @@ impl Workspace {
         // `std::process::Command`, and a GUI parent that let guppy spawn
         // `cargo metadata` flashed one up on every project open.
         let mut command = cmd.cargo_command();
-        quiet(&mut command);
+        rusty_spawn::no_console_window(&mut command);
         let output = command.output().map_err(|e| Error::CargoRun {
             path: manifest.display().to_string(),
             detail: e.to_string(),
@@ -145,42 +145,11 @@ impl Workspace {
     }
 }
 
-/// No console window for a child on Windows. A GUI process has no console,
-/// so a child that inherits nothing is given one — a black window flashed up
-/// for the duration of every `cargo metadata` and `rustc -vV`. rusty-embed
-/// carries the same three lines; this crate cannot depend on it.
-fn quiet(command: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = command;
-    }
-}
-
 /// Ask rustc for the host triple.
 ///
-/// `std::env::consts` cannot produce a real triple (it has no vendor or ABI),
-/// and getting this wrong would mislabel every analysis, so shell out to the
-/// authority. Falls back to a clearly-marked placeholder rather than a wrong
-/// triple if rustc is not on PATH.
+/// Getting this wrong would mislabel every analysis, so the authority is
+/// asked (`rusty_spawn::host_triple`). Falls back to a clearly-marked
+/// placeholder rather than a wrong triple if rustc is not on PATH.
 fn host_triple() -> String {
-    let mut command = Command::new("rustc");
-    command.arg("-vV");
-    quiet(&mut command);
-    command
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| {
-            String::from_utf8(out.stdout).ok().and_then(|text| {
-                text.lines()
-                    .find_map(|line| line.strip_prefix("host: ").map(str::to_string))
-            })
-        })
-        .unwrap_or_else(|| "unknown".to_string())
+    rusty_spawn::host_triple(None).unwrap_or_else(|| "unknown".to_string())
 }

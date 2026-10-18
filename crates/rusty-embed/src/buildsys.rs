@@ -281,7 +281,7 @@ fn detect_platformio(root: &Path, catalog: &Catalog) -> Result<EmbeddedProject> 
 fn installed_board_mcu(board: &str) -> Option<String> {
     let core = std::env::var_os("PLATFORMIO_CORE_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|home| home.join(".platformio")))?;
+        .or_else(|| rusty_spawn::home_dir().map(|home| home.join(".platformio")))?;
     let platforms = std::fs::read_dir(core.join("platforms")).ok()?;
     for platform in platforms.flatten() {
         let file = platform.path().join("boards").join(format!("{board}.json"));

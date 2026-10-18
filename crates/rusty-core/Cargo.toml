@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# How a child is spawned and where the homes are: one rule for every crate.
+rusty-spawn = { path = "../rusty-spawn" }
 serde = { version = "1.0.229", features = ["derive"] }
 
 camino = "1.2.5"

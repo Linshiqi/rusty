@@ -6252,6 +6252,7 @@ dependencies = [
  "camino",
  "fs4",
  "guppy",
+ "rusty-spawn",
  "semver",
  "serde",
  "serde_json",
@@ -6264,6 +6265,7 @@ name = "rusty-dbg"
 version = "0.7.3"
 dependencies = [
  "rusty-embed",
+ "rusty-spawn",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -6321,6 +6323,7 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "notify",
+ "rusty-spawn",
  "serde",
  "syntect",
  "tempfile",
@@ -6343,6 +6346,7 @@ dependencies = [
  "rusty-draw",
  "rusty-git",
  "rusty-mcu",
+ "rusty-spawn",
  "semver",
  "serde",
  "serde_json",
@@ -6358,6 +6362,7 @@ dependencies = [
 name = "rusty-git"
 version = "0.7.3"
 dependencies = [
+ "rusty-spawn",
  "serde",
  "tempfile",
  "thiserror 2.0.20",
@@ -6374,6 +6379,7 @@ dependencies = [
 name = "rusty-lsp"
 version = "0.7.3"
 dependencies = [
+ "rusty-spawn",
  "serde",
  "serde_json",
  "tempfile",
@@ -6410,6 +6416,10 @@ dependencies = [
  "windows 0.61.3",
  "winreg 0.55.0",
 ]
+
+[[package]]
+name = "rusty-spawn"
+version = "0.7.3"
 
 [[package]]
 name = "rusty-term"

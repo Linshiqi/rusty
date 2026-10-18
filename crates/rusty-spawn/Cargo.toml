@@ -1,0 +1,16 @@
+[package]
+name = "rusty-spawn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Nothing: see the header of src/lib.rs. Every crate here depends on this
+# one, the leaves that may not depend on rusty-embed included, so it must
+# cost them no dependency graph.
+[dependencies]
+
+[lints]
+workspace = true

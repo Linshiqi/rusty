@@ -8,6 +8,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# How a child is spawned, where the homes are and where a rustup component
+# is: one rule for every crate. `process::command` layers the tool
+# directories and espup's environment on top of its `quiet`.
+rusty-spawn = { path = "../rusty-spawn" }
 serde = { version = "1.0.229", features = ["derive"] }
 
 toml = "1.1.4"
