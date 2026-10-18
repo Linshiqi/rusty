@@ -9,6 +9,15 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.5
+
+**Housekeeping, continued.** Nothing you can see changes; what repeated in
+the code now lives once — the probes' key presses and photographs, the
+tests' sheet fixtures, the hover card's reading of a line's problems, the
+plot's and the waves' clock, a colour read from `#rrggbb`, the word
+characters the search and the cursors agree on — so the next fix lands in
+one place rather than in one of six.
+
 ## v0.7.4
 
 **A Mac's keys are a Mac's.** In the terminal the physical Ctrl key sends
