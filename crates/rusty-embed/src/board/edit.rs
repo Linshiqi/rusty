@@ -475,37 +475,19 @@ pub fn straighten(list: &[EditPart], wires: &mut [Wire], index: usize) {
 mod tests {
     use super::*;
     use crate::nets::kit_rows;
-    use crate::{Fill, Graphic, Pin, PinKind};
 
     use crate::board::geometry::{KIT_SYMBOL, kit_symbol};
+    use crate::fixtures::{Shape, rect, symbol_shaped};
 
+    /// The editor's symbol: pins a pitch and a half out, a square body.
     fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
-        Symbol {
-            library: library.into(),
-            name: name.into(),
-            reference: reference.into(),
-            value: name.into(),
-            description: None,
-            pins: pins
-                .iter()
-                .enumerate()
-                .map(|(i, (number, name))| Pin {
-                    number: (*number).into(),
-                    name: (*name).into(),
-                    kind: PinKind::Passive,
-                    at: (if i == 0 { -3.81 } else { 3.81 }, 0.0),
-                    length: 2.54,
-                    angle: if i == 0 { 0 } else { 180 },
-                    hidden: false,
-                })
-                .collect(),
-            graphics: vec![Graphic::Rectangle {
-                start: (-1.0, -1.0),
-                end: (1.0, 1.0),
-                width: 0.254,
-                fill: Fill::None,
-            }],
-        }
+        let shape = Shape {
+            offset: 3.81,
+            alternate: false,
+            angled: true,
+            body: Some(rect((-1.0, -1.0), (1.0, 1.0), 0.254)),
+        };
+        symbol_shaped(library, name, reference, pins, &shape)
     }
 
     fn led() -> Symbol {

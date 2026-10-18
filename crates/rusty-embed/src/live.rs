@@ -398,37 +398,9 @@ impl Live {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Fill, Graphic, Instance, Pin, PinKind, Symbol, Wire};
+    use crate::fixtures::symbol;
+    use crate::model::{Instance, Wire};
     use crate::nets::kit_rows;
-
-    fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
-        Symbol {
-            library: library.into(),
-            name: name.into(),
-            reference: reference.into(),
-            value: name.into(),
-            description: None,
-            pins: pins
-                .iter()
-                .enumerate()
-                .map(|(i, (number, pin_name))| Pin {
-                    number: (*number).into(),
-                    name: (*pin_name).into(),
-                    kind: PinKind::Passive,
-                    at: (if i == 0 { -2.54 } else { 2.54 }, 0.0),
-                    length: 2.54,
-                    angle: if i == 0 { 0 } else { 180 },
-                    hidden: false,
-                })
-                .collect(),
-            graphics: vec![Graphic::Rectangle {
-                start: (-1.0, 1.0),
-                end: (1.0, -1.0),
-                width: 0.0,
-                fill: Fill::None,
-            }],
-        }
-    }
 
     /// A GPIO through a resistor into a capacitor to ground: an RC on a
     /// pin, which is the circuit a firmware-in-the-loop run is about.

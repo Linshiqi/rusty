@@ -34,36 +34,6 @@ thread_local! {
 const AFTER: &str = "pub fn norm(self) -> f32 {";
 const BROKEN: &str = "        let broken: u32 = \"text\";";
 
-fn send(run: &Run, event: WindowEvent) {
-    run.window.window().dispatch_event(event);
-}
-
-/// A key with modifiers held, pressed and let go as a hand does it.
-fn chord(run: &Run, held: &[Key], text: &str) {
-    for key in held {
-        send(
-            run,
-            WindowEvent::KeyPressed {
-                text: (*key).into(),
-            },
-        );
-    }
-    send(run, WindowEvent::KeyPressed { text: text.into() });
-    send(run, WindowEvent::KeyReleased { text: text.into() });
-    for key in held.iter().rev() {
-        send(
-            run,
-            WindowEvent::KeyReleased {
-                text: (*key).into(),
-            },
-        );
-    }
-}
-
-fn snapshot(run: &Run, name: &str) {
-    crate::probe::snapshot(run.window, &run.dir.join(name));
-}
-
 /// Stay at this step.
 fn again(run: &Run) {
     run.step.set(run.step.get() - 1);
@@ -175,11 +145,11 @@ pub fn reproduce(n: u32, run: &Run) {
             }
         }
         7503 => {
-            snapshot(run, "output-1-broken.png");
+            run.snapshot("output-1-broken.png");
             shell.invoke_show_panel("bottom".into(), "problems".into());
         }
         7504 => {
-            snapshot(run, "problems-1-broken.png");
+            run.snapshot("problems-1-broken.png");
             library(false);
         }
         7505 => app.act("run.build"),
@@ -190,11 +160,11 @@ pub fn reproduce(n: u32, run: &Run) {
             }
         }
         7507 => {
-            snapshot(run, "output-2-mended.png");
+            run.snapshot("output-2-mended.png");
             shell.invoke_show_panel("bottom".into(), "problems".into());
         }
         7508 => {
-            snapshot(run, "problems-2-mended.png");
+            run.snapshot("problems-2-mended.png");
             library(true);
         }
         // Broken and built again, then mended and run from a test's lens.
@@ -221,11 +191,11 @@ pub fn reproduce(n: u32, run: &Run) {
             }
         }
         7513 => {
-            snapshot(run, "lens-output.png");
+            run.snapshot("lens-output.png");
             shell.invoke_show_panel("bottom".into(), "problems".into());
         }
         7514 => {
-            snapshot(run, "lens-problems.png");
+            run.snapshot("lens-problems.png");
             library(true);
         }
         // Broken and built again, then mended and the example run from
@@ -261,10 +231,10 @@ pub fn reproduce(n: u32, run: &Run) {
             }
         }
         7519 => {
-            snapshot(run, "example-output.png");
+            run.snapshot("example-output.png");
             shell.invoke_show_panel("bottom".into(), "problems".into());
         }
-        7520 => snapshot(run, "example-problems.png"),
+        7520 => run.snapshot("example-problems.png"),
         _ => {}
     }
 }
@@ -323,7 +293,7 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
         }
         7531 => {
             eprintln!("filter: `VECTOR` typed: {}", drawn(run));
-            snapshot(run, "filter-text.png");
+            run.snapshot("filter-text.png");
             // Broken and built with the filter in force: every line is
             // judged as it arrives.
             library(true);
@@ -339,13 +309,13 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
             }
         }
         7534 => {
-            snapshot(run, "filter-arrived.png");
+            run.snapshot("filter-arrived.png");
             filter(run, "");
             shell.invoke_filter_level("output".into(), "errors".into());
         }
         7535 => {
             eprintln!("filter: the box emptied, errors only: {}", drawn(run));
-            snapshot(run, "filter-errors.png");
+            run.snapshot("filter-errors.png");
             shell.invoke_filter_level("output".into(), "errors".into());
         }
         7536 => {
@@ -358,27 +328,21 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
         7537 => {
             // The keys to the dock, by a click on its first line.
             let position = LogicalPosition::new(left + 300.0, panel_top + 9.0);
-            send(run, WindowEvent::PointerMoved { position });
-            send(
-                run,
-                WindowEvent::PointerPressed {
-                    position,
-                    button: PointerEventButton::Left,
-                },
-            );
-            send(
-                run,
-                WindowEvent::PointerReleased {
-                    position,
-                    button: PointerEventButton::Left,
-                },
-            );
+            run.send(WindowEvent::PointerMoved { position });
+            run.send(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            run.send(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
         }
-        7538 => chord(run, &[Key::Control], "f"),
+        7538 => run.chord(&[Key::Control], "f"),
         7539 => {
             // Into the box, over what it held: Ctrl+F selects it all.
             for ch in "mismatched".chars() {
-                chord(run, &[], &ch.to_string());
+                run.chord(&[], ch.to_string());
             }
         }
         7540 => {
@@ -387,8 +351,8 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
                 shell.get_output_filter_text(),
                 drawn(run)
             );
-            snapshot(run, "filter-ctrl-f.png");
-            chord(run, &[], &slint::SharedString::from(Key::Escape));
+            run.snapshot("filter-ctrl-f.png");
+            run.chord(&[], Key::Escape);
         }
         7541 => {
             let (shown, kept) = app.runner().counts();
@@ -396,7 +360,7 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
                 "filter: Escape in the box: it holds {:?}, {shown} of {kept} lines drawn",
                 shell.get_output_filter_text()
             );
-            snapshot(run, "filter-escaped.png");
+            run.snapshot("filter-escaped.png");
             shell.invoke_show_panel("bottom".into(), "problems".into());
             shell.set_problems_filter_text("mismatched".into());
             shell.invoke_filter_edited("problems".into(), "mismatched".into());
@@ -411,7 +375,7 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
                 "filter: Problems under `mismatched`: count {:?}, {rows:?}",
                 shell.get_problems_filter().count
             );
-            snapshot(run, "problems-filter.png");
+            run.snapshot("problems-filter.png");
             shell.set_problems_filter_text("".into());
             shell.invoke_filter_edited("problems".into(), "".into());
             library(false);
@@ -421,14 +385,14 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
             shell.invoke_show_panel("bottom".into(), "output".into());
             run.window.invoke_focus_code();
         }
-        7546 => chord(run, &[Key::Control], "`"),
+        7546 => run.chord(&[Key::Control], "`"),
         7547 => {
             eprintln!(
                 "terminal: Ctrl+` from the code: bottom open {}, {:?} in front",
                 shell.get_bottom_open(),
                 shell.get_bottom_front()
             );
-            snapshot(run, "term-1-from-code.png");
+            run.snapshot("term-1-from-code.png");
         }
         7548 => {
             // The shell up: something on its screen.
@@ -442,7 +406,7 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
             run.waited.set(0);
             SCREEN.with(|s| *s.borrow_mut() = crate::probe::screen_text(&shell));
             // Pressed in the terminal, which has the keys.
-            chord(run, &[Key::Control], "`");
+            run.chord(&[Key::Control], "`");
         }
         7550 => {
             let before = SCREEN.with(|s| s.borrow().clone());
@@ -453,10 +417,10 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
                 before.matches('`').count(),
                 after.matches('`').count()
             );
-            snapshot(run, "term-2-hidden.png");
+            run.snapshot("term-2-hidden.png");
             // From the code again, with the dock closed.
             run.window.invoke_focus_code();
-            chord(run, &[Key::Control], "`");
+            run.chord(&[Key::Control], "`");
         }
         7552 => {
             eprintln!(
@@ -464,11 +428,11 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
                 shell.get_bottom_open(),
                 shell.get_bottom_front()
             );
-            snapshot(run, "term-3-reopened.png");
+            run.snapshot("term-3-reopened.png");
             // The keys back to the code with the terminal in front: Ctrl+`
             // takes them to the terminal rather than putting it away.
             run.window.invoke_focus_code();
-            chord(run, &[Key::Control], "`");
+            run.chord(&[Key::Control], "`");
         }
         7553 => {
             // The shell's prompt before typing at it: a PowerShell starting
@@ -492,9 +456,9 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
         }
         7554 => {
             for ch in "echo rusty-$((6*7))".chars() {
-                chord(run, &[], &ch.to_string());
+                run.chord(&[], ch.to_string());
             }
-            chord(run, &[], &slint::SharedString::from(Key::Return));
+            run.chord(&[], Key::Return);
         }
         7555 => {
             if !crate::probe::screen_text(&shell).contains("rusty-42") {
@@ -511,7 +475,7 @@ pub fn filter_and_terminal(n: u32, run: &Run) {
                 shell.get_bottom_front(),
                 crate::probe::screen_text(&shell).contains("rusty-42")
             );
-            snapshot(run, "term-4-focused.png");
+            run.snapshot("term-4-focused.png");
         }
         7556 => app.act("app.exit"),
         _ => {}

@@ -433,19 +433,7 @@ pub fn start(window: &AppWindow) {
         // A key with modifiers held: each modifier pressed first and let go
         // after, as a hand does, which is how Slint knows they are down.
         let chord = |held: &[Key], text: slint::SharedString| {
-            let send = |event| window.window().dispatch_event(event);
-            for key in held {
-                send(WindowEvent::KeyPressed {
-                    text: (*key).into(),
-                });
-            }
-            send(WindowEvent::KeyPressed { text: text.clone() });
-            send(WindowEvent::KeyReleased { text });
-            for key in held.iter().rev() {
-                send(WindowEvent::KeyReleased {
-                    text: (*key).into(),
-                });
-            }
+            crate::probe_surfaces::chord_on(window.window(), held, text)
         };
         let key = |text: slint::SharedString| chord(&[], text);
         let draft = || {
@@ -1934,12 +1922,12 @@ pub fn start(window: &AppWindow) {
                 let share = shell.get_split_share();
                 eprintln!(
                     "split: share {share}, the divider at {}",
-                    left + divider_at(width, share)
+                    left + crate::probe_surfaces::divider_at(width, share)
                 );
                 snapshot(&window, &dir.join("split-half.png"));
                 // The divider taken hold of a pixel beside its line and
                 // dragged 250 px to the left.
-                let x = left + divider_at(width, share) + 2.0;
+                let x = left + crate::probe_surfaces::divider_at(width, share) + 2.0;
                 let from = LogicalPosition::new(x, 300.0);
                 let to = LogicalPosition::new(x - 250.0, 300.0);
                 pointer(&window, WindowEvent::PointerMoved { position: from });
@@ -1969,7 +1957,7 @@ pub fn start(window: &AppWindow) {
                 // A double-click on the divider where it now is.
                 let (left, width) = editor_span(&window, &shell);
                 let at = LogicalPosition::new(
-                    left + divider_at(width, shell.get_split_share()) - 2.0,
+                    left + crate::probe_surfaces::divider_at(width, shell.get_split_share()) - 2.0,
                     300.0,
                 );
                 pointer(&window, WindowEvent::PointerMoved { position: at });
@@ -2017,7 +2005,7 @@ pub fn start(window: &AppWindow) {
                 snapshot(&window, &dir.join("tab-split-right.png"));
                 // And on the right strip, the group with the keys.
                 let (left, width) = editor_span(&window, &shell);
-                let x = left + divider_at(width, shell.get_split_share()) + 1.0 + 40.0;
+                let x = left + crate::probe_surfaces::divider_at(width, shell.get_split_share()) + 1.0 + 40.0;
                 right_click(&window, LogicalPosition::new(x, STRIP_Y));
             }
             3734 if tabbing => {
@@ -2031,13 +2019,13 @@ pub fn start(window: &AppWindow) {
                 shell.invoke_menu_picked("tab.copy-path".into());
             }
             3735 if tabbing => {
-                eprintln!("copy path: {:?}", clipboard());
+                eprintln!("copy path: {:?}", crate::probe_surfaces::read_clipboard().ok());
                 let id = shell.get_active_tab();
                 shell.invoke_tab_menu(id, false, 400.0, 80.0);
                 shell.invoke_menu_picked("tab.copy-relative-path".into());
             }
             3736 if tabbing => {
-                eprintln!("copy relative path: {:?}", clipboard());
+                eprintln!("copy relative path: {:?}", crate::probe_surfaces::read_clipboard().ok());
                 // Close to the right of the left group's fourth tab.
                 let id = shell.get_shade_tabs().row_data(3).map(|t| t.id).unwrap_or_default();
                 shell.invoke_tab_menu(id, true, 100.0, 80.0);
@@ -2515,7 +2503,7 @@ pub fn start(window: &AppWindow) {
                 );
                 // Ctrl+F there: its own find bar.
                 if let Some((torn, _)) = app.torn_windows().first() {
-                    torn_chord(torn, &[Key::Control], "f");
+                    crate::probe_surfaces::chord_on(torn.window(), &[Key::Control], "f");
                 }
             }
             3607 if tearing => {
@@ -2527,17 +2515,17 @@ pub fn start(window: &AppWindow) {
                         window.global::<Find>().get_open()
                     );
                     snapshot_of(torn.window(), &dir.join("torn-find.png"));
-                    torn_chord(torn, &[], &slint::SharedString::from(Key::Escape));
+                    crate::probe_surfaces::chord_on(torn.window(), &[], Key::Escape);
                 }
             }
             3608 if tearing => {
                 // A function at the end of the file, typed there, asking for
                 // `v.no` to be completed.
                 if let Some((torn, _)) = app.torn_windows().first() {
-                    torn_chord(torn, &[Key::Control], &slint::SharedString::from(Key::End));
-                    torn_chord(torn, &[], &slint::SharedString::from(Key::Return));
+                    crate::probe_surfaces::chord_on(torn.window(), &[Key::Control], Key::End);
+                    crate::probe_surfaces::chord_on(torn.window(), &[], Key::Return);
                     for ch in "fn torn_probe(v: Vector) -> f32 { v.no".chars() {
-                        torn_chord(torn, &[], &ch.to_string());
+                        crate::probe_surfaces::chord_on(torn.window(), &[], ch.to_string());
                     }
                 }
                 waited.set(0);
@@ -2566,10 +2554,10 @@ pub fn start(window: &AppWindow) {
                     labels.iter().take(6).collect::<Vec<_>>()
                 );
                 snapshot_of(torn.window(), &dir.join("torn-completion.png"));
-                torn_chord(&torn, &[], &slint::SharedString::from(Key::Escape));
+                crate::probe_surfaces::chord_on(torn.window(), &[], Key::Escape);
                 // A line that does not parse, for a squiggle.
                 for ch in "; let = ;".chars() {
-                    torn_chord(&torn, &[], &ch.to_string());
+                    crate::probe_surfaces::chord_on(torn.window(), &[], ch.to_string());
                 }
                 waited.set(0);
                 step.set(3680);
@@ -2637,7 +2625,7 @@ pub fn start(window: &AppWindow) {
                     card.get_hover_open()
                 );
                 snapshot_of(torn.window(), &dir.join("torn-hover.png"));
-                torn_chord(&torn, &[], &slint::SharedString::from(Key::Escape));
+                crate::probe_surfaces::chord_on(torn.window(), &[], Key::Escape);
                 app.open_file(start_path.borrow().clone());
                 step.set(3610);
             }
@@ -2706,9 +2694,9 @@ pub fn start(window: &AppWindow) {
                 if let Some((torn, _)) = app.torn_windows().first() {
                     match save.as_deref() {
                         Some("Ctrl+F7") => {
-                            torn_chord(torn, &[Key::Control], &slint::SharedString::from(Key::F7))
+                            crate::probe_surfaces::chord_on(torn.window(), &[Key::Control], Key::F7)
                         }
-                        _ => torn_chord(torn, &[Key::Control], "s"),
+                        _ => crate::probe_surfaces::chord_on(torn.window(), &[Key::Control], "s"),
                     }
                 }
             }
@@ -2865,7 +2853,7 @@ pub fn start(window: &AppWindow) {
                     return;
                 }
                 if let Some((torn, surface)) = torn.first() {
-                    torn_chord(torn, &[], "x");
+                    crate::probe_surfaces::chord_on(torn.window(), &[], "x");
                     eprintln!(
                         "torn: renamed in the tree: its tab {named:?}, its title {:?}, its file {:?}, the draft {:?}, notes.txt open {}",
                         torn.get_caption().to_string(),
@@ -3003,14 +2991,14 @@ pub fn start(window: &AppWindow) {
                     shell.get_active_tab()
                 );
                 // Ctrl+K: the first stroke of a chord, said there.
-                torn_chord(&torn, &[Key::Control], "k");
+                crate::probe_surfaces::chord_on(torn.window(), &[Key::Control], "k");
             }
             3672 if tearing => {
                 let Some((torn, _)) = app.torn_windows().into_iter().next() else {
                     return;
                 };
                 eprintln!("torn: Ctrl+K there: its status line {:?}", torn.get_message());
-                torn_chord(&torn, &[Key::Control], "s");
+                crate::probe_surfaces::chord_on(torn.window(), &[Key::Control], "s");
             }
             3674 if tearing => {
                 eprintln!(
@@ -3031,7 +3019,7 @@ pub fn start(window: &AppWindow) {
                 snapshot(&window, &dir.join("torn-keys.png"));
                 // Alt+Left there: back along the main window's history.
                 if let Some((torn, _)) = app.torn_windows().first() {
-                    torn_chord(torn, &[Key::Alt], &slint::SharedString::from(Key::LeftArrow));
+                    crate::probe_surfaces::chord_on(torn.window(), &[Key::Alt], Key::LeftArrow);
                 }
             }
             3677 if tearing => {
@@ -5896,20 +5884,7 @@ fn tabs_said(shell: &Shell) -> String {
 
 /// The right-click menu's rows, with their keys.
 fn menu_said(shell: &Shell) -> String {
-    shell
-        .get_menu_items()
-        .iter()
-        .map(|item| {
-            if item.id.is_empty() {
-                "—".to_string()
-            } else if item.chord.is_empty() {
-                item.label.to_string()
-            } else {
-                format!("{} ({})", item.label, item.chord)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
+    menu_rows(shell).join(" · ")
 }
 
 /// The middle of the tree's row `row`, in the window: under the title bar,
@@ -6006,22 +5981,6 @@ fn text_size_of(code: &Code) -> (f32, f32, f32) {
     )
 }
 
-fn torn_chord(torn: &crate::TornWindow, held: &[Key], text: &str) {
-    let send = |event| torn.window().dispatch_event(event);
-    for key in held {
-        send(WindowEvent::KeyPressed {
-            text: (*key).into(),
-        });
-    }
-    send(WindowEvent::KeyPressed { text: text.into() });
-    send(WindowEvent::KeyReleased { text: text.into() });
-    for key in held.iter().rev() {
-        send(WindowEvent::KeyReleased {
-            text: (*key).into(),
-        });
-    }
-}
-
 /// The middle of the tab strips across the window: under the title bar and
 /// its line, half a strip down.
 const STRIP_Y: f32 = 41.0 + 18.0;
@@ -6044,13 +6003,6 @@ fn editor_span(window: &AppWindow, shell: &Shell) -> (f32, f32) {
         0.0
     };
     (left, size.width - left - right)
-}
-
-/// Where the editor groups part, from the editor area's left edge: the
-/// arithmetic `ui/pages.slint` places the divider by.
-fn divider_at(width: f32, share: f32) -> f32 {
-    let least = 220f32.min((width - 1.0) / 2.0);
-    (width * share).round().clamp(least, width - 1.0 - least)
 }
 
 /// A pointer event, as the platform would deliver it.
@@ -6106,10 +6058,6 @@ fn groups(shell: &Shell) -> String {
         titles(shell.get_shade_tabs()),
         shell.get_shade_active()
     )
-}
-
-fn clipboard() -> Option<String> {
-    arboard::Clipboard::new().ok()?.get_text().ok()
 }
 
 /// The window as it is drawn now, kept in memory.

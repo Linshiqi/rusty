@@ -155,26 +155,61 @@ impl Run<'_> {
 
     /// A key pressed and let go with `held` held, as a hand does: each
     /// modifier down first and up after.
-    fn chord(&self, held: &[Key], text: slint::SharedString) {
-        for key in held {
-            self.send(WindowEvent::KeyPressed {
-                text: (*key).into(),
-            });
-        }
-        self.send(WindowEvent::KeyPressed { text: text.clone() });
-        self.send(WindowEvent::KeyReleased { text });
-        for key in held.iter().rev() {
-            self.send(WindowEvent::KeyReleased {
-                text: (*key).into(),
-            });
-        }
+    pub(crate) fn chord(&self, held: &[Key], text: impl Into<slint::SharedString>) {
+        chord_on(self.window.window(), held, text);
+    }
+
+    /// A key on its own.
+    pub(crate) fn key(&self, text: impl Into<slint::SharedString>) {
+        self.chord(&[], text);
     }
 }
 
+/// [`Run::chord`] on any window — a torn-off one too — so every probe
+/// presses a chord the one way: each modifier down first and up after,
+/// which is how Slint knows they are down.
+pub(crate) fn chord_on(window: &slint::Window, held: &[Key], text: impl Into<slint::SharedString>) {
+    let text = text.into();
+    let send = |event| window.dispatch_event(event);
+    for key in held {
+        send(WindowEvent::KeyPressed {
+            text: (*key).into(),
+        });
+    }
+    send(WindowEvent::KeyPressed { text: text.clone() });
+    send(WindowEvent::KeyReleased { text });
+    for key in held.iter().rev() {
+        send(WindowEvent::KeyReleased {
+            text: (*key).into(),
+        });
+    }
+}
+
+/// Where the editor groups part, from the editor area's left edge: the
+/// arithmetic `ui/pages.slint` places the divider by.
+pub(crate) fn divider_at(width: f32, share: f32) -> f32 {
+    let least = 220f32.min((width - 1.0) / 2.0);
+    (width * share).round().clamp(least, width - 1.0 - least)
+}
+
+/// The clipboard's text. The clipboard is the machine's, and another
+/// program holding it open makes a read fail for a moment: asked again a
+/// few times before the failure is said.
+pub(crate) fn read_clipboard() -> Result<String, String> {
+    let mut last = String::new();
+    for _ in 0..20 {
+        match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+            Ok(text) => return Ok(text),
+            Err(error) => last = error.to_string(),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    Err(last)
+}
+
+/// The clipboard's text, or nothing when it could not be read.
 fn clipboard() -> String {
-    arboard::Clipboard::new()
-        .and_then(|mut c| c.get_text())
-        .unwrap_or_default()
+    read_clipboard().unwrap_or_default()
 }
 
 /// The first problem's row in Problems: one in a file, or any.
@@ -826,7 +861,7 @@ pub fn room(n: u32, run: &Run) {
             run.window.invoke_focus_code();
             say("opened");
         }
-        7601 => run.chord(&[Key::Control], Key::End.into()),
+        7601 => run.chord(&[Key::Control], Key::End),
         7605 => {
             say("Ctrl+End");
             run.snapshot("room-end.png");
@@ -836,9 +871,9 @@ pub fn room(n: u32, run: &Run) {
             let mut least = f32::MAX;
             for i in 0..12 {
                 for c in format!("// {}", "-".repeat(i + 1)).chars() {
-                    run.chord(&[], c.to_string().into());
+                    run.chord(&[], c.to_string());
                 }
-                run.chord(&[], Key::Return.into());
+                run.chord(&[], Key::Return);
                 let s = Stand::of(&code);
                 least = least.min(s.below);
                 tops.push(format!("{:.1}", s.top));
@@ -864,18 +899,18 @@ pub fn room(n: u32, run: &Run) {
                 s.rows.saturating_sub(1)
             );
             run.snapshot("room-past-end.png");
-            run.chord(&[Key::Control], Key::End.into());
+            run.chord(&[Key::Control], Key::End);
         }
         7616 => {
             say("Ctrl+End from past the end");
             // Down the middle of the file with the arrows.
-            run.chord(&[Key::Control], Key::Home.into());
+            run.chord(&[Key::Control], Key::Home);
             let presses = Stand::of(&code).shown as usize + 20;
             let mut least = f32::MAX;
             let mut moved = 0;
             let mut before = Stand::of(&code).top;
             for _ in 0..presses {
-                run.chord(&[], Key::DownArrow.into());
+                run.chord(&[], Key::DownArrow);
                 let s = Stand::of(&code);
                 if s.top != before {
                     moved += 1;

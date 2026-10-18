@@ -523,32 +523,20 @@ pub fn pin_tables(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Graphic, Pin, PinKind, Symbol, Wire};
-    use crate::nets::kit_rows;
+    use crate::fixtures::{Shape, place_with as place, symbol_shaped, wire};
+    use crate::model::Symbol;
 
+    /// A generator's symbol: pins alternating five pitches out, none angled, no body.
     fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
-        Symbol {
-            library: library.into(),
-            name: name.into(),
-            reference: reference.into(),
-            value: name.into(),
-            description: None,
-            pins: pins
-                .iter()
-                .enumerate()
-                .map(|(i, (number, name))| Pin {
-                    number: (*number).into(),
-                    name: (*name).into(),
-                    kind: PinKind::Passive,
-                    at: (if i % 2 == 0 { -5.08 } else { 5.08 }, 0.0),
-                    length: 2.54,
-                    angle: 0,
-                    hidden: false,
-                })
-                .collect(),
-            graphics: Vec::<Graphic>::new(),
-        }
+        let shape = Shape {
+            offset: 5.08,
+            alternate: true,
+            angled: false,
+            body: None,
+        };
+        symbol_shaped(library, name, reference, pins, &shape)
     }
+    use crate::nets::kit_rows;
 
     fn sheet() -> Sheet {
         let mut sheet = Sheet::empty("esp32c3");
@@ -558,36 +546,6 @@ mod tests {
             symbol("Device", "C", "C", &[("1", "~"), ("2", "~")]),
         ];
         sheet
-    }
-
-    fn place(
-        sheet: &mut Sheet,
-        reference: &str,
-        symbol: &str,
-        value: &str,
-        props: &[(&str, &str)],
-    ) {
-        sheet.parts.push(Instance {
-            reference: reference.into(),
-            symbol: symbol.into(),
-            value: value.into(),
-            x: 0.0,
-            y: 0.0,
-            rot: 0,
-            mirror: false,
-            props: props
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        });
-    }
-
-    fn wire(sheet: &mut Sheet, from: &str, to: &str) {
-        sheet.wires.push(Wire {
-            from: PinRef::parse(from).unwrap(),
-            to: PinRef::parse(to).unwrap(),
-            bends: Vec::new(),
-        });
     }
 
     fn rows() -> Vec<Row> {

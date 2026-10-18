@@ -45,10 +45,6 @@ thread_local! {
 /// The files the run writes into the project and opens.
 const NOTES: usize = 9;
 
-fn send(run: &Run, event: WindowEvent) {
-    run.window.window().dispatch_event(event);
-}
-
 fn left() -> PointerEventButton {
     PointerEventButton::Left
 }
@@ -56,14 +52,11 @@ fn left() -> PointerEventButton {
 /// The left button pressed at `at`, the pointer there first.
 fn press(run: &Run, at: (f32, f32)) {
     let position = LogicalPosition::new(at.0, at.1);
-    send(run, WindowEvent::PointerMoved { position });
-    send(
-        run,
-        WindowEvent::PointerPressed {
-            position,
-            button: left(),
-        },
-    );
+    run.send(WindowEvent::PointerMoved { position });
+    run.send(WindowEvent::PointerPressed {
+        position,
+        button: left(),
+    });
     AT.set(at);
 }
 
@@ -74,7 +67,7 @@ fn carry(run: &Run, to: (f32, f32)) {
         let t = step as f32 / 6.0;
         let position =
             LogicalPosition::new(from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
-        send(run, WindowEvent::PointerMoved { position });
+        run.send(WindowEvent::PointerMoved { position });
     }
     AT.set(to);
 }
@@ -85,12 +78,9 @@ fn carry(run: &Run, to: (f32, f32)) {
 /// every look and every release the probe's own place is said again.
 fn hold(run: &Run) {
     let at = AT.get();
-    send(
-        run,
-        WindowEvent::PointerMoved {
-            position: LogicalPosition::new(at.0, at.1),
-        },
-    );
+    run.send(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(at.0, at.1),
+    });
 }
 
 /// The same for a tab held from the first window of its own: the pointer
@@ -109,43 +99,16 @@ fn torn_hold() {
 fn release(run: &Run, button: PointerEventButton) {
     hold(run);
     let at = AT.get();
-    send(
-        run,
-        WindowEvent::PointerReleased {
-            position: LogicalPosition::new(at.0, at.1),
-            button,
-        },
-    );
+    run.send(WindowEvent::PointerReleased {
+        position: LogicalPosition::new(at.0, at.1),
+        button,
+    });
 }
 
 /// A click of `button` at `at`.
 fn click(run: &Run, at: (f32, f32), button: PointerEventButton) {
-    let position = LogicalPosition::new(at.0, at.1);
-    send(run, WindowEvent::PointerMoved { position });
-    send(run, WindowEvent::PointerPressed { position, button });
-    send(run, WindowEvent::PointerReleased { position, button });
+    run.click(at.0, at.1, button);
     AT.set(at);
-}
-
-fn key(run: &Run, held: &[Key], text: slint::SharedString) {
-    for key in held {
-        send(
-            run,
-            WindowEvent::KeyPressed {
-                text: (*key).into(),
-            },
-        );
-    }
-    send(run, WindowEvent::KeyPressed { text: text.clone() });
-    send(run, WindowEvent::KeyReleased { text });
-    for key in held.iter().rev() {
-        send(
-            run,
-            WindowEvent::KeyReleased {
-                text: (*key).into(),
-            },
-        );
-    }
 }
 
 /// A strip's tabs by their titles: the group with the keys', or the other's.
@@ -177,15 +140,12 @@ fn to_start(run: &Run, other: bool) {
         return;
     };
     let position = LogicalPosition::new(x + 60.0, y + 18.0);
-    send(run, WindowEvent::PointerMoved { position });
-    send(
-        run,
-        WindowEvent::PointerScrolled {
-            position,
-            delta_x: 0.0,
-            delta_y: 4000.0,
-        },
-    );
+    run.send(WindowEvent::PointerMoved { position });
+    run.send(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: 4000.0,
+    });
 }
 
 fn index_of(shell: &Shell, other: bool, title: &str) -> Option<usize> {
@@ -392,7 +352,7 @@ pub fn tab_drag(n: u32, run: &Run) {
         // carried from.
         7403 => {
             window.invoke_focus_code();
-            key(run, &[Key::Control], Key::End.into());
+            run.chord(&[Key::Control], Key::End);
         }
         7406 => {
             VIEW.set(app.editor().scroll());
@@ -481,7 +441,7 @@ pub fn tab_drag(n: u32, run: &Run) {
         7417 => {
             hold(run);
             eprintln!("tabdrag: held for Escape: {}", said(&shell));
-            key(run, &[], Key::Escape.into());
+            run.chord(&[], Key::Escape);
         }
         7418 => {
             eprintln!("tabdrag: Escape pressed: {}", said(&shell));
@@ -498,15 +458,12 @@ pub fn tab_drag(n: u32, run: &Run) {
             // The strip back at its start, then a tab held near its end.
             let (x, y, _, _) = app.group_pane(false).unwrap_or((300.0, 41.0, 0.0, 0.0));
             let position = LogicalPosition::new(x + 100.0, y + 18.0);
-            send(run, WindowEvent::PointerMoved { position });
-            send(
-                run,
-                WindowEvent::PointerScrolled {
-                    position,
-                    delta_x: 0.0,
-                    delta_y: 4000.0,
-                },
-            );
+            run.send(WindowEvent::PointerMoved { position });
+            run.send(WindowEvent::PointerScrolled {
+                position,
+                delta_x: 0.0,
+                delta_y: 4000.0,
+            });
         }
         7422 => {
             let Some([(shown, scroll), _]) = app.strip_lanes() else {
@@ -533,21 +490,18 @@ pub fn tab_drag(n: u32, run: &Run) {
                 said(&shell)
             );
             photo(run, "tabdrag-autoscroll.png");
-            key(run, &[], Key::Escape.into());
+            run.chord(&[], Key::Escape);
             release(run, left());
         }
         7450 => {
             // Back to the start, and long.txt in front again.
             let (x, y, _, _) = app.group_pane(false).unwrap_or((300.0, 41.0, 0.0, 0.0));
             let position = LogicalPosition::new(x + 100.0, y + 18.0);
-            send(
-                run,
-                WindowEvent::PointerScrolled {
-                    position,
-                    delta_x: 0.0,
-                    delta_y: 4000.0,
-                },
-            );
+            run.send(WindowEvent::PointerScrolled {
+                position,
+                delta_x: 0.0,
+                delta_y: 4000.0,
+            });
             shell.invoke_pick_tab("file:long.txt".into());
         }
         // The split: a tab other than long.txt, let go of over the right

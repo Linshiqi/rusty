@@ -8,6 +8,8 @@
 //! project's — read through one loader (`catalog`), so every answer about a
 //! part includes the overlays.
 
+#[cfg(test)]
+pub(crate) mod fixtures;
 pub mod model;
 pub mod nets;
 // The sheet averaged over a PWM period — the rules and the solver read at

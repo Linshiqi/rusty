@@ -294,39 +294,16 @@ impl Period {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Fill, Graphic, Instance, Pin, PinKind, Symbol};
+    use crate::fixtures::{place_with, symbol, wire};
 
-    fn pin(number: &str, name: &str, x: f64) -> Pin {
-        Pin {
-            number: number.into(),
-            name: name.into(),
-            kind: PinKind::Passive,
-            at: (x, 0.0),
-            length: 2.54,
-            angle: if x < 0.0 { 0 } else { 180 },
-            hidden: false,
-        }
-    }
-
-    fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
-        Symbol {
-            library: library.into(),
-            name: name.into(),
-            reference: reference.into(),
-            value: name.into(),
-            description: None,
-            pins: pins
-                .iter()
-                .enumerate()
-                .map(|(i, (number, name))| pin(number, name, if i == 0 { -2.54 } else { 2.54 }))
-                .collect(),
-            graphics: vec![Graphic::Rectangle {
-                start: (-1.0, 1.0),
-                end: (1.0, -1.0),
-                width: 0.0,
-                fill: Fill::None,
-            }],
-        }
+    /// A lamp carries its forward voltage, which the solver asks for.
+    fn place(sheet: &mut Sheet, reference: &str, id: &str, value: &str) {
+        let props: &[(&str, &str)] = if id == "Device:LED" {
+            &[("vf", "2.0")]
+        } else {
+            &[]
+        };
+        place_with(sheet, reference, id, value, props);
     }
 
     fn sheet() -> Sheet {
@@ -338,31 +315,6 @@ mod tests {
             symbol("rusty", "Supply", "#PWR", &[("1", "VCC")]),
         ];
         sheet
-    }
-
-    fn place(sheet: &mut Sheet, reference: &str, id: &str, value: &str) {
-        let mut props = BTreeMap::new();
-        if id == "Device:LED" {
-            props.insert("vf".to_string(), "2.0".to_string());
-        }
-        sheet.parts.push(Instance {
-            reference: reference.into(),
-            symbol: id.into(),
-            value: value.into(),
-            x: 0.0,
-            y: 0.0,
-            rot: 0,
-            mirror: false,
-            props,
-        });
-    }
-
-    fn wire(sheet: &mut Sheet, from: &str, to: &str) {
-        sheet.wires.push(Wire {
-            from: PinRef::parse(from).unwrap(),
-            to: PinRef::parse(to).unwrap(),
-            bends: Vec::new(),
-        });
     }
 
     fn rows() -> Vec<Row> {

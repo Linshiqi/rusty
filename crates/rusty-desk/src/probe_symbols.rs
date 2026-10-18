@@ -16,10 +16,7 @@
 
 use std::{cell::Cell, time::Duration};
 
-use slint::{
-    ComponentHandle, Model,
-    platform::{Key, WindowEvent},
-};
+use slint::{ComponentHandle, Model, platform::Key};
 
 use crate::{Code, Shell, probe_surfaces::Run, work};
 
@@ -35,56 +32,11 @@ thread_local! {
     static SNAPPED: Cell<bool> = const { Cell::new(false) };
 }
 
-fn send(run: &Run, event: WindowEvent) {
-    run.window.window().dispatch_event(event);
-}
-
-/// A key with modifiers held, each pressed first and let go after.
-fn chord(run: &Run, held: &[Key], text: slint::SharedString) {
-    for key in held {
-        send(
-            run,
-            WindowEvent::KeyPressed {
-                text: (*key).into(),
-            },
-        );
-    }
-    send(run, WindowEvent::KeyPressed { text: text.clone() });
-    send(run, WindowEvent::KeyReleased { text });
-    for key in held.iter().rev() {
-        send(
-            run,
-            WindowEvent::KeyReleased {
-                text: (*key).into(),
-            },
-        );
-    }
-}
-
-fn key(run: &Run, text: slint::SharedString) {
-    chord(run, &[], text);
-}
-
 /// Characters typed one key at a time, as a hand types them.
 fn typed(run: &Run, text: &str) {
     for c in text.chars() {
-        key(run, c.to_string().into());
+        run.key(c.to_string());
     }
-}
-
-fn snapshot(run: &Run, name: &str) {
-    crate::probe::snapshot(run.window, &run.dir.join(name));
-}
-
-/// Wait at this step until `ready`, at most `ticks` times.
-fn until(run: &Run, ready: bool, ticks: u32) -> bool {
-    if ready || run.waited.get() >= ticks {
-        run.waited.set(0);
-        return true;
-    }
-    run.waited.set(run.waited.get() + 1);
-    run.step.set(run.step.get() - 1);
-    false
 }
 
 /// The picker's rows as they read: the icon's number, the name, what it
@@ -134,16 +86,16 @@ pub fn symbols(n: u32, run: &Run) {
         // The server has the file once it has painted it.
         7200 => {
             let colours = app.editor().told().map_or(0, |told| told.0);
-            if !until(run, shell.get_active_kind() == "file" && colours > 0, 3000) {
+            if !run.until(shell.get_active_kind() == "file" && colours > 0, 3000) {
                 return;
             }
             eprintln!("symbols: the server painted {colours} spans");
             eprintln!("symbols: before: {}", view(&code));
-            snapshot(run, "symbols-start.png");
-            chord(run, &[Key::Control, Key::Shift], "o".into());
+            run.snapshot("symbols-start.png");
+            run.chord(&[Key::Control, Key::Shift], "o");
         }
         7201 => {
-            if !until(run, has_symbols(&shell), 750) {
+            if !run.until(has_symbols(&shell), 750) {
                 eprintln!("symbols: waiting on {:?}", rows(&shell));
                 return;
             }
@@ -154,7 +106,7 @@ pub fn symbols(n: u32, run: &Run) {
                 rows(&shell)
             );
             eprintln!("symbols: the first row shown: {}", view(&code));
-            snapshot(run, "symbols-outline.png");
+            run.snapshot("symbols-outline.png");
             typed(run, "cr");
         }
         7203 => {
@@ -164,8 +116,8 @@ pub fn symbols(n: u32, run: &Run) {
                 rows(&shell)
             );
             eprintln!("symbols: the first shown: {}", view(&code));
-            snapshot(run, "symbols-typed.png");
-            key(run, Key::DownArrow.into());
+            run.snapshot("symbols-typed.png");
+            run.key(Key::DownArrow);
         }
         7205 => {
             eprintln!(
@@ -173,8 +125,8 @@ pub fn symbols(n: u32, run: &Run) {
                 shell.get_picker_selected(),
                 view(&code)
             );
-            snapshot(run, "symbols-preview.png");
-            key(run, Key::Return.into());
+            run.snapshot("symbols-preview.png");
+            run.key(Key::Return);
         }
         7208 => {
             eprintln!(
@@ -182,16 +134,16 @@ pub fn symbols(n: u32, run: &Run) {
                 view(&code),
                 shell.get_picker_open()
             );
-            snapshot(run, "symbols-jumped.png");
-            chord(run, &[Key::Alt], Key::LeftArrow.into());
+            run.snapshot("symbols-jumped.png");
+            run.chord(&[Key::Alt], Key::LeftArrow);
         }
         7210 => {
             eprintln!("symbols: Alt+Left came back to {}", view(&code));
-            snapshot(run, "symbols-back.png");
-            chord(run, &[Key::Control, Key::Shift], "o".into());
+            run.snapshot("symbols-back.png");
+            run.chord(&[Key::Control, Key::Shift], "o");
         }
         7211 => {
-            if !until(run, has_symbols(&shell), 750) {
+            if !run.until(has_symbols(&shell), 750) {
                 return;
             }
             eprintln!("symbols: before the far symbol: {}", view(&code));
@@ -200,8 +152,8 @@ pub fn symbols(n: u32, run: &Run) {
         7213 => {
             eprintln!("symbols: typed far_away: {:?}", rows(&shell));
             eprintln!("symbols: shown far down: {}", view(&code));
-            snapshot(run, "symbols-far.png");
-            key(run, Key::Escape.into());
+            run.snapshot("symbols-far.png");
+            run.key(Key::Escape);
         }
         7215 => {
             eprintln!(
@@ -209,21 +161,21 @@ pub fn symbols(n: u32, run: &Run) {
                 view(&code),
                 shell.get_picker_open()
             );
-            snapshot(run, "symbols-escaped.png");
-            chord(run, &[Key::Control, Key::Shift], "o".into());
+            run.snapshot("symbols-escaped.png");
+            run.chord(&[Key::Control, Key::Shift], "o");
         }
         7216 => {
-            if !until(run, has_symbols(&shell), 750) {
+            if !run.until(has_symbols(&shell), 750) {
                 return;
             }
             typed(run, ":");
         }
         7218 => {
             eprintln!("symbols: @: grouped: {:#?}", rows(&shell));
-            snapshot(run, "symbols-grouped.png");
+            run.snapshot("symbols-grouped.png");
             // Past the twelfth row: the list scrolls to keep it in view.
             for _ in 0..15 {
-                key(run, Key::DownArrow.into());
+                run.key(Key::DownArrow);
             }
         }
         7220 => {
@@ -232,17 +184,17 @@ pub fn symbols(n: u32, run: &Run) {
                 shell.get_picker_selected(),
                 view(&code)
             );
-            snapshot(run, "symbols-grouped-down.png");
-            key(run, Key::Escape.into());
+            run.snapshot("symbols-grouped-down.png");
+            run.key(Key::Escape);
         }
-        7221 => chord(run, &[Key::Control], "t".into()),
+        7221 => run.chord(&[Key::Control], "t"),
         7222 => {
             eprintln!(
                 "symbols: Ctrl+T opened the finder with {:?}: {:?}",
                 shell.get_picker_text(),
                 rows(&shell)
             );
-            snapshot(run, "workspace-empty.png");
+            run.snapshot("workspace-empty.png");
             // A name asked until the project has loaded: before then the
             // server answers with what it has, which may be nothing.
             typed(run, "norm");
@@ -252,12 +204,12 @@ pub fn symbols(n: u32, run: &Run) {
             if waited.is_multiple_of(25) {
                 eprintln!("symbols: tick {waited}: #norm {:?}", rows(&shell));
             }
-            if !until(run, has_symbols(&shell), 3000) {
+            if !run.until(has_symbols(&shell), 3000) {
                 return;
             }
             eprintln!("symbols: #norm answered: {:?}", rows(&shell));
             for _ in 0.."norm".len() {
-                key(run, Key::Backspace.into());
+                run.key(Key::Backspace);
             }
         }
         7224 => {
@@ -269,7 +221,7 @@ pub fn symbols(n: u32, run: &Run) {
         // and then the name is typed on, before that answer lands.
         7225 => {
             let (asked, shown, dropped) = app.symbol_search();
-            if !until(run, asked.as_deref() == Some("cro"), 100) {
+            if !run.until(asked.as_deref() == Some("cro"), 100) {
                 return;
             }
             DROPPED.set(dropped);
@@ -277,7 +229,7 @@ pub fn symbols(n: u32, run: &Run) {
                 "symbols: #cro asked, its answer held {HOLD:?}: rows {:?}, showing the answer for {shown:?}",
                 rows(&shell)
             );
-            snapshot(run, "workspace-asking.png");
+            run.snapshot("workspace-asking.png");
             typed(run, "ss");
         }
         // Until the held answer has landed and a little more: which answer
@@ -297,47 +249,46 @@ pub fn symbols(n: u32, run: &Run) {
                 );
             }
             if shown.as_deref() == Some("cross") && !SNAPPED.replace(true) {
-                snapshot(run, "workspace-cross.png");
+                run.snapshot("workspace-cross.png");
             }
-            if !until(run, late > 0 && shown.as_deref() == Some("cross"), 250) {
+            if !run.until(late > 0 && shown.as_deref() == Some("cross"), 250) {
                 return;
             }
             eprintln!(
                 "symbols: after {waited} ticks the held answer for cro landed and was dropped ({late}); {text:?} shows the answer for {shown:?}: {:?}",
                 rows(&shell)
             );
-            snapshot(run, "workspace-after.png");
-            key(run, Key::Return.into());
+            run.snapshot("workspace-after.png");
+            run.key(Key::Return);
         }
         7236 => {
             eprintln!("symbols: Enter on #cross went to {}", view(&code));
-            snapshot(run, "workspace-jumped.png");
+            run.snapshot("workspace-jumped.png");
             app.open_file("Cargo.toml".into());
         }
         7237 => {
-            if !until(
-                run,
+            if !run.until(
                 app.editor().current_path().as_deref() == Some("Cargo.toml"),
                 250,
             ) {
                 return;
             }
-            chord(run, &[Key::Control, Key::Shift], "o".into());
+            run.chord(&[Key::Control, Key::Shift], "o");
         }
         7239 => {
             eprintln!("symbols: @ over Cargo.toml: {:?}", rows(&shell));
-            snapshot(run, "symbols-no-server.png");
-            key(run, Key::Escape.into());
+            run.snapshot("symbols-no-server.png");
+            run.key(Key::Escape);
         }
         7240 => {
-            chord(run, &[Key::Control], "p".into());
+            run.chord(&[Key::Control], "p");
         }
         7241 => {
             typed(run, "#");
         }
         7243 => {
             eprintln!("symbols: Ctrl+P then #: {:?}", rows(&shell));
-            key(run, Key::Escape.into());
+            run.key(Key::Escape);
         }
         7245 => app.act("app.exit"),
         _ => {}

@@ -556,41 +556,8 @@ fn lamp_saturation(forward: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Fill, Graphic, Instance, Pin, PinKind, Symbol};
+    use crate::fixtures::{place, symbol, wire};
     use crate::solve::dc;
-
-    fn pin(number: &str, name: &str, x: f64) -> Pin {
-        Pin {
-            number: number.into(),
-            name: name.into(),
-            kind: PinKind::Passive,
-            at: (x, 0.0),
-            length: 2.54,
-            angle: if x < 0.0 { 0 } else { 180 },
-            hidden: false,
-        }
-    }
-
-    fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
-        Symbol {
-            library: library.into(),
-            name: name.into(),
-            reference: reference.into(),
-            value: name.into(),
-            description: None,
-            pins: pins
-                .iter()
-                .enumerate()
-                .map(|(i, (number, name))| pin(number, name, if i == 0 { -2.54 } else { 2.54 }))
-                .collect(),
-            graphics: vec![Graphic::Rectangle {
-                start: (-1.0, 1.0),
-                end: (1.0, -1.0),
-                width: 0.0,
-                fill: Fill::None,
-            }],
-        }
-    }
 
     fn sheet() -> Sheet {
         let mut sheet = Sheet::empty("esp32c3");
@@ -602,27 +569,6 @@ mod tests {
             symbol("rusty", "Supply", "#PWR", &[("1", "VCC")]),
         ];
         sheet
-    }
-
-    fn place(sheet: &mut Sheet, reference: &str, id: &str, value: &str) {
-        sheet.parts.push(Instance {
-            reference: reference.into(),
-            symbol: id.into(),
-            value: value.into(),
-            x: 0.0,
-            y: 0.0,
-            rot: 0,
-            mirror: false,
-            props: Default::default(),
-        });
-    }
-
-    fn wire(sheet: &mut Sheet, from: &str, to: &str) {
-        sheet.wires.push(crate::model::Wire {
-            from: PinRef::parse(from).unwrap(),
-            to: PinRef::parse(to).unwrap(),
-            bends: Vec::new(),
-        });
     }
 
     fn rows() -> Vec<Row> {

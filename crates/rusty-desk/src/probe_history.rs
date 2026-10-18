@@ -33,21 +33,6 @@ thread_local! {
     static CHANGED: RefCell<usize> = const { RefCell::new(0) };
 }
 
-/// The clipboard's text. The clipboard is the machine's, and another
-/// program holding it open makes a read fail for a moment: asked again a
-/// few times before the failure is said.
-fn clipboard() -> String {
-    let mut last = String::new();
-    for _ in 0..20 {
-        match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
-            Ok(text) => return text,
-            Err(error) => last = error.to_string(),
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-    format!("(the clipboard could not be read: {last})")
-}
-
 /// The page's place in the window: the group it is in when split.
 struct Page {
     x: f32,
@@ -56,19 +41,13 @@ struct Page {
     h: f32,
 }
 
-/// Where the editor groups part, as `ui/pages.slint` places the divider.
-fn divider_at(width: f32, share: f32) -> f32 {
-    let least = 220f32.min((width - 1.0) / 2.0);
-    (width * share).round().clamp(least, width - 1.0 - least)
-}
-
 fn page(run: &Run) -> Page {
     let shell = run.window.global::<Shell>();
     let (_, height) = run.size();
     let left = run.editor_left();
     let area = run.editor_right() - left;
     let (x, w) = if shell.get_split() {
-        let at = divider_at(area, shell.get_split_share());
+        let at = crate::probe_surfaces::divider_at(area, shell.get_split_share());
         if shell.get_focus_group() == 0 {
             (left, at)
         } else {
@@ -240,23 +219,6 @@ fn double_click(run: &Run, position: LogicalPosition) {
     }
 }
 
-/// A key with modifiers held, each pressed first and let go after.
-fn chord(run: &Run, held: &[Key], text: impl Into<slint::SharedString>) {
-    let text = text.into();
-    for key in held {
-        run.send(WindowEvent::KeyPressed {
-            text: (*key).into(),
-        });
-    }
-    run.send(WindowEvent::KeyPressed { text: text.clone() });
-    run.send(WindowEvent::KeyReleased { text });
-    for key in held.iter().rev() {
-        run.send(WindowEvent::KeyReleased {
-            text: (*key).into(),
-        });
-    }
-}
-
 fn kept() -> String {
     let h = rusty_embed::config::workbench().layout.history;
     format!(
@@ -277,7 +239,8 @@ fn shown(shell: &Shell) -> String {
 
 /// A copy's text, line by line, short enough to read.
 fn copied() -> String {
-    let text = clipboard();
+    let text = crate::probe_surfaces::read_clipboard()
+        .unwrap_or_else(|error| format!("(the clipboard could not be read: {error})"));
     format!("{} lines {:?}", text.split('\n').count(), text)
 }
 
@@ -285,7 +248,8 @@ fn copied() -> String {
 /// whether that is what the page has selected.
 fn copied_diff() -> String {
     let selected = work::app().diff_selection_text("history");
-    let text = clipboard();
+    let text = crate::probe_surfaces::read_clipboard()
+        .unwrap_or_else(|error| format!("(the clipboard could not be read: {error})"));
     let verdict = if text == selected {
         "the selection, exactly".to_string()
     } else {
@@ -299,7 +263,7 @@ fn group_to(run: &Run, width: f32) {
     let shell = run.window.global::<Shell>();
     let left = run.editor_left();
     let area = run.editor_right() - left;
-    let x = left + divider_at(area, shell.get_split_share()) + 2.0;
+    let x = left + crate::probe_surfaces::divider_at(area, shell.get_split_share()) + 2.0;
     drag(run, at(x, 300.0), at(left + width + 2.0, 300.0));
 }
 
@@ -310,7 +274,13 @@ pub fn history(n: u32, run: &Run) {
     let panes = || Panes::of(run);
     match n {
         7700 => {
-            CLIPBOARD.with(|c| *c.borrow_mut() = Some(clipboard()));
+            CLIPBOARD.with(|c| {
+                *c.borrow_mut() = Some(
+                    crate::probe_surfaces::read_clipboard().unwrap_or_else(|error| {
+                        format!("(the clipboard could not be read: {error})")
+                    }),
+                )
+            });
             // The whole width for the page: the left dock closed.
             if shell.get_left_open() {
                 app.act("dock.left");
@@ -438,7 +408,7 @@ pub fn history(n: u32, run: &Run) {
             let p = panes();
             let y = p.detail_top + 8.0 + 9.0;
             drag(run, at(p.log_x + 9.0, y), at(p.log_x + 130.0, y));
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "c");
         }
         7718 => {
             eprintln!("history: the subject dragged and Ctrl+C: {}", copied());
@@ -475,7 +445,7 @@ pub fn history(n: u32, run: &Run) {
                 at(x + 40.0, p.row_y(row)),
                 at(x + 100.0, p.row_y(row + 3)),
             );
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "c");
         }
         7723 => {
             eprintln!(
@@ -491,7 +461,7 @@ pub fn history(n: u32, run: &Run) {
                 at(x + 40.0, p.row_y(row)),
                 at(x + 100.0, p.row_y(row + 3)),
             );
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "c");
         }
         7725 => {
             eprintln!(
@@ -503,7 +473,7 @@ pub fn history(n: u32, run: &Run) {
             let p = panes();
             let row = CHANGED.with(|c| *c.borrow());
             double_click(run, at(p.right_text() + 10.0, p.row_y(row + 2)));
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "c");
         }
         7727 => {
             eprintln!(
@@ -511,8 +481,8 @@ pub fn history(n: u32, run: &Run) {
                 copied_diff()
             );
             run.snapshot("diff-word.png");
-            chord(run, &[Key::Control], "a");
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "a");
+            run.chord(&[Key::Control], "c");
         }
         7729 => {
             eprintln!("history: Ctrl+A and Ctrl+C on the right: {}", copied_diff());
@@ -532,14 +502,14 @@ pub fn history(n: u32, run: &Run) {
             run.pick("select-all");
         }
         7731 => {
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "c");
         }
         7732 => {
             eprintln!(
                 "history: Select all on the left and Ctrl+C: {}",
                 copied_diff()
             );
-            chord(run, &[], Key::Escape);
+            run.chord(&[], Key::Escape);
             // Shift and the wheel over the diff: both columns' text sideways.
             let p = panes();
             let position = at(p.diff_x + 100.0, p.row_y(2));
@@ -565,7 +535,7 @@ pub fn history(n: u32, run: &Run) {
             let row = CHANGED.with(|c| *c.borrow());
             let x = p.left_text(true);
             drag(run, at(x + 10.0, p.row_y(row)), at(x + 90.0, p.row_y(row)));
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "c");
         }
         7736 => {
             eprintln!(
@@ -591,7 +561,7 @@ pub fn history(n: u32, run: &Run) {
                 at(x + 30.0, p.row_y(row)),
                 at(x + 200.0, p.row_y(row + 2)),
             );
-            chord(run, &[Key::Control], "c");
+            run.chord(&[Key::Control], "c");
         }
         7740 => {
             eprintln!("history: one column dragged and Ctrl+C: {}", copied_diff());

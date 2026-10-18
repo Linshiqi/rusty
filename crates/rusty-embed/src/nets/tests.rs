@@ -1,68 +1,26 @@
-use std::collections::BTreeMap;
-
 use super::*;
-use crate::model::{
-    Fill, Graphic, Instance, KIT_REFERENCE, Pin, PinKind, PinRef, Sheet, Symbol, Wire,
-};
+use crate::fixtures::{Shape, rect, symbol_shaped, wire};
+use crate::model::{KIT_REFERENCE, PinKind, PinRef, Sheet, Symbol};
+
+/// The nets' symbol: pins alternating two pitches out, a wider body.
+fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
+    let shape = Shape {
+        offset: 5.08,
+        alternate: true,
+        angled: true,
+        body: Some(rect((-2.54, -1.27), (2.54, 1.27), 0.254)),
+    };
+    symbol_shaped(library, name, reference, pins, &shape)
+}
+
+fn place(sheet: &mut Sheet, reference: &str, symbol: &str) {
+    crate::fixtures::place_with(sheet, reference, symbol, "", &[]);
+}
 
 /// The parts rusty ships, which is what a sheet with no project behind
 /// it resolves its `model` props against.
 fn specs() -> Vec<crate::sensor::Spec> {
     crate::partfile::load(None).specs
-}
-
-fn pin(number: &str, name: &str, x: f64) -> Pin {
-    Pin {
-        number: number.into(),
-        name: name.into(),
-        kind: PinKind::Passive,
-        at: (x, 0.0),
-        length: 2.54,
-        angle: if x < 0.0 { 0 } else { 180 },
-        hidden: false,
-    }
-}
-
-fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
-    Symbol {
-        library: library.into(),
-        name: name.into(),
-        reference: reference.into(),
-        value: name.into(),
-        description: None,
-        pins: pins
-            .iter()
-            .enumerate()
-            .map(|(i, (number, name))| pin(number, name, if i % 2 == 0 { -5.08 } else { 5.08 }))
-            .collect(),
-        graphics: vec![Graphic::Rectangle {
-            start: (-2.54, -1.27),
-            end: (2.54, 1.27),
-            width: 0.254,
-            fill: Fill::None,
-        }],
-    }
-}
-
-fn place(sheet: &mut Sheet, reference: &str, symbol: &str) {
-    sheet.parts.push(Instance {
-        reference: reference.into(),
-        symbol: symbol.into(),
-        value: String::new(),
-        x: 0.0,
-        y: 0.0,
-        rot: 0,
-        mirror: false,
-        props: BTreeMap::new(),
-    });
-}
-
-fn wire(sheet: &mut Sheet, from: &str, to: &str) {
-    sheet.wires.push(Wire {
-        from: PinRef::parse(from).unwrap(),
-        to: PinRef::parse(to).unwrap(),
-        bends: Vec::new(),
-    });
 }
 
 fn sheet() -> Sheet {
