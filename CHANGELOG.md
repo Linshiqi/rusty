@@ -9,6 +9,26 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.7
+
+**A tab comes back where it was left.** Switching to another file and back
+put the view on the caret's line, not where it had been scrolled to, so a
+file read with the wheel had to be scrolled back to the place every time.
+The view now returns to exactly the offset it was left at, and the caret
+stays where it was; a file opened at a line still goes to that line.
+
+**The window has an edge.** rusty draws its own title bar, and a window
+without a frame gets no border from Windows, so beside another dark panel
+it had no visible end — nothing to tell it apart by, nothing to find and
+take hold of to resize. A one-pixel edge now runs round the window, in both
+themes, and goes away while the window is maximized.
+
+**The language server can be restarted.** *Restart language server* is in
+the command palette, and in the menu the status bar's server icon opens on
+a click: the project's servers are stopped and started again, which is the
+way out of an analysis that has gone stale under them, without reopening
+the project.
+
 ## v0.7.6
 
 **Pull works on a branch that has diverged.** Newer versions of git
