@@ -313,6 +313,18 @@ export component AppWindow inherits Window {
         height: root.height - 40px - 24px;
     }
 
+    // The window's edge, over everything: a frameless window gets no
+    // border from the system, and without one the window had no visible
+    // end against another dark panel beside it — nothing to tell it apart
+    // by, nothing to find and take hold of to resize. Gone while the
+    // window is maximized, where a line along the screen's edge reads as a
+    // gap, as the system's own frame goes. Paint only: the resize hold is
+    // the window's (`resize-border-width`).
+    if !root.maximized: Rectangle {
+        border-width: 1px;
+        border-color: Theme.edge;
+    }
+
     if Shell.git-prompt-open: GitPrompt {
         x: (root.width - self.width) / 2;
         y: 64px;

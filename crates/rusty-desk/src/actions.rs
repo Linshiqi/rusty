@@ -154,6 +154,10 @@ pub const ALL: &[Action] = &[
     // VS Code's View: Toggle Terminal, and never a key the shell is sent
     // (`SKIPS_SHELL`).
     action("terminal.toggle", "desk.terminal-toggle", Some("Ctrl+`")),
+    // rust-analyzer's own Restart server, keyless as VS Code's is: the
+    // project's servers stopped and started again, which is the one way
+    // out of an analysis gone stale under them.
+    action("lsp.restart", "desk.server-restart", None),
     action("view.zoom-in", "desk.zoom-in", Some("Ctrl+=")),
     action("view.zoom-out", "desk.zoom-out", Some("Ctrl+-")),
     action("view.zoom-reset", "desk.zoom-reset", Some("Ctrl+0")),

@@ -516,6 +516,7 @@ impl App {
         });
         on!(on_tab_menu, |app, id, other, x, y| app
             .tab_menu(&id, other, x, y));
+        on!(on_server_menu, |app, x, y| app.server_menu(x, y));
         on!(on_split_resized, |app, share| app.split_resized(share));
         on!(on_history_resized, |app, name, value| app
             .history_resized(&name, value));
@@ -945,6 +946,7 @@ impl App {
             // From anywhere but the terminal, which hears its own Ctrl+`
             // first (`term_key`) — so the keys are elsewhere.
             "terminal.toggle" => self.toggle_terminal(false),
+            "lsp.restart" => self.start_servers(),
             "problems.show" => self.show_panel("bottom", "problems"),
             "view.zoom-in" => self.set_zoom(self.zoom() + 0.1),
             "view.zoom-out" => self.set_zoom(self.zoom() - 0.1),

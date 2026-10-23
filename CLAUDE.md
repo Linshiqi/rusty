@@ -1050,7 +1050,12 @@ frame that shows it 14.9 ms, a scroll step 16.0 ms — the next frame at 60 Hz
   the window does, asks for `imp`, `impl Qu` and `impl core::` every two
   seconds until they answer, and prints what the popup would keep —
   `["impl", "impl for"]`, `["Quaternion"]` — beside how long the server took
-  to get there.
+  to get there. **And the server can be restarted from the window**
+  (`lsp.restart`, *Restart language server*: the palette, and the menu the
+  status bar's server item opens on a click) — `App::start_servers`, the
+  project switch's own path, so a stale analysis has a door out that is
+  not reopening the project. The item's click opens a menu rather than
+  restarting, since a restart costs the index.
 - **A file in no crate's module tree is the *other* way rust-analyzer goes
   silent, and it looks identical.** No `mod` or `pub mod` names the file, so
   it is in no crate: the server parses it, reports its syntax errors, and
@@ -1338,7 +1343,21 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   other's edits. Closing one view of a file with changes asks nothing while
   the other holds it; the last view to close is the one that asks.
 - **Each document keeps where its view was scrolled**, so a tab comes back
-  where it was left, whichever group it comes back in. **And never above
+  where it was left, whichever group it comes back in. **And the caret is
+  placed, not revealed, when a tab comes back** (`Surface::show`:
+  `place_caret`, never `show_caret`): the offset was put back and then the
+  caret revealed with room round it, which moved the view whenever the
+  caret was off it — after any wheel, that is — so every tab came back on
+  its caret's line, reported as "has to be scrolled back to where I was each
+  time". A file opened *at* a line moves the view itself, after. **And the
+  offset put back is put back twice**: the list view lands a view that
+  jumps further than a screen and a half on the row above where it was
+  asked to stand, so a tab came back 17 px short of where it was left
+  (`-703` for `-720`, measured); `Surface::restoring` holds the offset
+  until the view's first move from it, and `view_changed` puts it back
+  when that move is less than a row — the list's rounding, never a
+  wheel's. `RUSTY_PROBE_KEPT` is the check, and it said LOST before the
+  fix. **And never above
   the top, which Slint's `ListView` will put it** (1.18.1,
   `model/repeater.rs`): a model reset keeps the rows' layout state, and a
   new model with fewer rows than the first one on screen clamps the offset
@@ -3407,6 +3426,15 @@ rules it settled, each the answer to something that went wrong.
   there**: an activity view stood beside the button for one phase, and the
   user's verdict was that no IDE puts progress at the top centre — it is the
   status bar's, as in VS Code and JetBrains.
+- **The main window draws its own edge** (`Theme.edge`, the last element
+  of `AppWindow`): it is frameless (`no-frame`, its own title bar), and
+  Windows paints no border and no shadow round a frameless window, so on a
+  screen beside another dark panel it had no visible end — reported as
+  "cannot tell it from the other panels, and cannot find the edge to drag".
+  One pixel, over everything, stronger than a hairline because it has to
+  read against another program's surface too; gone while the window is
+  maximized, as the system's own frame goes. The torn-off window keeps the
+  system's frame and needs none.
 - **Three docks, each a set of panels**, Zed's model (`docks.rs`): left the
   project's tree, search and Git; bottom Output, Problems, the terminal,
   what a run brings — Plot, Waves, Draw, Flight, Signals, Debug, Registers

@@ -99,6 +99,18 @@ impl Surface {
         if super::shade::within(y) != y {
             code.set_scroll_y(super::shade::within(y));
         }
+        // The first move off the offset a document was just shown at again:
+        // the list's rounding to a row, put back; anything a row or more is
+        // a wheel or a key, and the offset is then whatever the view says.
+        if let Some(kept) = self.restoring.get() {
+            let y = code.get_scroll_y();
+            if y != kept {
+                self.restoring.set(None);
+                if (y - kept).abs() < code.get_row_height() {
+                    code.set_scroll_y(kept);
+                }
+            }
+        }
         let Some(doc) = self.doc() else {
             code.set_sticky_rows(ModelRc::default());
             code.set_minimap_on(false);

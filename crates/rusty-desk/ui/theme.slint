@@ -24,6 +24,13 @@ export global Theme {
     // Hairlines.
     out property <color> line: dark ? #ffffff1a : #0000001c;
     out property <color> line-strong: dark ? #ffffff2b : #0000002e;
+    // The main window's own edge (`app.slint`). The window draws its frame
+    // itself and the system paints none round a frameless one, so with
+    // nothing here it ran straight into the next dark panel on the
+    // screen, with no line to tell where it ended or to take hold of.
+    // Stronger than a hairline: it has to read against another program's
+    // surface as well as this one's.
+    out property <color> edge: dark ? #ffffff40 : #00000047;
 
     // Text, strongest first.
     out property <color> label: dark ? #f0ebe5 : #1c1a17;

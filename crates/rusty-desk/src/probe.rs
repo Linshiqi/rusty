@@ -66,6 +66,9 @@
 //! saying how much of the view stayed below the caret each time, clicks
 //! the view's last row, and photographs the hover card's documentation on
 //! `true` and `sqrt` — on a copy, since it keeps its typing as a draft.
+//! With `RUSTY_PROBE_KEPT` it scrolls the file down with the wheel, opens
+//! `Cargo.toml` over it and opens the file again, and says whether the
+//! view came back where it was left rather than on the caret.
 //! With `RUSTY_PROBE_TREE`, on a copy of a project with a `src/`, it works
 //! the file tree by its pointer and its keys: a file made in `src` from the
 //! folder's menu (a taken name refused under the box first), a folder made
@@ -288,6 +291,9 @@ pub fn start(window: &AppWindow) {
     let tab_dragging = std::env::var_os("RUSTY_PROBE_TABDRAG").is_some();
     let history = std::env::var_os("RUSTY_PROBE_HISTORY").is_some();
     let room = std::env::var_os("RUSTY_PROBE_ROOM").is_some();
+    let keeping = std::env::var_os("RUSTY_PROBE_KEPT").is_some();
+    // Where the file was scrolled to before another was opened over it.
+    let kept_at = Rc::new(Cell::new(0.0f32));
     // New Window: the project the second window opens, and whether this is
     // that window — started by the first with its flag, and the same
     // variables, so it probes itself into a directory of its own.
@@ -594,6 +600,9 @@ pub fn start(window: &AppWindow) {
                 if room {
                     step.set(7600);
                 }
+                if keeping {
+                    step.set(8100);
+                }
                 if picking_devices {
                     step.set(7800);
                 }
@@ -616,6 +625,69 @@ pub fn start(window: &AppWindow) {
             // edge, and the hover card's documentation as Markdown
             // (`probe_surfaces.rs`).
             7600..=7799 if room => crate::probe_surfaces::room(n, &surfaces),
+            // The file scrolled down with the wheel, its caret left on the
+            // first line; another file opened over it; the first opened
+            // again: back where it was scrolled, not on its caret.
+            8100 if keeping => {
+                // The file in front and its rows laid out: a wheel before
+                // that turns nothing.
+                if shell.get_active_kind() != "file"
+                    || code.get_view_height() <= 0.0
+                    || code.get_rows().row_count() == 0
+                {
+                    step.set(8100);
+                    return;
+                }
+                *start_path.borrow_mut() = app.editor().current_path().unwrap_or_default();
+                window.invoke_focus_code();
+            }
+            8102 if keeping => {
+                let size = window.window().size().to_logical(window.window().scale_factor());
+                let at = slint::LogicalPosition::new(size.width * 0.6, size.height * 0.5);
+                window.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+                for _ in 0..12 {
+                    window.window().dispatch_event(WindowEvent::PointerScrolled {
+                        position: at,
+                        delta_x: 0.0,
+                        delta_y: -60.0,
+                    });
+                }
+            }
+            8106 if keeping => {
+                let y = code.get_scroll_y();
+                kept_at.set(y);
+                eprintln!(
+                    "kept: {} scrolled to {y} ({:.1} rows down), its caret on row {}",
+                    start_path.borrow(),
+                    -y / code.get_row_height().max(1.0),
+                    code.get_caret_line()
+                );
+                snapshot(&window, &dir.join("kept-scrolled.png"));
+                app.open_file("Cargo.toml".into());
+            }
+            8108 if keeping => {
+                if shell.get_active_tab() != "file:Cargo.toml" {
+                    step.set(8108);
+                    return;
+                }
+                eprintln!("kept: Cargo.toml in front, its view at {}", code.get_scroll_y());
+                app.open_file(start_path.borrow().clone());
+            }
+            8110 if keeping => {
+                let path = start_path.borrow().clone();
+                if shell.get_active_tab() != format!("file:{path}") {
+                    step.set(8110);
+                    return;
+                }
+                let y = code.get_scroll_y();
+                let kept = kept_at.get();
+                eprintln!(
+                    "kept: {path} in front again, its view at {y}, left at {kept}: {}",
+                    if (y - kept).abs() < 0.5 { "kept" } else { "LOST" }
+                );
+                snapshot(&window, &dir.join("kept-back.png"));
+                app.act("app.exit");
+            }
             // Ctrl and the wheel over the code, a page and the terminal; and
             // the surfaces' right-click menus (`probe_surfaces.rs`).
             6100..=6199 if zooming => crate::probe_surfaces::zoom(n, &surfaces),

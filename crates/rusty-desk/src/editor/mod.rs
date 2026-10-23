@@ -234,6 +234,13 @@ pub struct Surface {
     /// The caret is being moved by the pointer, or by an edit nobody typed
     /// (a format, the disk): it is shown, and given no room (`reveal`).
     unkeyed: Cell<bool>,
+    /// The offset a document was just shown at again (`show`), until the
+    /// view reports its first move from it: the list view puts a view that
+    /// jumps further than a screen and a half on the row above where it was
+    /// asked to stand, and a tab came back seventeen pixels short of where
+    /// it was left. Put back once, by `view_changed`, when the move is
+    /// less than a row — the list's rounding, never a wheel's turn.
+    restoring: Cell<Option<f32>>,
     /// The last line copied with nothing selected, which pastes as a line.
     copied_line: RefCell<Option<String>>,
     /// The lines drawn with marks, to redraw when the cursors leave them.
@@ -372,6 +379,7 @@ impl Surface {
             drag: Cell::new(None),
             press: Cell::new(None),
             unkeyed: Cell::new(false),
+            restoring: Cell::new(None),
             copied_line: RefCell::default(),
             marked: RefCell::new(0..0),
             widest: Cell::new(0.0),
@@ -708,9 +716,28 @@ impl Surface {
             code.set_has_document(true);
             code.set_dim(self.dimmed.borrow().contains(path));
             code.set_content_width(self.widest.get() + 200.0);
-            code.set_scroll_y(shade::within(scroll.0));
+            // Never past the end the text now has: it may have got shorter
+            // on disk while another file was in front. A view not laid out
+            // yet has no end to measure against.
+            let (row, view) = (code.get_row_height(), code.get_view_height());
+            let deepest = if view > 0.0 && row > 0.0 {
+                reach::deepest(self.doc().map_or(0, |d| d.borrow().rows()), row, view)
+            } else {
+                f32::MAX
+            };
+            let y = shade::within(scroll.0).max(-deepest);
+            code.set_scroll_y(y);
+            self.restoring.set(Some(y));
             code.set_scroll_x(scroll.1);
-            self.show_caret();
+            // The caret drawn where it is, and the view left where the
+            // document was last looked at — not brought to the caret.
+            // `show_caret` here undid the offset just put back whenever the
+            // caret was off the view, which after any wheel is where it is:
+            // every tab came back on its caret's line, reported as "has to
+            // be scrolled back to where I was each time". A file opened at
+            // a line (`go_to`, a jump) moves the view itself, after this.
+            self.place_caret();
+            self.tell_caret();
             window.invoke_focus_code();
         }
         self.view_changed();

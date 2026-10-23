@@ -145,6 +145,12 @@ export component StatusBar inherits Rectangle {
             icon: Icons.code;
             tip: Shell.server-tip;
             tint: Shell.server-state == 3 ? Theme.crimson : Shell.server-state == 2 ? Theme.amber : Shell.server-state == 1 ? Theme.rust : Theme.label-3;
+            // A menu, not a restart on the click itself: a restart throws
+            // away a minute of indexing, and a status item is clicked to
+            // see what it is.
+            clicked => {
+                Shell.server-menu(self.absolute-position.x, self.absolute-position.y);
+            }
         }
         Rectangle {
             horizontal-stretch: 1;

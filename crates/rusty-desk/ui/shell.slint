@@ -1411,6 +1411,9 @@ export global Shell {
     in property <[MenuItem]> menu-items;
     callback menu-picked(string);
     callback menu-dismissed();
+    // The status bar's language-server item clicked: its menu, at a point
+    // of the window (`src/app/menu.rs`).
+    callback server-menu(length, length);
 
     // The Terminal.
     in property <[TermRow]> term-rows;

@@ -109,12 +109,22 @@ impl App {
         self.show_menu(owner, rows, x, y);
     }
 
+    /// The status bar's language-server item: VS Code's rust-analyzer
+    /// status menu, cut down to the one row that undoes a stale analysis —
+    /// Restart server, the palette's action — so the restart has a door
+    /// where the server's state is read, and a click there never restarts
+    /// anything by itself.
+    pub(super) fn server_menu(self: &Rc<Self>, x: f32, y: f32) {
+        self.open_action_menu("server", &["lsp.restart"], x, y);
+    }
+
     pub(super) fn menu_picked(self: &Rc<Self>, id: &str) {
         let owner = self.menu_close();
         if id.is_empty() {
             return;
         }
         match owner {
+            Some("server") => self.act(id),
             Some("git") => self.git_menu_picked(id),
             Some("surface") => self.surface_menu_picked(id),
             Some("tree") => self.tree_menu_picked(id),
