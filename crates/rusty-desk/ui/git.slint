@@ -383,124 +383,288 @@ export component DiffView inherits Rectangle {
     }
 }
 
-// A file in one of the panel's lists: its letter, its name and folder, and
-// on hover the verbs for it.
-component ChangeRow inherits Rectangle {
-    in property <GitChange> change;
-    height: 24px;
+// A small verb on a row, shown while the row is under the pointer.
+component RowVerb inherits IconButton {
+    width: 22px;
+    height: 22px;
+    glyph: 14px;
+}
+
+// A row of the panel's lists (`src/git_rows.rs`): a group's heading with
+// its count, which folds the group away; a folder of the tree, which folds
+// what is under it; or a file, with its letter, its name and folder — the
+// folder only in a flat list, where nothing else says it — and on hover
+// the verbs for it. A file in conflict says how many conflicts are left,
+// and its verbs take one side or the other whole, or mark it resolved.
+component GitRow inherits Rectangle {
+    in property <GitChange> entry;
+    height: root.entry.kind == 0 ? 26px : 24px;
     border-radius: 5px;
-    background: root.change.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    background: root.entry.kind == 2 && root.entry.selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
     touch := TouchArea {
         clicked => {
-            if (!root.change.nested) {
-                Shell.git-file("diff", root.change.path, root.change.staged);
+            if (root.entry.kind != 2) {
+                Shell.git-row("fold", root.entry.group, root.entry.kind == 0 ? "" : root.entry.path);
+            } else if (!root.entry.nested) {
+                Shell.git-file("diff", root.entry.path, root.entry.staged);
             }
         }
         double-clicked => {
-            Shell.git-file("open", root.change.path, root.change.staged);
+            if (root.entry.kind == 2 && !root.entry.nested) {
+                Shell.git-file("open", root.entry.path, root.entry.staged);
+            }
         }
         pointer-event(event) => {
-            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                Shell.git-file-menu(root.change.path, root.change.staged, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            if (root.entry.kind == 2 && event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                Shell.git-file-menu(root.entry.path, root.entry.staged, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
             }
         }
     }
     HorizontalLayout {
-        padding-left: 6px;
+        padding-left: 4px + root.entry.depth * 12px + (root.entry.kind == 2 && Shell.git-tree ? 4px : 0px);
         padding-right: 2px;
-        spacing: 6px;
-        Text {
+        spacing: 5px;
+        // The fold's chevron, on a heading and a folder.
+        if root.entry.kind != 2: Rectangle {
+            width: 14px;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: root.entry.folded ? Icons.chevron-right : Icons.chevron;
+                size: 14px;
+                color: Theme.label-3;
+            }
+        }
+        if root.entry.kind == 0: Caption {
+            horizontal-stretch: 1;
+            text: (root.entry.group == 0 ? @tr("git.conflicts-group") : root.entry.group == 1 ? @tr("git.staged") : @tr("git.changes")) + " · " + root.entry.count;
+            color: root.entry.group == 0 && root.entry.count > 0 ? Theme.crimson : Theme.label-3;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.entry.kind == 1: Rectangle {
+            width: 14px;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: Icons.folder;
+                size: 14px;
+                color: Theme.label-3;
+            }
+        }
+        if root.entry.kind == 1: Text {
+            text: root.entry.name;
+            color: Theme.label-2;
+            font-size: Theme.small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.entry.kind == 1: Text {
+            horizontal-stretch: 1;
+            text: root.entry.count;
+            color: Theme.label-4;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+        if root.entry.kind == 2: Text {
             width: 12px;
-            text: root.change.letter;
-            color: GitTone.of(root.change.tone);
+            text: root.entry.letter;
+            color: GitTone.of(root.entry.tone);
             font-family: Theme.mono;
             font-size: Theme.small;
             font-weight: 700;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-        Text {
-            text: root.change.name;
-            color: root.change.nested ? Theme.label-3 : Theme.label;
+        if root.entry.kind == 2: Text {
+            text: root.entry.name;
+            color: root.entry.nested ? Theme.label-3 : Theme.label;
             font-size: Theme.small;
             vertical-alignment: center;
             overflow: elide;
         }
-        Text {
+        if root.entry.kind == 2: Text {
             horizontal-stretch: 1;
-            text: root.change.nested ? @tr("git.nested") : root.change.dir;
+            text: root.entry.nested ? @tr("git.nested") : Shell.git-tree ? "" : root.entry.dir;
             color: Theme.label-3;
             font-size: Theme.caption;
             vertical-alignment: center;
             overflow: elide;
         }
-        if touch.has-hover && !root.change.nested: IconButton {
-            width: 22px;
-            height: 22px;
-            glyph: 14px;
+        // What is left to do in a file in conflict.
+        if root.entry.kind == 2 && root.entry.conflict && !touch.has-hover: Text {
+            text: root.entry.note;
+            color: root.entry.resolved ? Theme.patina : Theme.amber;
+            font-size: Theme.caption;
+            vertical-alignment: center;
+        }
+        // A heading's verbs, for the whole group.
+        if root.entry.kind == 0 && touch.has-hover && root.entry.group == 1 && root.entry.count > 0: RowVerb {
+            icon: Icons.minus;
+            tip: @tr("git.unstage-all");
+            clicked => {
+                Shell.git-row("unstage", 1, "");
+            }
+        }
+        if root.entry.kind == 0 && touch.has-hover && root.entry.group == 2 && root.entry.count > 0: RowVerb {
+            icon: Icons.undo;
+            tip: @tr("git.discard-all");
+            clicked => {
+                Shell.git-row("discard", 2, "");
+            }
+        }
+        if root.entry.kind == 0 && touch.has-hover && root.entry.group == 2 && root.entry.count > 0: RowVerb {
+            icon: Icons.plus;
+            tip: @tr("git.stage-all");
+            clicked => {
+                Shell.git-row("stage", 2, "");
+            }
+        }
+        // A folder's verbs, for what is under it.
+        if root.entry.kind == 1 && touch.has-hover && root.entry.group == 1: RowVerb {
+            icon: Icons.minus;
+            tip: @tr("git.unstage-folder");
+            clicked => {
+                Shell.git-row("unstage", 1, root.entry.path);
+            }
+        }
+        if root.entry.kind == 1 && touch.has-hover && root.entry.group == 2: RowVerb {
+            icon: Icons.undo;
+            tip: @tr("git.discard-folder");
+            clicked => {
+                Shell.git-row("discard", 2, root.entry.path);
+            }
+        }
+        if root.entry.kind == 1 && touch.has-hover && root.entry.group == 2: RowVerb {
+            icon: Icons.plus;
+            tip: @tr("git.stage-folder");
+            clicked => {
+                Shell.git-row("stage", 2, root.entry.path);
+            }
+        }
+        // A file's verbs.
+        if root.entry.kind == 2 && touch.has-hover && !root.entry.nested: RowVerb {
             icon: Icons.files;
             tip: @tr("git.open-file");
             clicked => {
-                Shell.git-file("open", root.change.path, root.change.staged);
+                Shell.git-file("open", root.entry.path, root.entry.staged);
             }
         }
-        if touch.has-hover && !root.change.nested: IconButton {
-            width: 22px;
-            height: 22px;
-            glyph: 14px;
+        if root.entry.kind == 2 && touch.has-hover && root.entry.conflict: RowVerb {
+            icon: Icons.take-current;
+            tip: root.entry.ours ? @tr("git.take-current") : @tr("git.take-current-gone");
+            clicked => {
+                Shell.git-file("ours", root.entry.path, false);
+            }
+        }
+        if root.entry.kind == 2 && touch.has-hover && root.entry.conflict: RowVerb {
+            icon: Icons.take-incoming;
+            tip: root.entry.theirs ? @tr("git.take-incoming") : @tr("git.take-incoming-gone");
+            clicked => {
+                Shell.git-file("theirs", root.entry.path, false);
+            }
+        }
+        if root.entry.kind == 2 && touch.has-hover && root.entry.conflict: RowVerb {
+            icon: Icons.check;
+            tip: @tr("git.mark-resolved");
+            clicked => {
+                Shell.git-file("resolve", root.entry.path, false);
+            }
+        }
+        if root.entry.kind == 2 && touch.has-hover && !root.entry.nested && !root.entry.conflict: RowVerb {
             icon: Icons.undo;
-            tip: root.change.untracked ? @tr("git.delete-untracked") : @tr("git.discard");
+            tip: root.entry.untracked ? @tr("git.delete-untracked") : @tr("git.discard");
             clicked => {
-                Shell.git-file("discard", root.change.path, root.change.staged);
+                Shell.git-file("discard", root.entry.path, root.entry.staged);
             }
         }
-        if touch.has-hover && !root.change.nested: IconButton {
-            width: 22px;
-            height: 22px;
-            glyph: 14px;
-            icon: root.change.staged ? Icons.minus : Icons.plus;
-            tip: root.change.staged ? @tr("git.unstage") : @tr("git.stage");
+        if root.entry.kind == 2 && touch.has-hover && !root.entry.nested && !root.entry.conflict: RowVerb {
+            icon: root.entry.staged ? Icons.minus : Icons.plus;
+            tip: root.entry.staged ? @tr("git.unstage") : @tr("git.stage");
             clicked => {
-                Shell.git-file(root.change.staged ? "unstage" : "stage", root.change.path, root.change.staged);
+                Shell.git-file(root.entry.staged ? "unstage" : "stage", root.entry.path, root.entry.staged);
             }
         }
-        if touch.has-hover && root.change.nested: IconButton {
-            width: 22px;
-            height: 22px;
-            glyph: 14px;
+        if root.entry.kind == 2 && touch.has-hover && root.entry.nested: RowVerb {
             icon: Icons.plus;
             tip: @tr("git.include-nested");
             clicked => {
-                Shell.git-file("include", root.change.path, false);
+                Shell.git-file("include", root.entry.path, false);
             }
         }
     }
 }
 
-// A list's heading: its name, how many, and the verb for all of them.
-component ListHead inherits HorizontalLayout {
-    in property <string> title;
-    in property <int> count;
-    in property <string> icon;
-    in property <string> tip;
-    callback clicked;
-    height: 26px;
-    spacing: 4px;
-    Caption {
-        text: root.title + " · " + root.count;
-        vertical-alignment: center;
-    }
-    Rectangle {
-        horizontal-stretch: 1;
-    }
-    if root.count > 0: IconButton {
-        width: 22px;
-        height: 22px;
-        glyph: 14px;
-        icon: root.icon;
-        tip: root.tip;
-        clicked => {
-            root.clicked();
+// Over the code of a file with merge conflicts, at the top: how many and
+// which the caret is in, the way to the one before and after, and every
+// block taken one way at once — VS Code's lenses do one block, this does
+// the file. With no blocks left in a file git still has unmerged, the one
+// thing left: mark it resolved. Floating, so its arrival moves nothing.
+export component ConflictBar inherits Rectangle {
+    width: bar.preferred-width;
+    height: bar.preferred-height;
+    border-radius: 8px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Shell.conflict-count > 0 ? Theme.amber : Theme.patina;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000055;
+    bar := HorizontalLayout {
+        padding: 3px;
+        padding-left: 10px;
+        spacing: 2px;
+        Text {
+            text: Shell.conflict-label;
+            color: Shell.conflict-count > 0 ? Theme.label : Theme.patina;
+            font-size: Theme.small;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            width: 6px;
+        }
+        if Shell.conflict-count > 0: IconButton {
+            icon: Icons.arrow-up;
+            tip: @tr("desk.conflict-previous");
+            clicked => {
+                Shell.act("editor.conflict-previous");
+            }
+        }
+        if Shell.conflict-count > 0: IconButton {
+            icon: Icons.arrow-down;
+            tip: @tr("desk.conflict-next");
+            clicked => {
+                Shell.act("editor.conflict-next");
+            }
+        }
+        if Shell.conflict-count > 0: Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        if Shell.conflict-count > 0: IconButton {
+            icon: Icons.take-current;
+            tip: @tr("desk.conflicts-current");
+            clicked => {
+                Shell.act("editor.conflicts-current");
+            }
+        }
+        if Shell.conflict-count > 0: IconButton {
+            icon: Icons.take-incoming;
+            tip: @tr("desk.conflicts-incoming");
+            clicked => {
+                Shell.act("editor.conflicts-incoming");
+            }
+        }
+        if Shell.conflict-count > 0: IconButton {
+            icon: Icons.take-both;
+            tip: @tr("desk.conflicts-both");
+            clicked => {
+                Shell.act("editor.conflicts-both");
+            }
+        }
+        if Shell.conflict-count == 0 && Shell.conflict-unmerged: Button {
+            text: @tr("git.mark-resolved");
+            primary: true;
+            clicked => {
+                Shell.act("git.mark-resolved");
+            }
         }
     }
 }
@@ -628,6 +792,16 @@ export component GitPanel inherits Rectangle {
                 width: 24px;
                 height: 24px;
                 glyph: 15px;
+                icon: Shell.git-tree ? Icons.list-flat : Icons.list-tree;
+                tip: Shell.git-tree ? @tr("git.view-list") : @tr("git.view-tree");
+                clicked => {
+                    Shell.act("git.tree");
+                }
+            }
+            IconButton {
+                width: 24px;
+                height: 24px;
+                glyph: 15px;
                 icon: Icons.refresh;
                 tip: @tr("git.refresh");
                 clicked => {
@@ -654,6 +828,13 @@ export component GitPanel inherits Rectangle {
                     font-size: Theme.small;
                     font-weight: 600;
                     wrap: word-wrap;
+                }
+                if Shell.git-operation-message != "": Text {
+                    text: Shell.git-operation-message;
+                    color: Theme.label-2;
+                    font-size: Theme.caption;
+                    font-family: Theme.mono;
+                    overflow: elide;
                 }
                 Text {
                     text: Shell.git-operation-detail;
@@ -723,13 +904,25 @@ export component GitPanel inherits Rectangle {
                 }
             }
         }
-        // The commit box.
-        message := TextEdit {
+        // The commit box. Ctrl+Enter — Cmd+Enter on a Mac — commits from it,
+        // as VS Code's does.
+        FocusScope {
             height: 64px;
-            text <=> Shell.git-message;
-            placeholder-text: @tr("git.commit-placeholder");
-            font-size: Theme.small;
-            wrap: word-wrap;
+            capture-key-pressed(event) => {
+                if ((event.modifiers.control || event.modifiers.meta) && event.text == Key.Return) {
+                    Shell.act("git.commit");
+                    return accept;
+                }
+                reject
+            }
+            message := TextEdit {
+                width: parent.width;
+                height: parent.height;
+                text <=> Shell.git-message;
+                placeholder-text: @tr("git.commit-placeholder");
+                font-size: Theme.small;
+                wrap: word-wrap;
+            }
         }
         HorizontalLayout {
             spacing: 6px;
@@ -746,40 +939,20 @@ export component GitPanel inherits Rectangle {
                 horizontal-stretch: 1;
                 text: Shell.git-amend ? @tr("git.amend-button") : @tr("git.commit");
                 primary: true;
-                enabled: !Shell.git-identity-needed && (Shell.git-amend || (Shell.git-staged.length > 0 && Shell.git-message != ""));
+                enabled: !Shell.git-identity-needed && (Shell.git-amend || (Shell.git-staged-count > 0 && Shell.git-message != ""));
                 clicked => {
                     Shell.act("git.commit");
                 }
             }
         }
-        // The two lists and the stashes.
+        // The lists — the conflicts, the staged, the changes — and the
+        // stashes, each folding away under its heading.
         ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
                 alignment: start;
-                if Shell.git-staged.length > 0: ListHead {
-                    title: @tr("git.staged");
-                    count: Shell.git-staged.length;
-                    icon: Icons.minus;
-                    tip: @tr("git.unstage-all");
-                    clicked => {
-                        Shell.act("git.unstage-all");
-                    }
-                }
-                for change in Shell.git-staged: ChangeRow {
-                    change: change;
-                }
-                ListHead {
-                    title: @tr("git.changes");
-                    count: Shell.git-unstaged.length;
-                    icon: Icons.plus;
-                    tip: @tr("git.stage-all");
-                    clicked => {
-                        Shell.act("git.stage-all");
-                    }
-                }
-                for change in Shell.git-unstaged: ChangeRow {
-                    change: change;
+                for each in Shell.git-rows: GitRow {
+                    entry: each;
                 }
                 if Shell.git-clean: Text {
                     height: 26px;
@@ -792,9 +965,29 @@ export component GitPanel inherits Rectangle {
                 HorizontalLayout {
                     height: 30px;
                     spacing: 4px;
+                    padding-left: 4px;
+                    Rectangle {
+                        width: 14px;
+                        Icon {
+                            y: (parent.height - self.height) / 2;
+                            path: Shell.git-stashes-folded ? Icons.chevron-right : Icons.chevron;
+                            size: 14px;
+                            color: Theme.label-3;
+                        }
+                        TouchArea {
+                            clicked => {
+                                Shell.git-row("fold", 3, "");
+                            }
+                        }
+                    }
                     Caption {
                         text: @tr("git.stashes-tab") + " · " + Shell.git-stashes.length;
                         vertical-alignment: center;
+                        TouchArea {
+                            clicked => {
+                                Shell.git-row("fold", 3, "");
+                            }
+                        }
                     }
                     Rectangle {
                         horizontal-stretch: 1;
@@ -812,12 +1005,12 @@ export component GitPanel inherits Rectangle {
                         }
                     }
                 }
-                if !Shell.git-clean: Field {
+                if !Shell.git-clean && !Shell.git-stashes-folded: Field {
                     height: 26px;
                     text <=> Shell.git-stash-note;
                     placeholder: @tr("git.stash-placeholder");
                 }
-                for stash in Shell.git-stashes: Rectangle {
+                for stash in Shell.git-stashes-folded ? [] : Shell.git-stashes: Rectangle {
                     height: 26px;
                     border-radius: 5px;
                     background: stash-touch.has-hover ? Theme.hover : transparent;
@@ -871,7 +1064,7 @@ export component GitPanel inherits Rectangle {
                         }
                     }
                 }
-                if Shell.git-stashes.length == 0: Text {
+                if Shell.git-stashes.length == 0 && !Shell.git-stashes-folded: Text {
                     height: 22px;
                     text: @tr("git.no-stashes");
                     color: Theme.label-4;

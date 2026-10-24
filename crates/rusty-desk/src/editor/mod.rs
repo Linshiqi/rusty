@@ -602,6 +602,89 @@ impl Surface {
         }
     }
 
+    /// The merge conflicts in the document on screen: how many, and which
+    /// of them — from 1 — the caret is in, 0 when it is in none.
+    pub fn conflicts_here(&self) -> (usize, usize) {
+        let Some(doc) = self.doc() else {
+            return (0, 0);
+        };
+        let doc = doc.borrow();
+        let found = self.rows.conflicts(&doc);
+        if found.is_empty() {
+            return (0, 0);
+        }
+        let line = doc.lines.position(&doc.text, doc.primary().head).0 as u32;
+        let inside = found
+            .iter()
+            .position(|c| c.start <= line && line <= c.end)
+            .map_or(0, |at| at + 1);
+        (found.len(), inside)
+    }
+
+    /// The caret to the first marker of the next conflict after it — or
+    /// the one before it — round the end of the file, brought into view.
+    /// Whether there was one.
+    pub fn go_to_conflict(&self, forward: bool) -> bool {
+        let Some(doc) = self.doc() else { return false };
+        let target = {
+            let d = doc.borrow();
+            let found = self.rows.conflicts(&d);
+            let line = d.lines.position(&d.text, d.primary().head).0 as u32;
+            let next = if forward {
+                found
+                    .iter()
+                    .find(|c| c.start > line)
+                    .or_else(|| found.first())
+            } else {
+                found
+                    .iter()
+                    .rev()
+                    .find(|c| c.end < line)
+                    .or_else(|| found.last())
+            };
+            next.map(|c| c.start as usize)
+        };
+        match target {
+            Some(line) => {
+                self.go_to(line + 1, Some(1));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Every conflict in the document on screen resolved to `choice`, as
+    /// one edit — one undo puts them all back — the caret at the first.
+    /// How many there were.
+    pub fn resolve_all_conflicts(&self, choice: rusty_edit::conflict::Choice) -> usize {
+        let Some(doc) = self.doc() else { return 0 };
+        let (change, count) = {
+            let mut d = doc.borrow_mut();
+            let found = rusty_edit::conflict::find(&d.text);
+            if found.is_empty() {
+                return 0;
+            }
+            // From the last back, so each block's bytes are where they were
+            // found.
+            let mut text = d.text.clone();
+            let mut first = text.len();
+            for conflict in found.iter().rev() {
+                if let Some(((from, to), with)) =
+                    rusty_edit::conflict::resolve(&text, conflict, choice)
+                {
+                    text.replace_range(from..to, &with);
+                    first = from;
+                }
+            }
+            let count = found.len();
+            (d.edit(text, vec![Cursor::caret(first)], Kind::Other), count)
+        };
+        if let Some(change) = change {
+            self.edited(&doc, change);
+        }
+        count
+    }
+
     /// The conflict whose first marker is on `row` resolved to `choice`:
     /// the block, markers and all, replaced by the side chosen, one undo
     /// step, the caret at the top of what was kept.
@@ -680,6 +763,62 @@ impl Surface {
     /// it (`show`, and the other group's view when a tab is moved there).
     pub fn kept_scroll(&self, path: &str) -> Option<(f32, f32)> {
         self.open.borrow().get(path).map(|doc| doc.borrow().scroll)
+    }
+
+    /// Where `path` was left, as the strip keeps it: the line at the top of
+    /// its view and the caret's line and column — the view's own place for
+    /// the file on screen, the document's for the rest.
+    pub fn place_of(&self, path: &str) -> Option<(u32, u32, u32)> {
+        let doc = self.open.borrow().get(path).cloned()?;
+        let on_screen = self.doc().is_some_and(|current| Rc::ptr_eq(&current, &doc));
+        let scroll = if on_screen {
+            self.scroll()
+        } else {
+            doc.borrow().scroll
+        };
+        let row = self
+            .window
+            .upgrade()
+            .map_or(19.0, |window| window.global::<Code>().get_row_height())
+            .max(1.0);
+        let d = doc.borrow();
+        let top_row = (-scroll.0 / row).round().max(0.0) as usize;
+        let top = d.line_at_row(top_row.min(d.rows().saturating_sub(1)));
+        let (line, column) = d.lines.position(&d.text, d.primary().head);
+        Some((top as u32, line as u32, column as u32))
+    }
+
+    /// `path` put back where it was left: its view's top line and its
+    /// caret, clamped to the text as it is now — the file may have changed
+    /// since. For a document not on screen, read when it is next shown.
+    pub fn set_place(&self, path: &str, top: u32, line: u32, column: u32) {
+        let Some(doc) = self.open.borrow().get(path).cloned() else {
+            return;
+        };
+        let row = self
+            .window
+            .upgrade()
+            .map_or(19.0, |window| window.global::<Code>().get_row_height())
+            .max(1.0);
+        let scroll = {
+            let mut d = doc.borrow_mut();
+            let last = d.lines.count().saturating_sub(1);
+            let top = (top as usize).min(last);
+            d.scroll = (-(d.row_of(top) as f32 * row), 0.0);
+            let at = d
+                .lines
+                .byte(&d.text, (line as usize).min(last), column as usize);
+            d.set_cursors(vec![Cursor::caret(at)]);
+            d.scroll
+        };
+        // Already on screen — opened by the command line before the strip
+        // came back — and the view is put there too.
+        if self.doc().is_some_and(|current| Rc::ptr_eq(&current, &doc)) {
+            self.set_scroll(scroll);
+            if self.place_caret().is_some() {
+                self.tell_caret();
+            }
+        }
     }
 
     /// `path`'s view left at `at`, by a view about to show something else

@@ -2,10 +2,15 @@
 // Rust side fills (`src/shell.rs`). The parts of the window read it directly
 // rather than having every value threaded through every layer between.
 
+// A dock's panel on its strip; `count` a number beside its icon — the Git
+// panel's changes — `alert` when something there waits on the user, a
+// conflict.
 export struct PanelTab {
     id: string,
     title: string,
     icon: string,
+    count: int,
+    alert: bool,
 }
 
 export struct DocTab {
@@ -623,16 +628,34 @@ export struct MemSection {
 
 // A file in one of the Git panel's two lists: its letter and colour (0 grey,
 // 1 green, 2 amber, 3 crimson, 4 slate) and what they mean.
+// A row of the Git panel's lists (`src/git_rows.rs`): 0 a group's
+// heading, 1 a folder of the tree, 2 a file. `group` is 0 the conflicts,
+// 1 the staged, 2 the changes; `depth` how far a folder or file sits in;
+// `folded` a heading or folder whose rows are hidden; `count` the files
+// under a heading or folder; `path` a file's, or a folder's as the tree
+// knows it. A file in conflict carries `note` — how many conflicts are
+// left, or what each side did — and `resolved` once none are.
 export struct GitChange {
+    kind: int,
+    group: int,
+    depth: int,
+    folded: bool,
+    count: int,
     path: string,
     name: string,
     dir: string,
     letter: string,
     tone: int,
     tip: string,
+    note: string,
     staged: bool,
     untracked: bool,
     nested: bool,
+    conflict: bool,
+    resolved: bool,
+    // Whether each side has a version to take.
+    ours: bool,
+    theirs: bool,
     selected: bool,
 }
 
@@ -1149,6 +1172,14 @@ export global Shell {
     callback math-orbit(float, float);
     callback math-zoom(float);
 
+    // The file in front's merge conflicts (`app/conflicts.rs`): how many
+    // blocks of markers it holds, what the bar over the code says about
+    // them, and whether git still has the file unmerged — which, with no
+    // blocks left, offers to mark it resolved.
+    in property <int> conflict-count;
+    in property <string> conflict-label;
+    in property <bool> conflict-unmerged;
+
     // A Markdown file in front: read as a page, or its source.
     in property <bool> md-file;
     in property <bool> md-page;
@@ -1161,6 +1192,12 @@ export global Shell {
     // text size, reported as it is placed and whenever that moves: what a
     // press on the page is measured against (`app/page_select.rs`).
     callback md-placed(int, length, length, length, length, length);
+    // Every block of the page: where it stands from the page's top and how
+    // tall it is; and where the page is scrolled, kept and put back per
+    // file (`app/markdown_view.rs`).
+    callback md-block(int, length, length);
+    in-out property <length> md-scroll;
+    callback md-scrolled(length);
     // The page's selection: a press, a drag, a release and a double-click,
     // each a point from the page's own top left; the pointer resting, for
     // its shape — `page-cursor` 1 over text, 2 over a link; and a key —
@@ -1293,6 +1330,8 @@ export global Shell {
     in property <string> git-pull-tip;
     in property <string> git-push-tip;
     in property <string> git-operation;
+    // What the stopped operation brings in, in git's words.
+    in property <string> git-operation-message;
     in property <string> git-operation-detail;
     in property <int> git-conflicts;
     in property <bool> git-identity-needed;
@@ -1300,11 +1339,17 @@ export global Shell {
     in-out property <string> git-stash-note;
     in property <bool> git-amend;
     in property <bool> git-clean;
-    in property <[GitChange]> git-staged;
-    in property <[GitChange]> git-unstaged;
+    in property <int> git-staged-count;
+    // The lists as rows, and whether they are drawn as folders.
+    in property <[GitChange]> git-rows;
+    in property <bool> git-tree;
+    in property <bool> git-stashes-folded;
     in property <[GitStash]> git-stashes;
     callback git-file(string, string, bool);
     callback git-file-menu(string, bool, length, length);
+    // A verb on a heading or a folder: "fold", "stage", "unstage",
+    // "discard" — on a whole group when `path` is empty.
+    callback git-row(string, int, string);
     callback git-identity-save(string, string, bool);
     callback git-stash(string, int);
 

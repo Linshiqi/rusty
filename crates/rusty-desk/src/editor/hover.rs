@@ -184,11 +184,25 @@ impl Surface {
             }
             Some((line, at)) => {
                 self.hide_hover_soon();
+                // The byte is the text's on screen now: the card is asked
+                // about it only while that is still the text on screen. A
+                // tab switched in the pause put another file's text under
+                // it, and a byte of one file read in another can fall inside
+                // a character — a panic on a line of Chinese.
+                let measured = self.doc().map(|d| {
+                    let d = d.borrow();
+                    (d.path.clone(), d.version)
+                });
                 let weak = Rc::downgrade(self);
                 self.hovering
                     .show
                     .start(TimerMode::SingleShot, SHOW_AFTER, move || {
-                        if let Some(this) = weak.upgrade() {
+                        let Some(this) = weak.upgrade() else { return };
+                        let now = this.doc().map(|d| {
+                            let d = d.borrow();
+                            (d.path.clone(), d.version)
+                        });
+                        if now.is_some() && now == measured {
                             this.hover_at(line, at);
                         }
                     });
@@ -276,6 +290,15 @@ impl Surface {
     /// once, and the server's account of the name when it comes.
     fn hover_at(self: &Rc<Self>, line: usize, at: usize) {
         let Some(doc) = self.doc() else { return };
+        // Inside the text and on a character, whatever asked.
+        let at = {
+            let d = doc.borrow();
+            let mut at = at.min(d.text.len());
+            while !d.text.is_char_boundary(at) {
+                at -= 1;
+            }
+            at
+        };
         let (path, col, problems, failed, word, version, draft_text) = {
             let d = doc.borrow();
             let col = d.lines.position(&d.text, at).1;

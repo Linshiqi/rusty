@@ -2,7 +2,7 @@
 // a page. Pages are documents: what is read or edited at length opens here,
 // beside the files, and is moved and closed the way a file is.
 
-import { GitPage, GitDiffPage } from "git.slint";
+import { GitPage, GitDiffPage, ConflictBar } from "git.slint";
 import { MemoryPage } from "memory.slint";
 import { CratesPage } from "crates.slint";
 import { AssistantSettings } from "assistant.slint";
@@ -901,6 +901,12 @@ export component EditorArea inherits Rectangle {
                         if Shell.active-kind == "file" && Shell.md-page && !Shell.picture-page: md-area := Rectangle {
                             background: Theme.content;
                             ScrollView {
+                                // Where the reading is: kept per file by Rust, and put
+                                // back when the file's tab is in front again.
+                                content-y <=> Shell.md-scroll;
+                                changed content-y => {
+                                    Shell.md-scrolled(self.content-y);
+                                }
                                 // A reading column, centred: margins from the page's own
                                 // width, never the column's, which is what it decides. It
                                 // widens with the text, so a line holds the same words. Its
@@ -914,6 +920,7 @@ export component EditorArea inherits Rectangle {
                                     padding-left: max(32px, (md-area.width - 820px * Shell.page-zoom) / 2);
                                     padding-right: max(32px, (md-area.width - 820px * Shell.page-zoom) / 2);
                                     md-view := MarkdownView {
+                                        page: true;
                                         blocks: Shell.md-blocks;
                                         font-size: Theme.body * Shell.page-zoom;
                                     }
@@ -1006,6 +1013,12 @@ export component EditorArea inherits Rectangle {
                         if Shell.active-kind != "file": PageBody {
                             kind: Shell.active-kind;
                             title: Shell.active-title;
+                        }
+                        // A file with merge conflicts: the bar that walks and takes them,
+                        // over the top of its code, below the transport when both show.
+                        if Shell.active-kind == "file" && !Shell.md-page && (Shell.conflict-count > 0 || Shell.conflict-unmerged): ConflictBar {
+                            x: (parent.width - self.width) / 2;
+                            y: Shell.debug-live ? 52px : 8px;
                         }
                         // The debugger's transport, over the code while a session is
                         // live: an overlay, so its arrival moves nothing.

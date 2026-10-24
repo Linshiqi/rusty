@@ -17,18 +17,29 @@
 //! how a commit made in a terminal arrives. One of each read is in flight
 //! at a time, with at most one more asked for (`Gate`).
 
-use std::{path::PathBuf, rc::Rc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    rc::Rc,
+    time::Duration,
+};
 
 use rusty_embed::CommandPlan;
 use rusty_git::{
     CommitDetail, GitIdentity, GitOperation, GitStamp, History, Refs, Remote, Stash, Status,
-    plan::{PromptKind, RefPrompt, checkout_args, pick_remote},
+    plan::{
+        PromptKind, RefPrompt, Side, checkout_args, mark_resolved_args, pick_remote, resolve_args,
+    },
 };
 use rusty_i18n::t;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, VecModel};
 
-use super::{App, Tab};
-use crate::{Shell, work};
+use super::{App, NoteAction, Tab};
+use crate::{
+    GitChange, Shell,
+    git_rows::{self, Group},
+    work,
+};
 
 /// Opened commits kept for a second look.
 const CACHED: usize = 32;
@@ -102,6 +113,8 @@ pub(super) enum Target {
         staged: bool,
         untracked: bool,
         nested: bool,
+        /// In conflict: its verbs are taking a side and marking it resolved.
+        conflict: bool,
     },
     /// A page's diff, on the side clicked: Copy and Select all.
     Diff {
@@ -157,6 +170,15 @@ pub(super) struct Git {
     poll: Option<slint::Timer>,
     /// The two pages' diffs as drawn, and what is selected in them.
     pub(super) views: super::git_select::Views,
+    /// How many conflict blocks each file in conflict still holds, read
+    /// beside the status by the editor's own reading of the markers
+    /// (`rusty_edit::conflict`): what says a file is ready to be marked
+    /// resolved. Absent for a file only one side has.
+    pub(super) markers: HashMap<String, usize>,
+    /// The folders folded away in the tree, by group — for this session.
+    pub(super) folded_dirs: HashSet<(Group, String)>,
+    /// The panel's rows, one model changed in place.
+    pub(super) rows: Rc<VecModel<GitChange>>,
 }
 
 impl Default for Git {
@@ -191,6 +213,9 @@ impl Default for Git {
             reveal: 0,
             poll: None,
             views: Default::default(),
+            markers: HashMap::new(),
+            folded_dirs: HashSet::new(),
+            rows: Rc::new(VecModel::default()),
         }
     }
 }
@@ -212,6 +237,53 @@ fn shown(arg: &str) -> String {
         ""
     };
     format!("\"{}{more}\"", first.replace('"', "\\\""))
+}
+
+/// How many conflict blocks each file in conflict holds, for the files
+/// both sides have a version of — read off the working tree by the
+/// editor's own reading of the markers. A file that cannot be read as text
+/// is left out, and its row says what each side did instead.
+fn conflict_markers(root: &Path, status: &Status) -> HashMap<String, usize> {
+    status
+        .entries
+        .iter()
+        .filter(|e| e.conflict.is_some_and(|k| k.has_markers()))
+        .filter_map(|e| {
+            let text = std::fs::read_to_string(root.join(&e.path)).ok()?;
+            Some((e.path.clone(), rusty_edit::conflict::find(&text).len()))
+        })
+        .collect()
+}
+
+/// A question with three answers: the first two buttons' words, and
+/// cancel. `Some(true)` for the first, `Some(false)` for the second, `None`
+/// for cancel. A probe answers the first.
+fn choose(question: &str, first: &str, second: &str) -> Option<bool> {
+    if std::env::var_os("RUSTY_PROBE").is_some() {
+        return Some(true);
+    }
+    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+    let mut lines = question.splitn(2, '\n');
+    let title = lines.next().unwrap_or_default();
+    let detail = lines.next().unwrap_or_default();
+    let cancel = t!("git.cancel");
+    let answer = MessageDialog::new()
+        .set_level(MessageLevel::Warning)
+        .set_title(title)
+        .set_description(if detail.is_empty() { title } else { detail })
+        .set_buttons(MessageButtons::YesNoCancelCustom(
+            first.to_string(),
+            second.to_string(),
+            cancel.clone(),
+        ))
+        .show();
+    match answer {
+        MessageDialogResult::Yes => Some(true),
+        MessageDialogResult::No => Some(false),
+        MessageDialogResult::Custom(word) if word == first => Some(true),
+        MessageDialogResult::Custom(word) if word == second => Some(false),
+        _ => None,
+    }
 }
 
 /// A yes-or-no question before something that cannot be undone. A probe
@@ -267,7 +339,7 @@ impl App {
     }
 
     /// Whether either surface is on screen: the reason to keep asking.
-    fn git_visible(&self) -> bool {
+    pub(super) fn git_visible(&self) -> bool {
         let state = self.state.borrow();
         let panel =
             state.layout.left.open && crate::docks::Dock::Left.front(&state.layout) == "git";
@@ -443,14 +515,42 @@ impl App {
             return;
         };
         work::spawn(
-            move || rusty_git::repo::status(&root).ok(),
-            |app, status| {
+            move || {
+                let status = rusty_git::repo::status(&root).ok()?;
+                let markers = conflict_markers(&root, &status);
+                Some((status, markers))
+            },
+            |app, read| {
                 let again = app.git_finish(Read::Status);
-                if let Some(status) = status {
-                    let changed = app.state.borrow().git.status.as_ref() != Some(&status);
+                if let Some((status, markers)) = read {
+                    let (changed, stopped) = {
+                        let state = app.state.borrow();
+                        let was = state.git.status.as_ref();
+                        (
+                            was != Some(&status) || state.git.markers != markers,
+                            // Nothing was waiting before and something is now:
+                            // a pull, a merge, a rebase or a pop stopped here.
+                            was.is_some_and(|w| w.operation.is_none())
+                                && status.operation.is_some(),
+                        )
+                    };
+                    let conflicts = status.entries.iter().filter(|e| e.is_conflicted()).count();
                     if changed {
-                        app.state.borrow_mut().git.status = Some(status);
+                        {
+                            let mut state = app.state.borrow_mut();
+                            state.git.status = Some(status);
+                            state.git.markers = markers;
+                        }
                         app.sync_git();
+                        app.sync_conflict_bar();
+                        app.sync_docks();
+                    }
+                    if stopped && conflicts > 0 {
+                        app.note_with(
+                            1,
+                            t!("git.stopped-on-conflicts", count = conflicts),
+                            Some(NoteAction::Act("git.show-conflicts")),
+                        );
                     }
                 }
                 if again {
@@ -580,6 +680,20 @@ impl App {
             "stash" => self.git_stash_save(),
             "continue" => self.git_continue(),
             "abort" => self.git_abort(),
+            "tree" => {
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.layout.git.tree = !state.layout.git.tree;
+                }
+                self.save_layout();
+                self.sync_git();
+            }
+            "show-conflicts" => self.git_show_conflicts(),
+            "mark-resolved" => {
+                if let Some(Tab::File(path)) = self.active_tab() {
+                    self.git_file("resolve", path, false);
+                }
+            }
             "more" => {
                 self.state.borrow_mut().git.limit += rusty_git::LIMIT;
                 self.git_history();
@@ -694,29 +808,225 @@ impl App {
         pick_remote(upstream.as_deref(), &self.git_known_remotes())
     }
 
+    /// Stage every change, or unstage everything staged. A file in
+    /// conflict is never staged by it — staging is how git is told a
+    /// conflict is resolved, which is the conflict list's own verb — and
+    /// an empty repository inside this one is left out, as git refuses it.
     fn git_stage_all(self: &Rc<Self>, on: bool) {
-        let paths: Vec<String> = {
-            let state = self.state.borrow();
-            state
-                .git
-                .status
-                .as_ref()
-                .map(|s| {
-                    s.entries
-                        .iter()
-                        .filter(|e| {
-                            if on {
-                                (e.unstaged.is_some() || e.untracked || e.conflicted) && !e.nested
-                            } else {
-                                e.staged.is_some()
-                            }
-                        })
-                        .map(|e| e.path.clone())
-                        .collect()
-                })
-                .unwrap_or_default()
+        let group = if on { Group::Changes } else { Group::Staged };
+        let paths = self.git_paths(group, "");
+        self.git_stage_paths(paths, on);
+    }
+
+    /// The paths of `group`, under the folder `dir` or all of them: nested
+    /// repositories left out.
+    fn git_paths(&self, group: Group, dir: &str) -> Vec<String> {
+        let state = self.state.borrow();
+        let Some(status) = state.git.status.as_ref() else {
+            return Vec::new();
         };
+        let paths = if dir.is_empty() {
+            git_rows::paths_in(&status.entries, group)
+        } else {
+            git_rows::paths_under(&status.entries, group, dir)
+        };
+        paths
+            .into_iter()
+            .filter(|p| !status.entries.iter().any(|e| &e.path == p && e.nested))
+            .collect()
+    }
+
+    /// Stage or unstage `paths` — unstaging asked about first while an
+    /// operation waits, because what it takes out of the index is the
+    /// operation's own work: unstaged during a merge, the merged changes
+    /// become local ones, and aborting the merge afterwards leaves them in
+    /// the tree rather than taking them away.
+    fn git_stage_paths(self: &Rc<Self>, paths: Vec<String>, on: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        if !on && self.git_operation().is_some() && !confirm(&t!("git.unstage-in-operation")) {
+            return;
+        }
         self.git_stage(paths, on);
+    }
+
+    /// A verb on a heading or a folder of the lists.
+    pub(super) fn git_row(self: &Rc<Self>, verb: &str, group: i32, path: String) {
+        // The stashes' heading folds like a group's, by the same name.
+        if verb == "fold" && group == 3 {
+            self.git_fold_group("stashes");
+            return;
+        }
+        let Some(group) = Group::from_index(group) else {
+            return;
+        };
+        match verb {
+            "fold" if path.is_empty() => self.git_fold_group(group.name()),
+            "fold" => {
+                {
+                    let mut state = self.state.borrow_mut();
+                    let key = (group, path);
+                    let folders = &mut state.git.folded_dirs;
+                    if !folders.remove(&key) {
+                        folders.insert(key);
+                    }
+                }
+                self.sync_git();
+            }
+            "stage" => self.git_stage_paths(self.git_paths(group, &path), true),
+            "unstage" => self.git_stage_paths(self.git_paths(group, &path), false),
+            "discard" if group == Group::Changes => self.git_discard_many(&path),
+            _ => {}
+        }
+    }
+
+    /// A group folded or unfolded, kept in `workbench.toml`.
+    fn git_fold_group(self: &Rc<Self>, name: &str) {
+        {
+            let mut state = self.state.borrow_mut();
+            let folded = &mut state.layout.git.folded;
+            if let Some(at) = folded.iter().position(|g| g == name) {
+                folded.remove(at);
+            } else {
+                folded.push(name.to_string());
+            }
+        }
+        self.save_layout();
+        self.sync_git();
+    }
+
+    /// Throw away every change under `dir` in the changes list — all of
+    /// them when it is empty — asked first with how many: the tracked
+    /// files back to the index, the untracked ones deleted. A file in
+    /// conflict is not in that list, so is never thrown away by it.
+    fn git_discard_many(self: &Rc<Self>, dir: &str) {
+        let (tracked, untracked): (Vec<String>, Vec<String>) = {
+            let state = self.state.borrow();
+            let Some(status) = state.git.status.as_ref() else {
+                return;
+            };
+            let paths = self.git_paths(Group::Changes, dir);
+            let is_untracked =
+                |p: &String| status.entries.iter().any(|e| &e.path == p && e.untracked);
+            paths.into_iter().partition(|p| !is_untracked(p))
+        };
+        let count = tracked.len() + untracked.len();
+        if count == 0 {
+            return;
+        }
+        let question = if dir.is_empty() {
+            t!("git.discard-all-confirm", count = count)
+        } else {
+            t!(
+                "git.discard-folder-confirm",
+                count = count,
+                path = dir.to_string()
+            )
+        };
+        if !confirm(&question) {
+            return;
+        }
+        let mut commands = Vec::new();
+        if !tracked.is_empty() {
+            let mut list = args(&["restore", "--"]);
+            list.extend(tracked);
+            commands.push(list);
+        }
+        if !untracked.is_empty() {
+            let mut list = args(&["clean", "-f", "--"]);
+            list.extend(untracked);
+            commands.push(list);
+        }
+        self.state.borrow_mut().git.diff_for = None;
+        self.git_chain(commands);
+    }
+
+    /// `git` commands run one after another in the dock, the rest given up
+    /// at the first that fails, and everything read back at the end.
+    fn git_chain(self: &Rc<Self>, mut commands: Vec<Vec<String>>) {
+        if commands.is_empty() {
+            return self.after_git();
+        }
+        let first = commands.remove(0);
+        self.git_then(first, move |app, ended| {
+            if ended == crate::run::Ended::Done {
+                app.git_chain(commands);
+            } else {
+                app.after_git();
+            }
+        });
+    }
+
+    /// The Git panel shown with its conflicts unfolded, and the first file
+    /// that still holds a conflict opened in the editor.
+    fn git_show_conflicts(self: &Rc<Self>) {
+        let first = {
+            let mut state = self.state.borrow_mut();
+            state.layout.git.folded.retain(|g| g != "conflicts");
+            let git = &state.git;
+            git.status.as_ref().and_then(|s| {
+                s.entries
+                    .iter()
+                    .filter(|e| e.is_conflicted())
+                    .find(|e| git.markers.get(&e.path).is_some_and(|n| *n > 0))
+                    .or_else(|| s.entries.iter().find(|e| e.is_conflicted()))
+                    .map(|e| e.path.clone())
+            })
+        };
+        self.save_layout();
+        self.show_panel("left", "git");
+        self.sync_git();
+        if let Some(path) = first {
+            self.open_file(path);
+        }
+    }
+
+    /// A file in conflict resolved whole to one side — the side's version
+    /// checked out and staged, or the file removed where that side has none
+    /// (`plan::resolve_args`) — after a question when the file is open with
+    /// changes not saved, which the checkout would put the side's text under.
+    fn git_take_side(self: &Rc<Self>, path: String, side: Side) {
+        let kind = {
+            let state = self.state.borrow();
+            state.git.status.as_ref().and_then(|s| {
+                s.entries
+                    .iter()
+                    .find(|e| e.path == path)
+                    .and_then(|e| e.conflict)
+            })
+        };
+        let Some(kind) = kind else { return };
+        if self.editor.is_dirty(&path) {
+            self.note(1, t!("git.take-side-unsaved", path = path.clone()));
+            return;
+        }
+        self.git_chain(resolve_args(&path, kind, side));
+    }
+
+    /// A file in conflict marked resolved as the tree has it — asked first
+    /// while it still holds conflict markers, which staging would commit.
+    fn git_mark_resolved(self: &Rc<Self>, path: String) {
+        let (left, in_tree) = {
+            let state = self.state.borrow();
+            let left = state.git.markers.get(&path).copied().unwrap_or(0);
+            let in_tree = self.root().is_some_and(|root| root.join(&path).exists());
+            (left, in_tree)
+        };
+        if self.editor.is_dirty(&path) {
+            self.note(1, t!("git.resolve-unsaved", path = path.clone()));
+            return;
+        }
+        if left > 0
+            && !confirm(&t!(
+                "git.resolve-with-markers",
+                count = left,
+                path = path.clone()
+            ))
+        {
+            return;
+        }
+        self.git_chain(vec![mark_resolved_args(&path, in_tree)]);
     }
 
     /// Put paths in the index or take them out — quiet, then the status
@@ -757,15 +1067,20 @@ impl App {
                 .and_then(|s| s.entries.iter().find(|e| e.path == path).cloned())
         };
         let untracked = entry.as_ref().is_some_and(|e| e.untracked);
-        let conflicted = entry.as_ref().is_some_and(|e| e.conflicted);
+        let conflicted = entry.as_ref().is_some_and(|e| e.is_conflicted());
         match verb {
             // A file in conflict is resolved in the editor, where each
             // block carries its lens; its diff is a combined one nobody
             // can act on.
             "diff" if conflicted => self.open_file(path),
             "diff" => self.git_show_diff(path, staged),
+            // Staging a file in conflict is marking it resolved, with the
+            // question that goes with that.
+            "stage" | "resolve" if conflicted => self.git_mark_resolved(path),
             "stage" => self.git_stage(vec![path], true),
-            "unstage" => self.git_stage(vec![path], false),
+            "unstage" => self.git_stage_paths(vec![path], false),
+            "ours" => self.git_take_side(path, Side::Current),
+            "theirs" => self.git_take_side(path, Side::Incoming),
             "open" => self.open_file(path),
             "discard" => self.git_discard(path, staged, untracked),
             "stash" => {
@@ -984,15 +1299,60 @@ impl App {
     }
 
     /// Carry on with the merge, rebase, cherry-pick or revert that stopped.
+    ///
+    /// **With changes left unstaged, it asks first.** Continue commits what
+    /// is staged, and a merge whose changes were taken out of the index —
+    /// by an Unstage all, say — would commit a merge that keeps none of
+    /// what it brought and leave all of it as local changes. So the
+    /// question offers to stage them first; a merge may also go on with
+    /// only what is staged, and the others refuse to continue with
+    /// unstaged changes at all.
     fn git_continue(self: &Rc<Self>) {
-        let list = match self.git_operation() {
-            Some(GitOperation::Merge) => args(&["commit", "--no-edit"]),
-            Some(GitOperation::Rebase) => args(&["rebase", "--continue"]),
-            Some(GitOperation::CherryPick) => args(&["cherry-pick", "--continue"]),
-            Some(GitOperation::Revert) => args(&["revert", "--continue"]),
-            None => return,
+        let Some(op) = self.git_operation() else {
+            return;
         };
-        self.git(list);
+        let list = match op {
+            GitOperation::Merge => args(&["commit", "--no-edit"]),
+            GitOperation::Rebase => args(&["rebase", "--continue"]),
+            GitOperation::CherryPick => args(&["cherry-pick", "--continue"]),
+            GitOperation::Revert => args(&["revert", "--continue"]),
+        };
+        let left: Vec<String> = {
+            let state = self.state.borrow();
+            state
+                .git
+                .status
+                .as_ref()
+                .map(|s| {
+                    s.entries
+                        .iter()
+                        .filter(|e| Group::Changes.holds(e) && !e.untracked && !e.nested)
+                        .map(|e| e.path.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        if left.is_empty() {
+            return self.git(list);
+        }
+        let stage_first = if op == GitOperation::Merge {
+            choose(
+                &t!("git.continue-unstaged", count = left.len()),
+                &t!("git.continue-stage-all"),
+                &t!("git.continue-staged-only"),
+            )
+        } else {
+            confirm(&t!("git.continue-unstaged-must", count = left.len())).then_some(true)
+        };
+        match stage_first {
+            Some(true) => {
+                let mut add = args(&["add", "--"]);
+                add.extend(left);
+                self.git_chain(vec![add, list]);
+            }
+            Some(false) => self.git(list),
+            None => {}
+        }
     }
 
     fn git_abort(self: &Rc<Self>) {
@@ -1412,6 +1772,7 @@ impl App {
         };
         let Some(entry) = entry else { return };
         let target = Target::Change {
+            conflict: entry.is_conflicted(),
             path: entry.path,
             staged,
             untracked: entry.untracked,
@@ -1556,6 +1917,16 @@ impl App {
             ],
             Target::Path { .. } => vec![
                 item("open", t!("git.open-file")),
+                item("copy", t!("git.copy-path")),
+                item("copy-full", t!("git.copy-full-path")),
+            ],
+            Target::Change { conflict: true, .. } => vec![
+                item("open", t!("git.open-file")),
+                divider(),
+                item("ours", t!("git.take-current")),
+                item("theirs", t!("git.take-incoming")),
+                item("resolve", t!("git.mark-resolved")),
+                divider(),
                 item("copy", t!("git.copy-path")),
                 item("copy-full", t!("git.copy-full-path")),
             ],

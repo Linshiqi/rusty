@@ -2,8 +2,11 @@
 //! the two file lists, the refs down the left, the graph's rows with their
 //! lines and labels, an opened commit, and a patch as rows either way.
 
+use std::collections::HashMap;
+
 use rusty_git::{
-    ChangeKind, CommitDetail, GitOperation, RefKind, RefNameProblem, RemoteProblem, StatusEntry,
+    ChangeKind, CommitDetail, ConflictKind, GitOperation, RefKind, RefNameProblem, RemoteProblem,
+    StatusEntry,
     diff::CellKind,
     log::{edge_line, hits, matches},
     plan::{PromptKind, PromptProblem},
@@ -17,6 +20,7 @@ use super::{
 };
 use crate::{
     DiffRow, GitChange, GitCommitRow, GitFile, GitLabel, GitLane, GitRef, GitStash, Shell, format,
+    git_rows::{self, Folded, Group, Row},
 };
 
 /// Fork's palette, near enough: distinct at two pixels, legible on both
@@ -196,29 +200,104 @@ fn glyph(
     }
 }
 
-fn change_row(entry: &StatusEntry, staged: bool, chosen: Option<&(String, bool)>) -> GitChange {
-    let kind = if staged { entry.staged } else { entry.unstaged };
-    let (letter, tone, tip) = glyph(kind, entry.untracked && !staged, entry.conflicted);
-    let path = entry.path.trim_end_matches('/');
-    let (dir, name) = match path.rsplit_once('/') {
-        Some((dir, name)) => (dir, name),
-        None => ("", path),
-    };
-    GitChange {
-        path: entry.path.as_str().into(),
-        name: name.into(),
-        dir: dir.into(),
-        letter: letter.into(),
-        tone,
-        tip: if entry.nested {
-            t!("git.nested-hint").into()
-        } else {
-            tip.into()
+/// What a file in conflict says on its row: how many conflicts are left
+/// in it, that none are, or what each side did where only one side has the
+/// file — and whether it is ready to be marked resolved.
+fn conflict_note(kind: ConflictKind, markers: Option<usize>) -> (String, bool) {
+    match kind {
+        _ if kind.has_markers() => match markers {
+            Some(0) => (t!("git.conflict-none-left"), true),
+            Some(n) => (t!("git.conflict-left", count = n), false),
+            None => (t!("git.conflict-both-changed"), false),
         },
-        staged,
-        untracked: entry.untracked,
-        nested: entry.nested,
-        selected: chosen.is_some_and(|(p, s)| p == &entry.path && *s == staged),
+        ConflictKind::DeletedByThem => (t!("git.conflict-deleted-by-them"), false),
+        ConflictKind::DeletedByUs => (t!("git.conflict-deleted-by-us"), false),
+        ConflictKind::BothDeleted => (t!("git.conflict-both-deleted"), false),
+        _ => (t!("git.conflict-one-side"), false),
+    }
+}
+
+/// A row as the panel draws it.
+fn row_view(
+    row: &Row,
+    entries: &[StatusEntry],
+    chosen: Option<&(String, bool)>,
+    markers: &HashMap<String, usize>,
+) -> GitChange {
+    match row {
+        Row::Heading {
+            group,
+            count,
+            folded,
+        } => GitChange {
+            kind: 0,
+            group: group.index(),
+            folded: *folded,
+            count: *count as i32,
+            ..GitChange::default()
+        },
+        Row::Folder {
+            group,
+            path,
+            label,
+            depth,
+            count,
+            folded,
+        } => GitChange {
+            kind: 1,
+            group: group.index(),
+            depth: *depth as i32,
+            folded: *folded,
+            count: *count as i32,
+            path: path.as_str().into(),
+            name: label.as_str().into(),
+            ..GitChange::default()
+        },
+        Row::File {
+            group,
+            entry,
+            depth,
+        } => {
+            let entry = &entries[*entry];
+            let staged = *group == Group::Staged;
+            let kind = if staged { entry.staged } else { entry.unstaged };
+            let (letter, tone, tip) =
+                glyph(kind, entry.untracked && !staged, entry.is_conflicted());
+            let path = entry.path.trim_end_matches('/');
+            let (dir, name) = match path.rsplit_once('/') {
+                Some((dir, name)) => (dir, name),
+                None => ("", path),
+            };
+            let (note, resolved) = entry
+                .conflict
+                .map(|k| conflict_note(k, markers.get(&entry.path).copied()))
+                .unwrap_or_default();
+            GitChange {
+                kind: 2,
+                group: group.index(),
+                depth: *depth as i32,
+                path: entry.path.as_str().into(),
+                name: name.into(),
+                dir: dir.into(),
+                letter: letter.into(),
+                tone,
+                tip: if entry.nested {
+                    t!("git.nested-hint").into()
+                } else {
+                    tip.into()
+                },
+                note: note.into(),
+                staged,
+                untracked: entry.untracked,
+                nested: entry.nested,
+                conflict: entry.is_conflicted(),
+                resolved,
+                ours: entry.conflict.is_some_and(ConflictKind::ours),
+                theirs: entry.conflict.is_some_and(ConflictKind::theirs),
+                selected: chosen.is_some_and(|(p, s)| p == &entry.path && *s == staged),
+                ..GitChange::default()
+            }
+        }
     }
 }
 
@@ -434,9 +513,18 @@ impl App {
             .into(),
         );
 
-        // A merge, rebase, cherry-pick or revert waiting.
+        // A merge, rebase, cherry-pick or revert waiting: what it brings,
+        // and how far its conflicts are from resolved.
         let conflicts = status
-            .map(|s| s.entries.iter().filter(|e| e.conflicted).count())
+            .map(|s| s.entries.iter().filter(|e| e.is_conflicted()).count())
+            .unwrap_or(0);
+        let markers_left = status
+            .map(|s| {
+                s.entries
+                    .iter()
+                    .filter(|e| git.markers.get(&e.path).is_some_and(|n| *n > 0))
+                    .count()
+            })
             .unwrap_or(0);
         let (operation, detail) = match status.and_then(|s| s.operation) {
             Some(op) => (
@@ -446,36 +534,54 @@ impl App {
                     GitOperation::CherryPick => t!("git.op-cherry-pick"),
                     GitOperation::Revert => t!("git.op-revert"),
                 },
-                if conflicts > 0 {
-                    t!("git.op-conflicts", count = conflicts)
-                } else {
+                if conflicts == 0 {
                     t!("git.op-resolved")
+                } else if markers_left == 0 {
+                    t!("git.op-unmarked", count = conflicts)
+                } else {
+                    t!("git.op-conflicts", count = conflicts)
                 },
             ),
             None => (String::new(), String::new()),
         };
         shell.set_git_operation(operation.into());
+        shell.set_git_operation_message(
+            status
+                .filter(|s| s.operation.is_some())
+                .and_then(|s| s.operation_message.clone())
+                .unwrap_or_default()
+                .into(),
+        );
         shell.set_git_operation_detail(detail.into());
         shell.set_git_conflicts(conflicts as i32);
         shell.set_git_identity_needed(git.identity.as_ref().is_some_and(|id| !id.complete()));
         shell.set_git_amend(git.amend);
 
-        // The two lists.
+        // The lists, as rows: changed in place, so a row under the pointer
+        // keeps its element through every read that leaves it alone.
         let chosen = git.diff_for.as_ref();
         let entries = status.map(|s| s.entries.as_slice()).unwrap_or_default();
-        let staged: Vec<GitChange> = entries
+        let layout = &state.layout.git;
+        let folded = Folded {
+            groups: layout
+                .folded
+                .iter()
+                .filter_map(|name| Group::from_name(name))
+                .collect(),
+            folders: git.folded_dirs.clone(),
+        };
+        let rows: Vec<GitChange> = git_rows::rows(entries, layout.tree, &folded)
             .iter()
-            .filter(|e| e.staged.is_some())
-            .map(|e| change_row(e, true, chosen))
+            .map(|row| row_view(row, entries, chosen, &git.markers))
             .collect();
-        let unstaged: Vec<GitChange> = entries
-            .iter()
-            .filter(|e| e.unstaged.is_some() || e.untracked || e.conflicted)
-            .map(|e| change_row(e, false, chosen))
-            .collect();
-        shell.set_git_clean(staged.is_empty() && unstaged.is_empty());
-        shell.set_git_staged(ModelRc::new(VecModel::from(staged)));
-        shell.set_git_unstaged(ModelRc::new(VecModel::from(unstaged)));
+        shell.set_git_tree(layout.tree);
+        shell.set_git_stashes_folded(layout.folded.iter().any(|g| g == "stashes"));
+        shell
+            .set_git_staged_count(entries.iter().filter(|e| Group::Staged.holds(e)).count() as i32);
+        shell.set_git_clean(entries.is_empty());
+        let model = git.rows.clone();
+        super::tab_drag::patch(&model, rows);
+        shell.set_git_rows(ModelRc::from(model));
         let stashes: Vec<GitStash> = git
             .stashes
             .iter()

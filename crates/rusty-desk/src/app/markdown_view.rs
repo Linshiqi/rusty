@@ -24,6 +24,8 @@ use rusty_edit::Files;
 use rusty_i18n::t;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+use rusty_embed::model::PagePlace;
+
 use super::{page_select::PageBox, pictures::Pic};
 use crate::{
     AppWindow, CodeLine, CodeSpan, MdBlock, MdCell, MdLine, MdPiece, MdRow,
@@ -45,6 +47,10 @@ const SLACK: f32 = 2.0;
 
 /// Formulas kept beyond the ones on the page in front.
 const KEEP_FORMULAS: usize = 4000;
+
+/// The space above the page's first block: the column's padding in
+/// `pages.slint`, which a scroll offset counts and a block's place does not.
+const PAGE_TOP: f32 = 28.0;
 
 /// A formula as the page has it.
 pub(super) enum Drawn {
@@ -86,6 +92,18 @@ pub(super) struct Page {
     pub(super) press: Option<super::page_select::Press>,
     /// Code measured in the code block's font, by size and text.
     pub(super) mono: HashMap<(u32, String), f32>,
+    /// Every block's place from the page's top and its height, by index,
+    /// as the view last reported them.
+    blocks: Vec<Option<(f32, f32)>>,
+    /// Where each page was left, by file: what a tab coming back to the
+    /// front, a page laid out again and a project opened again read on
+    /// from.
+    places: HashMap<String, PagePlace>,
+    /// A place being put back, and the offset last put back for it: held
+    /// through every layout until the page is scrolled by somebody else.
+    restoring: Option<PagePlace>,
+    restored_at: Option<f32>,
+    restore_due: bool,
     /// Each flowing paragraph's width and text size as its view last
     /// reported them, by key; and what it was last laid out for.
     widths: HashMap<i32, (f32, f32)>,
@@ -397,6 +415,52 @@ fn text_line(window: &AppWindow, size: f32, known: &mut HashMap<u32, TextLine>) 
 }
 
 impl Page {
+    /// Where the page `path` was left, as the strip keeps it.
+    pub(super) fn place_of(&self, path: &str) -> Option<PagePlace> {
+        self.places.get(path).copied()
+    }
+
+    /// Where the page `path` was left, from the strip of a project opened
+    /// again.
+    pub(super) fn keep_place(&mut self, path: &str, place: PagePlace) {
+        self.places.insert(path.to_string(), place);
+    }
+
+    /// The place a scroll offset is at: the block under the top of the
+    /// view — the one below, when the top is in the gap between two — and
+    /// how far into it.
+    fn reading_at(&self, offset: f32) -> Option<PagePlace> {
+        let top = -offset - PAGE_TOP;
+        let mut last = None;
+        for (index, block) in self.blocks.iter().enumerate() {
+            let Some((y, height)) = *block else { continue };
+            if top < y {
+                return Some(PagePlace {
+                    block: index as u32,
+                    within: 0.0,
+                });
+            }
+            if top < y + height {
+                return Some(PagePlace {
+                    block: index as u32,
+                    within: ((top - y) / height.max(1.0)).clamp(0.0, 1.0),
+                });
+            }
+            last = Some(index);
+        }
+        last.map(|index| PagePlace {
+            block: index as u32,
+            within: 1.0,
+        })
+    }
+
+    /// The offset that puts `place` at the top of the view, once its block
+    /// has been laid out.
+    fn offset_of(&self, place: PagePlace) -> Option<f32> {
+        let (y, height) = (*self.blocks.get(place.block as usize)?)?;
+        Some(-(PAGE_TOP + y + place.within * height).max(0.0))
+    }
+
     /// A paragraph's lines for the width and size its view reported, or
     /// none until it has — centred in the width when `centred`, a figure's
     /// caption. The lines are kept for the selection to be measured
@@ -622,6 +686,20 @@ impl super::App {
             Some(super::Tab::File(path)) if has_page(&path) => Some(path),
             _ => None,
         };
+        // A file holding merge conflicts is read as its source, where the
+        // markers, their lenses and the conflict bar are — as a page the
+        // markers render as headings and a rule. Kept so for the session,
+        // so resolving the last block does not swap the view under the
+        // hand doing it; the toggle still turns the page back on.
+        if let Some(p) = &path
+            && !self.state.borrow().markdown_source.contains(p)
+            && self
+                .editor
+                .draft_of(p)
+                .is_some_and(|(text, ..)| !rusty_edit::conflict::find(&text).is_empty())
+        {
+            self.state.borrow_mut().markdown_source.insert(p.clone());
+        }
         let page = path
             .as_ref()
             .is_some_and(|p| !self.state.borrow().markdown_source.contains(p));
@@ -654,6 +732,15 @@ impl super::App {
                 page.selection = None;
                 page.press = None;
             }
+            // Where to read from: this page's own place when it is laid out
+            // again, the place it was left at when it comes back to the
+            // front, the top when it is new.
+            page.restoring = page.places.get(&path).copied();
+            page.restored_at = None;
+            if page.path.as_deref() != Some(path.as_str()) && page.restoring.is_none() {
+                shell.set_md_scroll(0.0);
+            }
+            page.blocks = vec![None; read.len()];
             page.path = Some(path.clone());
             page.read = read;
             page.place = place;
@@ -895,6 +982,79 @@ impl super::App {
         });
     }
 
+    /// A block of the page says where it stands: kept, and the place being
+    /// put back put back again once the turn's reports are in.
+    pub(super) fn md_block(self: &Rc<Self>, index: i32, y: f32, height: f32) {
+        let due = {
+            let mut state = self.state.borrow_mut();
+            let page = &mut state.page;
+            let Some(slot) = usize::try_from(index)
+                .ok()
+                .and_then(|at| page.blocks.get_mut(at))
+            else {
+                return;
+            };
+            *slot = Some((y, height));
+            if page.restoring.is_none() || page.restore_due {
+                return;
+            }
+            page.restore_due = true;
+            true
+        };
+        if due {
+            let weak = Rc::downgrade(self);
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.md_restore();
+                }
+            });
+        }
+    }
+
+    /// The place being put back, put at the top of the view.
+    fn md_restore(&self) {
+        let Some(window) = self.window() else { return };
+        let offset = {
+            let mut state = self.state.borrow_mut();
+            let page = &mut state.page;
+            page.restore_due = false;
+            let Some(place) = page.restoring else { return };
+            let Some(offset) = page.offset_of(place) else {
+                return;
+            };
+            page.restored_at = Some(offset);
+            offset
+        };
+        let shell = window.global::<crate::Shell>();
+        if (shell.get_md_scroll() - offset).abs() >= 0.5 {
+            shell.set_md_scroll(offset);
+        }
+    }
+
+    /// The page scrolled: its place kept. Scrolled anywhere but where a
+    /// place was being put back, by the reader, and the putting back stops.
+    pub(super) fn md_scrolled(&self, offset: f32) {
+        let mut state = self.state.borrow_mut();
+        let page = &mut state.page;
+        if page.restoring.is_some() {
+            match page.restored_at {
+                Some(at) if (at - offset).abs() < 1.0 => {}
+                // Nothing put back yet: the view's own offset from before.
+                None => return,
+                Some(_) => {
+                    page.restoring = None;
+                    page.restored_at = None;
+                }
+            }
+        }
+        let Some(path) = page.path.clone() else {
+            return;
+        };
+        if let Some(place) = page.reading_at(offset) {
+            page.places.insert(path, place);
+        }
+    }
+
     /// Lay out again every paragraph whose width or size moved.
     fn md_reflow(self: &Rc<Self>) {
         let Some(window) = self.window() else { return };
@@ -917,6 +1077,18 @@ impl super::App {
             (blocks, page.rows.clone())
         };
         let Some(rows) = rows else { return };
+        // A reflow moves every block under the reader: the place they were
+        // reading at is put back as the blocks report their new places.
+        {
+            let mut state = self.state.borrow_mut();
+            let page = &mut state.page;
+            if page.restoring.is_none()
+                && let Some(path) = page.path.clone()
+            {
+                page.restoring = page.places.get(&path).copied();
+                page.restored_at = None;
+            }
+        }
         for index in blocks {
             if index < slint::Model::row_count(&*rows) {
                 let block = self.page_block(&window, index);

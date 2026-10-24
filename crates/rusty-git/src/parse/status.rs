@@ -1,6 +1,6 @@
 //! The working tree, out of `git status --porcelain=v2`.
 
-use crate::model::{ChangeKind, Status, StatusEntry};
+use crate::model::{ChangeKind, ConflictKind, Status, StatusEntry};
 
 /// `git status --porcelain=v2 --branch --untracked-files=all -z`.
 ///
@@ -50,8 +50,14 @@ pub fn status(text: &str) -> Status {
                     .nth(9)
                     .map(|path| changed(token, path))
             }
+            // `u XY sub m1 m2 m3 mW h1 h2 h3 path`: the sides of the index
+            // are stages, not a staged and an unstaged change, so neither
+            // is set — an unmerged path is in the conflict list alone.
             Some('u') => token.splitn(11, ' ').nth(10).map(|path| StatusEntry {
-                conflicted: true,
+                conflict: ConflictKind::from_xy(token.split(' ').nth(1).unwrap_or(""))
+                    .or(Some(ConflictKind::BothModified)),
+                staged: None,
+                unstaged: None,
                 ..changed(token, path)
             }),
             Some('?') => token.strip_prefix("? ").map(|path| StatusEntry {
@@ -59,7 +65,7 @@ pub fn status(text: &str) -> Status {
                 staged: None,
                 unstaged: Some(ChangeKind::Added),
                 untracked: true,
-                conflicted: false,
+                conflict: None,
                 nested: false,
             }),
             // `!` is ignored files, asked for by nobody here.
@@ -82,7 +88,7 @@ fn changed(token: &str, path: &str) -> StatusEntry {
         staged,
         unstaged,
         untracked: false,
-        conflicted: false,
+        conflict: None,
         nested: false,
     }
 }
@@ -150,8 +156,13 @@ mod tests {
         let status = status(text);
         assert!(status.detached);
         assert_eq!(status.head, None);
-        assert!(status.entries[0].conflicted);
+        assert_eq!(status.entries[0].conflict, Some(ConflictKind::BothModified));
         assert_eq!(status.entries[0].path, "src/lib.rs");
+        assert_eq!(
+            (status.entries[0].staged, status.entries[0].unstaged),
+            (None, None),
+            "an unmerged path is neither staged nor changed: it is in conflict"
+        );
     }
 
     #[test]

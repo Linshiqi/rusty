@@ -235,14 +235,91 @@ pub struct StatusEntry {
     pub unstaged: Option<ChangeKind>,
     /// Not in the index at all.
     pub untracked: bool,
-    /// A merge left it with conflict markers.
-    pub conflicted: bool,
+    /// A merge, rebase, cherry-pick or revert could not join the two sides
+    /// here: what each side did to the path. `None` for an ordinary entry.
+    #[serde(default)]
+    pub conflict: Option<ConflictKind>,
     /// An untracked directory that is a git repository of its own with no
     /// commits — what esp-generate left in a firmware crate before rusty
     /// removed it. git will not add it (`does not have a commit checked
     /// out`), and nothing in it is in this repository until its `.git` goes.
     #[serde(default)]
     pub nested: bool,
+}
+
+impl StatusEntry {
+    /// The path is unmerged: in the conflict list until it is resolved.
+    pub fn is_conflicted(&self) -> bool {
+        self.conflict.is_some()
+    }
+}
+
+/// What each side did to a path an operation could not join, read off
+/// porcelain's `XY` for an unmerged entry (`git status --help`, *Short
+/// Format*). "Us" is HEAD's side — the branch checked out in a merge, the
+/// branch being rebased onto in a rebase — and "them" is what is being
+/// brought in; `git checkout --ours` and `--theirs` mean the same two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictKind {
+    /// `UU`: both changed it.
+    BothModified,
+    /// `AA`: both added a file of this name.
+    BothAdded,
+    /// `DD`: both deleted it — a rename each made differently.
+    BothDeleted,
+    /// `AU`: only this side has it.
+    AddedByUs,
+    /// `UA`: only the other side has it.
+    AddedByThem,
+    /// `DU`: this side deleted it and the other changed it.
+    DeletedByUs,
+    /// `UD`: this side changed it and the other deleted it.
+    DeletedByThem,
+}
+
+impl ConflictKind {
+    /// The kind an unmerged entry's `XY` names.
+    pub fn from_xy(xy: &str) -> Option<ConflictKind> {
+        Some(match xy {
+            "UU" => ConflictKind::BothModified,
+            "AA" => ConflictKind::BothAdded,
+            "DD" => ConflictKind::BothDeleted,
+            "AU" => ConflictKind::AddedByUs,
+            "UA" => ConflictKind::AddedByThem,
+            "DU" => ConflictKind::DeletedByUs,
+            "UD" => ConflictKind::DeletedByThem,
+            _ => return None,
+        })
+    }
+
+    /// Whether HEAD's side has a version of the file to keep.
+    pub fn ours(self) -> bool {
+        matches!(
+            self,
+            ConflictKind::BothModified
+                | ConflictKind::BothAdded
+                | ConflictKind::AddedByUs
+                | ConflictKind::DeletedByThem
+        )
+    }
+
+    /// Whether the side brought in has a version of the file to keep.
+    pub fn theirs(self) -> bool {
+        matches!(
+            self,
+            ConflictKind::BothModified
+                | ConflictKind::BothAdded
+                | ConflictKind::AddedByThem
+                | ConflictKind::DeletedByUs
+        )
+    }
+
+    /// Whether the file can hold conflict markers at all: only where both
+    /// sides have a version of it.
+    pub fn has_markers(self) -> bool {
+        self.ours() && self.theirs()
+    }
 }
 
 /// Where the working tree stands.
@@ -264,6 +341,12 @@ pub struct Status {
     /// the panel offers and git's refusal names the state, not the way out.
     #[serde(default)]
     pub operation: Option<GitOperation>,
+    /// What the stopped operation is bringing in, in its own words: the
+    /// first line of `MERGE_MSG` for a merge, a cherry-pick or a revert —
+    /// `Merge branch 'main' of github.com:…` — and the branch being
+    /// rebased for a rebase. `None` when git left nothing to read.
+    #[serde(default)]
+    pub operation_message: Option<String>,
 }
 
 /// An operation git has started and not finished, read off the files it

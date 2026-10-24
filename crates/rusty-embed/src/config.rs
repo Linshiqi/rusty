@@ -309,7 +309,8 @@ mod file {
     use serde::{Deserialize, Serialize};
 
     use crate::model::{
-        AssistantChoice, DockLayout, EditorView, HistoryLayout, ProjectTabs, WindowLayout,
+        AssistantChoice, DockLayout, EditorView, GitLayout, HistoryLayout, PagePlace, ProjectTabs,
+        TabPlace, WindowLayout,
     };
 
     #[derive(Debug, Default, Serialize, Deserialize)]
@@ -370,6 +371,17 @@ mod file {
         /// `[layout.history]`, the History page's dividers.
         #[serde(default)]
         pub history: Option<History>,
+        /// `[layout.git]`, how the Git panel draws its lists.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub git: Option<GitPanel>,
+    }
+
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    pub(super) struct GitPanel {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub tree: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub folded: Vec<String>,
     }
 
     /// The History page's dividers, each key read on its own so a file
@@ -459,6 +471,13 @@ mod file {
                     }
                     .sane()
                 }),
+                git: file
+                    .git
+                    .as_ref()
+                    .map_or_else(GitLayout::default, |g| GitLayout {
+                        tree: g.tree,
+                        folded: g.folded.clone(),
+                    }),
             }
         }
     }
@@ -488,6 +507,10 @@ mod file {
                     log: layout.history.log,
                     details: layout.history.details,
                     sides: layout.history.sides,
+                }),
+                git: (layout.git != GitLayout::default()).then(|| GitPanel {
+                    tree: layout.git.tree,
+                    folded: layout.git.folded.clone(),
                 }),
             }
         }
@@ -573,6 +596,54 @@ mod file {
         pub second: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub second_active: Option<String>,
+        /// `[open_tabs.places."src/main.rs"]`: where each file was left.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        pub places: std::collections::BTreeMap<String, Place>,
+    }
+
+    /// One file's place, flat as a hand would write it.
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    pub(super) struct Place {
+        #[serde(default)]
+        pub top: u32,
+        #[serde(default)]
+        pub line: u32,
+        #[serde(default)]
+        pub column: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub block: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub within: Option<f32>,
+    }
+
+    impl From<&Place> for TabPlace {
+        fn from(p: &Place) -> Self {
+            TabPlace {
+                top: p.top,
+                line: p.line,
+                column: p.column,
+                page: p.block.map(|block| PagePlace {
+                    block,
+                    within: p
+                        .within
+                        .filter(|w| w.is_finite())
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 1.0),
+                }),
+            }
+        }
+    }
+
+    impl From<&TabPlace> for Place {
+        fn from(p: &TabPlace) -> Self {
+            Place {
+                top: p.top,
+                line: p.line,
+                column: p.column,
+                block: p.page.map(|page| page.block),
+                within: p.page.map(|page| page.within),
+            }
+        }
     }
 
     impl From<Workbench> for super::WorkbenchState {
@@ -605,6 +676,11 @@ mod file {
                         active: t.active,
                         second: t.second,
                         second_active: t.second_active,
+                        places: t
+                            .places
+                            .iter()
+                            .map(|(path, place)| (path.clone(), TabPlace::from(place)))
+                            .collect(),
                     })
                     .collect(),
                 skipped_update: file.skipped_update,
@@ -648,6 +724,11 @@ mod file {
                         active: t.active.clone(),
                         second: t.second.clone(),
                         second_active: t.second_active.clone(),
+                        places: t
+                            .places
+                            .iter()
+                            .map(|(path, place)| (path.clone(), Place::from(place)))
+                            .collect(),
                     })
                     .collect(),
                 skipped_update: state.skipped_update.clone(),
@@ -980,6 +1061,31 @@ mod tests {
                 // the fields it leaves alone.
                 second: vec!["src/lib.rs".into()],
                 second_active: Some("src/lib.rs".into()),
+                // A code file's place and a page's, every field off zero.
+                places: [
+                    (
+                        "src/main.rs".to_string(),
+                        crate::model::TabPlace {
+                            top: 40,
+                            line: 52,
+                            column: 7,
+                            page: None,
+                        },
+                    ),
+                    (
+                        "README.md".to_string(),
+                        crate::model::TabPlace {
+                            top: 3,
+                            line: 9,
+                            column: 1,
+                            page: Some(crate::model::PagePlace {
+                                block: 17,
+                                within: 0.25,
+                            }),
+                        },
+                    ),
+                ]
+                .into(),
             }],
             skipped_update: Some("0.9.9".into()),
             // Every switch off its default, which is on.
@@ -1020,6 +1126,10 @@ mod tests {
                     log: 0.45,
                     details: 0.25,
                     sides: 0.65,
+                },
+                git: crate::model::GitLayout {
+                    tree: true,
+                    folded: vec!["staged".into(), "stashes".into()],
                 },
             },
         };
@@ -1144,6 +1254,7 @@ mod tests {
             active: None,
             second: Vec::new(),
             second_active: None,
+            places: Default::default(),
         };
         let mut list = Vec::new();
         push_tabs(&mut list, strip("E:/work/blinky", "src/main.rs"));

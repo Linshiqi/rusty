@@ -47,6 +47,7 @@ component TipArea inherits TouchArea {
 // press on the page finds the line and the character under it; a
 // selection crossing a line is drawn behind its pieces.
 component Flow inherits VerticalLayout {
+    in property <bool> page;
     in property <[MdLine]> lines;
     in property <int> key;
     in property <length> font-size;
@@ -59,7 +60,9 @@ component Flow inherits VerticalLayout {
     property <length> left: self.absolute-position.x - root.view-x;
     property <length> top: self.absolute-position.y - root.view-y;
     function placed() {
-        Shell.md-placed(root.key, root.left, root.top, root.width, root.height, root.font-size);
+        if (root.page) {
+            Shell.md-placed(root.key, root.left, root.top, root.width, root.height, root.font-size);
+        }
     }
     init => {
         Shell.md-flow-width(root.key, root.width, root.font-size);
@@ -127,6 +130,7 @@ component Flow inherits VerticalLayout {
 // it crosses. The lines start 8 px in from its corner and are each
 // `font-size * 1.45` tall, which is what Rust measures a press against.
 component CodeBox inherits Rectangle {
+    in property <bool> page;
     in property <[CodeLine]> lines;
     in property <int> key;
     in property <length> font-size;
@@ -138,7 +142,9 @@ component CodeBox inherits Rectangle {
     property <length> left: self.absolute-position.x - root.view-x;
     property <length> top: self.absolute-position.y - root.view-y;
     function placed() {
-        Shell.md-placed(root.key, root.left, root.top, root.width, root.height, root.font-size);
+        if (root.page) {
+            Shell.md-placed(root.key, root.left, root.top, root.width, root.height, root.font-size);
+        }
     }
     init => {
         placed();
@@ -184,6 +190,11 @@ component CodeBox inherits Rectangle {
 }
 
 export component MarkdownView inherits VerticalLayout {
+    // A `.md` file's page, as against the hover card's docs, an answer of
+    // the assistant's or a release's notes: only the page says where its
+    // blocks stand (`Shell.md-placed`, `Shell.md-block`), for its selection
+    // and for where its reading stopped.
+    in property <bool> page;
     in property <[MdBlock]> blocks;
     in property <length> font-size: Theme.small;
     // A heading's size against the text's, by level, the fourth on at the
@@ -193,7 +204,25 @@ export component MarkdownView inherits VerticalLayout {
     in property <float> h2-scale: 1.35;
     in property <float> h3-scale: 1.15;
     spacing: 8px;
-    for block in root.blocks: VerticalLayout {
+    for block[index] in root.blocks: VerticalLayout {
+        // Where the block stands from the page's top, so the page's place
+        // can be kept as a block and how far into it.
+        property <length> block-top: self.absolute-position.y - root.absolute-position.y;
+        init => {
+            if (root.page) {
+                Shell.md-block(index, self.block-top, self.height);
+            }
+        }
+        changed block-top => {
+            if (root.page) {
+                Shell.md-block(index, self.block-top, self.height);
+            }
+        }
+        changed height => {
+            if (root.page) {
+                Shell.md-block(index, self.block-top, self.height);
+            }
+        }
         // Text, indented for the quotes and lists it is in.
         if block.kind == 0 && !block.caption: HorizontalLayout {
             padding-left: block.quote * 12px + max(0, block.depth - 1) * 16px;
@@ -221,6 +250,7 @@ export component MarkdownView inherits VerticalLayout {
                 }
             }
             if block.flowing: Flow {
+                page: root.page;
                 view-x: root.absolute-position.x;
                 view-y: root.absolute-position.y;
                 lines: block.flow;
@@ -245,6 +275,7 @@ export component MarkdownView inherits VerticalLayout {
                 }
             }
             if block.flowing: Flow {
+                page: root.page;
                 view-x: root.absolute-position.x;
                 view-y: root.absolute-position.y;
                 lines: block.flow;
@@ -263,6 +294,7 @@ export component MarkdownView inherits VerticalLayout {
                 link-color: Theme.slate;
             }
             if block.flowing: Flow {
+                page: root.page;
                 view-x: root.absolute-position.x;
                 view-y: root.absolute-position.y;
                 lines: block.flow;
@@ -272,6 +304,7 @@ export component MarkdownView inherits VerticalLayout {
             }
         }
         if block.kind == 2: CodeBox {
+            page: root.page;
             lines: block.lines;
             key: block.key;
             font-size: root.font-size;
@@ -398,6 +431,7 @@ export component MarkdownView inherits VerticalLayout {
                                 default-font-size: root.font-size;
                             }
                             if cell.flowing: Flow {
+                                page: root.page;
                                 view-x: root.absolute-position.x;
                                 view-y: root.absolute-position.y;
                                 lines: cell.flow;

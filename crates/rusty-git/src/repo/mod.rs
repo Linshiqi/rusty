@@ -28,7 +28,7 @@ mod stamp;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::graph;
 use crate::model::{CommitDetail, GitOperation, History, RefKind, Refs, Remote, Stash, Status};
@@ -233,7 +233,12 @@ pub fn status(root: &Path) -> Result<Status> {
         ],
     )?;
     let mut status = parse::status(&text);
-    status.operation = dirs(root).ok().and_then(|dirs| operation(&dirs.git));
+    if let Ok(dirs) = dirs(root) {
+        status.operation = operation(&dirs.git);
+        if status.operation.is_some() {
+            status.operation_message = operation_message(&dirs.git);
+        }
+    }
     // git does not descend into another repository, so one shows as a single
     // untracked directory; the ones with no commits are the ones git will
     // refuse to add. A metadata read each, and only for untracked directories.
@@ -261,6 +266,26 @@ fn operation(git_dir: &Path) -> Option<GitOperation> {
     } else {
         None
     }
+}
+
+/// What a stopped operation is bringing in, as git wrote it down: the
+/// first line of `MERGE_MSG` that is not a comment — a merge's, a
+/// cherry-pick's or a revert's subject — or, in a rebase, the branch being
+/// rebased (`rebase-merge/head-name`, `refs/heads/` taken off).
+fn operation_message(git_dir: &Path) -> Option<String> {
+    let first_line = |path: PathBuf| -> Option<String> {
+        let text = std::fs::read_to_string(path).ok()?;
+        text.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_string)
+    };
+    first_line(git_dir.join("MERGE_MSG")).or_else(|| {
+        ["rebase-merge", "rebase-apply"].iter().find_map(|dir| {
+            first_line(git_dir.join(dir).join("head-name"))
+                .map(|name| name.trim_start_matches("refs/heads/").to_string())
+        })
+    })
 }
 
 /// Every stash, newest first.

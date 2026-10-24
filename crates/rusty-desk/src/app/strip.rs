@@ -7,7 +7,7 @@
 use std::{path::Path, rc::Rc};
 
 use rusty_edit::text_file::{self, TextFile};
-use rusty_embed::model::ProjectTabs;
+use rusty_embed::model::{ProjectTabs, TabPlace};
 
 use super::{App, Tab};
 use crate::editor::{Document, backup::Backup};
@@ -97,12 +97,33 @@ impl App {
                 tabs.push(path);
             }
         }
+        let second = if split { files(right) } else { Vec::new() };
+        // Where each file was left: its view and caret, and the place on
+        // its page for a Markdown file read as one.
+        let places = tabs
+            .iter()
+            .chain(&second)
+            .filter_map(|path| {
+                let (top, line, column) = self.editor.place_of(path)?;
+                let page = state.page.place_of(path);
+                Some((
+                    path.clone(),
+                    TabPlace {
+                        top,
+                        line,
+                        column,
+                        page,
+                    },
+                ))
+            })
+            .collect();
         Some(ProjectTabs {
             root: project.root.to_string_lossy().into_owned(),
             tabs,
             active: front(left, left_at),
-            second: if split { files(right) } else { Vec::new() },
+            second,
             second_active: if split { front(right, right_at) } else { None },
+            places,
         })
     }
 
@@ -166,7 +187,19 @@ impl App {
             active: None,
             second: Vec::new(),
             second_active: None,
+            places: Default::default(),
         });
+        // Each file back where it was left: its view, its caret, and its
+        // page's place.
+        for (path, place) in &strip.places {
+            if self.editor.holds(path) {
+                self.editor
+                    .set_place(path, place.top, place.line, place.column);
+            }
+            if let Some(page) = place.page {
+                self.state.borrow_mut().page.keep_place(path, page);
+            }
+        }
         let held = |paths: &[String]| -> Vec<Tab> {
             paths
                 .iter()

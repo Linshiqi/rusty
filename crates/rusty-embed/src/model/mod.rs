@@ -68,6 +68,6 @@ pub use wizard::{
     crate_name_problem,
 };
 pub use workbench::{
-    AssistantChoice, DockLayout, EditorView, HistoryLayout, ProjectTabs, RelocateReport,
-    StorageLocation, UpdateProgress, WindowLayout,
+    AssistantChoice, DockLayout, EditorView, GitLayout, HistoryLayout, PagePlace, ProjectTabs,
+    RelocateReport, StorageLocation, TabPlace, UpdateProgress, WindowLayout,
 };

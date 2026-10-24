@@ -206,6 +206,14 @@ RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data cargo run -p rusty-desk --release 
 # beside the chapter clicked, pointed at and zoomed through the touch area
 # over it. On a copy of the book: it edits an SVG and keeps the draft.
 RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data RUSTY_PROBE_BOOK=1 cargo run -p rusty-desk --release -- <book-copy> <chapter.md>
+# Every tab back where it was read: two chapters and a code file scrolled,
+# switched between and checked; then, run again with `=again` on the same
+# data directory, checked after a restart (`probe_places.rs` names the
+# project it wants).
+RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data RUSTY_PROBE_PLACES=1 cargo run -p rusty-desk --release -- <project> <project>/src/main.rs
+# A merge stopped on conflicts resolved through the Git panel and the
+# conflict bar to its commit — on a copy, since it commits.
+RUSTY_PROBE=<dir> RUSTY_CONFIG_DIR=<dir>/data RUSTY_PROBE_MERGE=1 cargo run -p rusty-desk --release -- <merging-repo-copy> <a-file-in-it>
 
 # Drawing from code, the worked end: an f32 vector type, an example that
 # draws two vectors and their cross product, and a test that draws and
@@ -1368,7 +1376,23 @@ Side by side, VS Code's everyday split, and no more than two (Ctrl+\).
   its own. Every offset read from a view, kept or put back goes through
   `shade::within`, and a view the list moved above the top is put back at
   it (`view_changed`, `Shade.scrolled`), from where the list lays out
-  right.
+  right. **A Markdown page read as one was the half left over**: it is
+  drawn over the code view and kept no place at all, so a chapter came
+  back at its top after every switch — reported again as "switching tabs
+  still does not keep each one's reading position" (see *A page keeps
+  where it is being read*, under *A Markdown page*). `RUSTY_PROBE_PLACES`
+  checks pages and code together, and after a restart.
+- **Where each file was left outlives the window** (`ProjectTabs.places`,
+  `TabPlace`): the line at the top of its view, its caret, and for a page
+  read as one the block at its top. Written with the strip whenever the
+  strip is (every draft kept, so the close waits for it), put back as the
+  project opens (`Surface::set_place`, the view too when the file is
+  already on screen — the command line's file is shown before the strip
+  comes back). The top is a line, not pixels, so a text size changed in
+  between still opens on the same line.
+- **Ctrl+Shift+T reopens the file closed last**, where it was left —
+  VS Code's Reopen Closed Editor (`App::reopen_closed`, the last twenty,
+  a file deleted from the disk taken off the list).
 - **The split never shows an empty pane**: a group left with no tabs ends
   the split.
 - **Each group draws inside its own pane and nowhere else** (`clip: true` on
@@ -1890,7 +1914,26 @@ two. A file's diff is a page of its own. `app/git.rs` reads and writes,
 - **Showing the panel is not opening it.** Read everything again each
   time it was shown, it dropped the opened commit with it; a root it has
   read is only probed now (`App::git_shown`, the stamp), and a new root
-  starts clean.
+  starts clean. **And a panel already on screen as a project opens is read
+  then** (`project_opened`): its one read on being shown came before there
+  was a project, so a dock remembered on Git said "loading" until the
+  History page was opened. Found by `RUSTY_PROBE_GIT`, whose first step
+  waited twenty seconds for rows.
+- **The lists are rows under headings that fold, flat or as their
+  folders** (`crate::git_rows`, pure and tested; one `GitChange` model of
+  headings, folders and files, changed in place through `tab_drag::patch`
+  so a row under the pointer keeps its element). A heading per group —
+  *Conflicts*, *Staged*, *Changes* — folds its group away, kept in
+  `workbench.toml` (`[layout.git]`, the stashes too); the tree is VS Code's
+  *View as Tree*, folders first, a folder holding only one folder drawn as
+  one row (`book/src`), each with its count, folded for the session; a
+  heading's and a folder's verbs stage, unstage or discard what is under
+  them (a discard asked first, with the count). **An unmerged path is in
+  the conflict list and no other**: porcelain gives an unmerged entry's
+  `XY` as its stages, which the parser once read as a staged *and* an
+  unstaged change, so every conflicted file was listed twice and "Stage
+  all" staged — that is, marked resolved — files still full of markers.
+  The Git tab carries the number of changes, red while one is in conflict.
 - **Decorations are read in full** (`--decorate=full`) and a label's kind
   comes from its namespace. In the short form a local `feature/x` cannot be
   told from a remote's `origin/x`, and was drawn as a remote.
@@ -2127,8 +2170,36 @@ two. A file's diff is a page of its own. `app/git.rs` reads and writes,
   kind 4, `editor/rows.rs`) with each side washed across its rows (marks
   12 and 13); a choice is one edit through `Document::edit`, one undo. A
   conflicted file's row in Changes opens the file rather than its diff,
-  which is a combined diff nobody can act on; the panel's banner, with
-  Continue and Abort, was already there.
+  which is a combined diff nobody can act on.
+- **A stopped merge is worked through, not just announced.** The banner
+  says what it brings (`Status.operation_message`, `MERGE_MSG`'s subject,
+  or a rebase's branch) and how far it is: conflicts left, markers gone
+  but not marked, or done. Each file in the conflict list says what is
+  left in it (`git.markers`, counted beside the status by
+  `rusty_edit::conflict` — the editor's own reading) or what each side did
+  (`ConflictKind`, from the `XY`: both changed, both added, deleted on one
+  side), and its verbs take the whole file from one side — checked out and
+  staged, or removed where that side has no file (`plan::resolve_args`,
+  held against real repositories for every common kind) — or mark it
+  resolved, asking first while markers remain. In the editor a file with
+  conflicts carries a floating bar (`ConflictBar`, `app/conflicts.rs`):
+  which conflict the caret is in, previous and next, every block taken one
+  way as one edit, and, once none are left in a file git still has
+  unmerged, *Mark as resolved*. A Markdown file with conflicts opens as its
+  source, where the markers are: as a page they render as headings. A
+  stop with conflicts is said once, with a button to the first file.
+- **Unstaging during an operation asks, and Continue offers to stage what
+  is left.** A user's book was left with 216 uncommitted changes after a
+  pull's merge: everything had been unstaged mid-merge, so `merge
+  --abort` — `reset --merge`, which keeps changes not in the index —
+  aborted three times and left the merged text in the tree each time, and
+  Continue would have committed a merge that kept none of what it brought.
+  Taking anything out of the index while an operation waits now says what
+  it costs first; Continue with tracked changes unstaged offers to stage
+  them and continue, or commit only what is staged (a rebase, a
+  cherry-pick and a revert refuse unstaged changes, so for those it is
+  stage or cancel). `RUSTY_PROBE_MERGE` makes exactly that mistake and
+  checks the merge commit still carries all five changes.
 - **A push with no upstream sets one** (`-u origin <head>`), because a bare
   `git push` on a new branch refuses with a hint nobody reads. Stash is
   `push --include-untracked` — "everything I have" is what the button says.
@@ -3312,6 +3383,17 @@ The book they are measured against is a flight-control textbook in Chinese:
   cells of one row join with a tab, rows with a line, blocks with a blank
   line. A click that never became a drag opens the link under it, which
   is why the click is no longer sent through to the text underneath.
+- **A page keeps where it is being read, by block** (`Page::places`,
+  `PagePlace`): every block of a page reports where it stands
+  (`Shell.md-block`, only from the page's own `MarkdownView` — `page:
+  true` — never the hover card's or the assistant's, whose code blocks
+  once reported into the page's boxes), the scroll is bound both ways
+  (`Shell.md-scroll`), and the place is the block under the top of the
+  view and how far into it. A page coming back to the front, laid out
+  again (a formula drawn, the file changed on disk, a reflow, a zoom) or
+  opened in a new session is put back there as its blocks report their new
+  places, and held through every layout until somebody else scrolls it.
+  A pixel offset would not survive a width or a text size; a block does.
 - **The width comes back from the view.** A flowing paragraph's `Flow`
   reports its width and text size as it appears and whenever either
   changes (`Shell.md-flow-width`); the page lays out again, on the next
@@ -3596,7 +3678,9 @@ is no browser storage, and what the window remembers between runs is
   text scales), the editor's switches (`vim`,
   `EditorView`), the language, the assistant's profile, each project's tab
   strip (`open_tabs`, keyed by the directory as the filesystem sees it, so
-  another spelling of the same directory finds it), the rebound keys
+  another spelling of the same directory finds it) with where each file on
+  it was left (`places`), how the Git panel draws its lists
+  (`[layout.git]`), the rebound keys
   (`keybinds`), a skipped update and the auto-sweep. Every window shares
   it (*More than one rusty*). Drafts are files of their own, under the
   data directory's `backups/` (`editor/backup.rs`).
@@ -4962,6 +5046,15 @@ is no browser storage, and what the window remembers between runs is
   **The hypothesis that came first — fractional offsets blur text — was
   right about the motion and wrong about the text**, and only a photograph
   held between pixels told the two apart.
+- **A timer that carries a byte must carry the text it was measured in.**
+  The hover card's pause measured the pointer's byte in the file on screen
+  and, 600 ms later, read it in whatever file was on screen then: a tab
+  switched in the pause put a byte of `main.rs` into a chapter in Chinese,
+  inside a character, and the window panicked. The timer now carries the
+  path and version it measured and asks nothing when they changed, and
+  `hover_at` backs any byte up to a character first. Found by
+  `RUSTY_PROBE_PLACES`, which switches tabs with the pointer resting over
+  code — once in a few runs, as a race is.
 - **A Slint `TouchArea`'s `moved` is called only while a button is held**
   (`grabbed`, in `i-slint-core`'s `input_items.rs`), so a hover cannot be
   read there. The code view's hover card was wired to `moved`'s not-pressed

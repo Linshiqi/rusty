@@ -43,6 +43,34 @@ pub struct ProjectTabs {
     pub second: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub second_active: Option<String>,
+    /// Where each file on the strips was left, so a project opened again
+    /// reads on from where it was read rather than from the top.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub places: std::collections::BTreeMap<String, TabPlace>,
+}
+
+/// Where a file's tab was left.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TabPlace {
+    /// The line at the top of the code's view, from zero.
+    pub top: u32,
+    /// The caret's line and column (in characters), from zero.
+    pub line: u32,
+    pub column: u32,
+    /// For a Markdown file read as a page: the block at the top of the
+    /// page and how far into it, a share of its height — a place that
+    /// holds whatever width or text size the page is next drawn at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PagePlace>,
+}
+
+/// A place on a page read as one: a block, and how far down it.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagePlace {
+    pub block: u32,
+    pub within: f32,
 }
 
 /// What the editor draws around the code, beyond the text: the four things
@@ -100,6 +128,17 @@ pub struct WindowLayout {
     pub split: f32,
     /// Where the History page's panes part.
     pub history: HistoryLayout,
+    /// How the Git panel draws its lists.
+    pub git: GitLayout,
+}
+
+/// The Git panel's lists: flat or as their folders, and which of the
+/// groups — `conflicts`, `staged`, `changes`, `stashes` — are folded away.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLayout {
+    pub tree: bool,
+    pub folded: Vec<String>,
 }
 
 /// The History page's four dividers, Fork's shape: the refs against the
@@ -239,6 +278,7 @@ impl Default for WindowLayout {
             },
             split: 0.5,
             history: HistoryLayout::default(),
+            git: GitLayout::default(),
         }
     }
 }

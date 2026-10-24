@@ -44,6 +44,9 @@ impl App {
     /// Keep every open draft and forget every backup of a file now saved:
     /// the project is going, or the window is.
     pub(super) fn keep_drafts(&self) {
+        // The strip too, with where each file was left: written by the same
+        // keeper, so the wait at the window's close waits for it.
+        self.strip_changed();
         let Some(root) = self.root() else { return };
         for (path, draft) in self.editor.backups() {
             match draft {

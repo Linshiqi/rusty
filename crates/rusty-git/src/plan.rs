@@ -1,6 +1,8 @@
 //! The decisions a write makes before it is a `git` line: which remote a
-//! push goes to and how a branch is checked out. Pure, so the tests pin what
-//! each answers.
+//! push goes to, how a branch is checked out and how a conflicted file is
+//! resolved. Pure, so the tests pin what each answers.
+
+use crate::model::ConflictKind;
 
 fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|arg| (*arg).to_string()).collect()
@@ -35,6 +37,46 @@ pub fn pick_remote(upstream: Option<&str>, known: &[String]) -> Option<String> {
         .find(|name| *name == "origin")
         .or_else(|| known.first())
         .cloned()
+}
+
+/// Which side a conflicted file is resolved to as a whole: HEAD's — the
+/// branch checked out — or the one being brought in. VS Code's words for
+/// them, *current* and *incoming*, are the window's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Current,
+    Incoming,
+}
+
+/// The `git` commands, in order, that resolve the whole of `path` to
+/// `side`: that side's version checked out and staged — `checkout --ours`
+/// or `--theirs`, then `add` — or, where that side deleted the file or
+/// never had it, the path removed (`rm -f`, which leaves nothing of the
+/// other side's version behind, which is what choosing this side means).
+pub fn resolve_args(path: &str, kind: ConflictKind, side: Side) -> Vec<Vec<String>> {
+    let (has, flag) = match side {
+        Side::Current => (kind.ours(), "--ours"),
+        Side::Incoming => (kind.theirs(), "--theirs"),
+    };
+    if has {
+        vec![
+            args(&["checkout", flag, "--", path]),
+            args(&["add", "--", path]),
+        ]
+    } else {
+        vec![args(&["rm", "-q", "-f", "--", path])]
+    }
+}
+
+/// The `git` command that marks `path` resolved as the working tree has
+/// it: staged where the file is there, removed from the index where it is
+/// not — a side's deletion kept by deleting the file.
+pub fn mark_resolved_args(path: &str, in_tree: bool) -> Vec<String> {
+    if in_tree {
+        args(&["add", "--", path])
+    } else {
+        args(&["rm", "-q", "--cached", "--", path])
+    }
 }
 
 /// The arguments that pull. git 2.33 and later refuse a plain `git pull`
@@ -300,5 +342,46 @@ mod prompt_tests {
         assert_eq!(pull_args(None), vec!["pull", "--no-rebase"]);
         assert_eq!(pull_args(Some("true")), vec!["pull"]);
         assert_eq!(pull_args(Some("false")), vec!["pull"]);
+    }
+
+    /// A side that has the file checks it out and stages it; a side that
+    /// deleted it, or never had it, removes it — never a `checkout` of a
+    /// stage that is not there, which git refuses (`does not have our
+    /// version`).
+    #[test]
+    fn a_file_resolves_to_a_side_by_what_that_side_has() {
+        let both = resolve_args("a.rs", ConflictKind::BothModified, Side::Current);
+        assert_eq!(
+            both,
+            vec![
+                vec!["checkout", "--ours", "--", "a.rs"],
+                vec!["add", "--", "a.rs"]
+            ]
+        );
+        let theirs = resolve_args("a.rs", ConflictKind::BothAdded, Side::Incoming);
+        assert_eq!(theirs[0], vec!["checkout", "--theirs", "--", "a.rs"]);
+        for (kind, side) in [
+            (ConflictKind::DeletedByUs, Side::Current),
+            (ConflictKind::DeletedByThem, Side::Incoming),
+            (ConflictKind::AddedByThem, Side::Current),
+            (ConflictKind::AddedByUs, Side::Incoming),
+            (ConflictKind::BothDeleted, Side::Current),
+            (ConflictKind::BothDeleted, Side::Incoming),
+        ] {
+            assert_eq!(
+                resolve_args("a.rs", kind, side),
+                vec![vec!["rm", "-q", "-f", "--", "a.rs"]],
+                "{kind:?} to {side:?}"
+            );
+        }
+        assert_eq!(
+            resolve_args("a.rs", ConflictKind::DeletedByUs, Side::Incoming)[0],
+            vec!["checkout", "--theirs", "--", "a.rs"]
+        );
+        assert_eq!(mark_resolved_args("a.rs", true), vec!["add", "--", "a.rs"]);
+        assert_eq!(
+            mark_resolved_args("a.rs", false),
+            vec!["rm", "-q", "--cached", "--", "a.rs"]
+        );
     }
 }

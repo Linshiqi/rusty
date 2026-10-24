@@ -49,6 +49,15 @@ export global Icons {
     out property <string> chevron: "M5.5 8 10 12.5 14.5 8";
     out property <string> chevron-right: "M8 5.5 12.5 10 8 14.5";
     out property <string> arrow-up: "M10 15.5V4.5M5.5 9 10 4.5 14.5 9";
+    // A conflict taken from one side: the current (HEAD's) on the left,
+    // the incoming on the right, as VS Code's merge editor lays them out;
+    // both, one above the other.
+    out property <string> take-current: "M15.5 10H4.5M9 5.5 4.5 10 9 14.5";
+    out property <string> take-incoming: "M4.5 10h11M11 5.5 15.5 10 11 14.5";
+    out property <string> take-both: "M4.5 6.5h11M4.5 13.5h11M10 3.5v13";
+    // A file list drawn flat, and drawn as its folders.
+    out property <string> list-flat: "M7.5 5.5h9M7.5 10h9M7.5 14.5h9M3.5 5.5h1M3.5 10h1M3.5 14.5h1";
+    out property <string> list-tree: "M4.5 4v11.5M4.5 7.5h3.5M4.5 14h3.5M10.5 7.5h5.5M10.5 14h5.5";
     out property <string> arrow-down: "M10 4.5v11M5.5 11 10 15.5 14.5 11";
     out property <string> in-selection: "M3.5 5h13M3.5 15h13M6 8.5h8v3H6z";
     out property <string> replace: "M4 5.5h7M4 9h4.5M13.5 7.5v5.5H6M8.5 10.5 6 13l2.5 2.5";

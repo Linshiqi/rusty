@@ -26,6 +26,7 @@ mod build;
 mod calls;
 mod clone;
 mod colour;
+mod conflicts;
 mod context;
 mod crates;
 mod debug;
@@ -177,6 +178,9 @@ struct State {
     vim: bool,
     /// Where updating rusty itself stands.
     update: updating::Stage,
+    /// The files whose last tab was closed, newest last, each with where it
+    /// was left: what Reopen Closed Editor (Ctrl+Shift+T) brings back.
+    closed: Vec<(String, (u32, u32, u32))>,
     /// Split: the other editor group's tabs and its front one — `tabs` and
     /// `active` are always the group with the keys — and which side that
     /// group is on, 0 left and 1 right.
@@ -613,6 +617,9 @@ impl App {
             .content_zoom(&what, delta));
         on!(on_md_placed, |app, key, x, y, w, h, size| app
             .md_placed(key, x, y, w, h, size));
+        on!(on_md_block, |app, index, y, height| app
+            .md_block(index, y, height));
+        on!(on_md_scrolled, |app, offset| app.md_scrolled(offset));
         on!(on_page_press, |app, x, y, shift| app
             .page_press(x, y, shift));
         on!(on_page_drag, |app, x, y| app.page_drag(x, y));
@@ -644,6 +651,11 @@ impl App {
         ));
         on!(on_git_file_menu, |app, path, staged, x, y| app
             .git_change_menu(&path, staged, x, y));
+        on!(on_git_row, |app, verb, group, path| app.git_row(
+            &verb,
+            group,
+            path.to_string()
+        ));
         on!(on_git_identity_save, |app, name, email, local| app
             .git_identity_save(
                 name.to_string(),
@@ -842,6 +854,7 @@ impl App {
             if let Some(app) = weak.upgrade() {
                 app.sync_tabs();
                 app.sync_markdown();
+                app.sync_conflict_bar();
                 app.back_up_soon(path);
             }
         });
@@ -850,6 +863,7 @@ impl App {
             if let Some(app) = weak.upgrade() {
                 app.sync_status();
                 app.caret_moved();
+                app.sync_conflict_bar();
             }
         });
         let weak = Rc::downgrade(self);
@@ -913,6 +927,16 @@ impl App {
             "editor.unfold-all" => self.keyed().fold_all(false),
             "editor.split" => self.split(),
             "editor.detach" => self.detach(None, None),
+            "editor.reopen" => self.reopen_closed(),
+            "editor.conflict-next" => self.conflict_step(true),
+            "editor.conflict-previous" => self.conflict_step(false),
+            "editor.conflicts-current" => {
+                self.conflicts_take(rusty_edit::conflict::Choice::Current)
+            }
+            "editor.conflicts-incoming" => {
+                self.conflicts_take(rusty_edit::conflict::Choice::Incoming)
+            }
+            "editor.conflicts-both" => self.conflicts_take(rusty_edit::conflict::Choice::Both),
             "update.check" => self.update_check(true),
             "update.download" => self.update_download(),
             "update.restart" => self.update_restart(),
@@ -1139,6 +1163,12 @@ impl App {
         }
         self.start_servers();
         self.watch_project();
+        // A Git panel already on screen — the dock remembered on it — was
+        // shown before there was a project to read, and would say it is
+        // loading until something else asked.
+        if self.git_visible() {
+            self.git_shown();
+        }
         self.scan_unlinked();
         self.probe_environment();
         self.load_board(None);
@@ -1310,6 +1340,25 @@ impl App {
     fn drop_tab_anywhere(self: &Rc<Self>, id: &str) {
         let other = !self.state.borrow().tabs.iter().any(|t| t.id() == id);
         self.drop_tab(other, id);
+        // Gone from the disk: nothing to reopen.
+        self.state
+            .borrow_mut()
+            .closed
+            .retain(|(path, _)| Tab::File(path.clone()).id() != id);
+    }
+
+    /// Ctrl+Shift+T: the file whose tab was closed last opened again, where
+    /// it was left; said when there is none.
+    fn reopen_closed(self: &Rc<Self>) {
+        let last = self.state.borrow_mut().closed.pop();
+        let Some((path, (top, line, column))) = last else {
+            self.note_transient(0, t!("desk.reopen-none"));
+            return;
+        };
+        let keep = path.clone();
+        self.open_file_then(path, move |app| {
+            app.editor.set_place(&keep, top, line, column);
+        });
     }
 
     fn drop_tab(self: &Rc<Self>, other: bool, id: &str) {
@@ -1336,6 +1385,16 @@ impl App {
         if let Tab::File(path) = &closed
             && self.views_of(path) == 0
         {
+            if !rusty_edit::is_expansion(path)
+                && let Some(place) = self.editor.place_of(path)
+            {
+                let mut state = self.state.borrow_mut();
+                state.closed.retain(|(p, _)| p != path);
+                state.closed.push((path.clone(), place));
+                if state.closed.len() > 20 {
+                    state.closed.remove(0);
+                }
+            }
             self.backup_timers.borrow_mut().remove(path);
             self.editor.close(path);
         }
@@ -1460,6 +1519,7 @@ impl App {
             Some(Tab::File(path)) => self.editor.show(&path),
             _ => self.editor.show_nothing(),
         }
+        self.sync_conflict_bar();
         self.sync_tabs();
         self.strip_changed();
         self.sync_tree();
@@ -2039,10 +2099,23 @@ impl App {
                 .panels()
                 .iter()
                 .filter(|(id, ..)| crate::docks::listed(id, has_content, front, hidden))
-                .map(|(id, title, glyph)| PanelTab {
-                    id: (*id).into(),
-                    title: rusty_i18n::lookup(title).into(),
-                    icon: icon(*glyph),
+                .map(|(id, title, glyph)| {
+                    // The Git panel counts what has changed, red while
+                    // anything is in conflict.
+                    let (count, alert) = match (*id, state.git.status.as_ref()) {
+                        ("git", Some(status)) => (
+                            status.entries.len() as i32,
+                            status.entries.iter().any(|e| e.is_conflicted()),
+                        ),
+                        _ => (0, false),
+                    };
+                    PanelTab {
+                        id: (*id).into(),
+                        title: rusty_i18n::lookup(title).into(),
+                        icon: icon(*glyph),
+                        count,
+                        alert,
+                    }
                 })
                 .collect();
             ModelRc::new(VecModel::from(tabs))

@@ -54,6 +54,21 @@ component DockHeader inherits Rectangle {
                     font-weight: 600;
                     vertical-alignment: center;
                 }
+                if panel.count > 0: Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 15px;
+                    width: max(15px, count-text.preferred-width + 8px);
+                    border-radius: 7.5px;
+                    background: panel.alert ? Theme.crimson : Theme.line-strong;
+                    count-text := Text {
+                        text: panel.count > 999 ? "999+" : panel.count;
+                        color: panel.alert ? #ffffff : Theme.label;
+                        font-size: Theme.caption * 0.9;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
             touch := TouchArea {
                 clicked => {

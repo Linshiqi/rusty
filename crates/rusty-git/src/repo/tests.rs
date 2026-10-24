@@ -408,7 +408,12 @@ fn a_conflicted_merge_is_named_until_it_is_aborted() {
 
     let status = status(root).expect("status");
     assert_eq!(status.operation, Some(GitOperation::Merge));
-    assert!(status.entries.iter().any(|e| e.conflicted));
+    assert!(status.entries.iter().any(|e| e.is_conflicted()));
+    assert_eq!(
+        status.operation_message.as_deref(),
+        Some("Merge branch 'other'"),
+        "MERGE_MSG's subject says what the merge brings"
+    );
 
     git_in(root, &["merge", "--abort"]);
     assert_eq!(status_of(root).operation, None);
@@ -428,5 +433,81 @@ fn a_directory_without_a_repository_says_so() {
     match history(&outside, None, LIMIT) {
         Err(Error::NotARepository { .. }) | Err(Error::Spawn { .. }) => {}
         other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// Every kind of conflict a merge commonly leaves — both changed a file,
+/// both added one, one changed what the other deleted, both ways round —
+/// resolved to each side by the plan's own commands, after which the merge
+/// has nothing left in conflict and commits. The side chosen is what the
+/// tree holds afterwards: its text, or no file where it had none.
+#[test]
+fn every_common_conflict_resolves_to_either_side_and_the_merge_commits() {
+    use crate::model::ConflictKind;
+    use crate::plan::{Side, resolve_args};
+    for side in [Side::Current, Side::Incoming] {
+        let Some(dir) = repository() else {
+            eprintln!("skipping: git is not available on this machine");
+            return;
+        };
+        let root = dir.path();
+        std::fs::write(root.join("gone-there.txt"), "base\n").unwrap();
+        std::fs::write(root.join("gone-here.txt"), "base\n").unwrap();
+        git_in(root, &["add", "."]);
+        git_in(root, &["commit", "-q", "-m", "base"]);
+        git_in(root, &["checkout", "-q", "-b", "other"]);
+        std::fs::write(root.join("a.txt"), "theirs\n").unwrap();
+        std::fs::write(root.join("new.txt"), "theirs new\n").unwrap();
+        std::fs::remove_file(root.join("gone-there.txt")).unwrap();
+        std::fs::write(root.join("gone-here.txt"), "theirs edit\n").unwrap();
+        git_in(root, &["add", "-A"]);
+        git_in(root, &["commit", "-q", "-m", "theirs"]);
+        git_in(root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("a.txt"), "ours\n").unwrap();
+        std::fs::write(root.join("new.txt"), "ours new\n").unwrap();
+        std::fs::write(root.join("gone-there.txt"), "ours edit\n").unwrap();
+        std::fs::remove_file(root.join("gone-here.txt")).unwrap();
+        git_in(root, &["add", "-A"]);
+        git_in(root, &["commit", "-q", "-m", "ours"]);
+        assert_eq!(git_out(root, &["merge", "other"]).status.code(), Some(1));
+
+        let kinds: Vec<(String, ConflictKind)> = status_of(root)
+            .entries
+            .iter()
+            .filter_map(|e| e.conflict.map(|k| (e.path.clone(), k)))
+            .collect();
+        let kind_of = |path: &str| kinds.iter().find(|(p, _)| p == path).map(|(_, k)| *k);
+        assert_eq!(kind_of("a.txt"), Some(ConflictKind::BothModified));
+        assert_eq!(kind_of("new.txt"), Some(ConflictKind::BothAdded));
+        assert_eq!(kind_of("gone-there.txt"), Some(ConflictKind::DeletedByThem));
+        assert_eq!(kind_of("gone-here.txt"), Some(ConflictKind::DeletedByUs));
+
+        for (path, kind) in &kinds {
+            for command in resolve_args(path, *kind, side) {
+                let words: Vec<&str> = command.iter().map(String::as_str).collect();
+                git_in(root, &words);
+            }
+        }
+        assert!(
+            !status_of(root).entries.iter().any(|e| e.is_conflicted()),
+            "{side:?}: nothing left in conflict"
+        );
+        let read = |name: &str| std::fs::read_to_string(root.join(name)).ok();
+        match side {
+            Side::Current => {
+                assert_eq!(read("a.txt").as_deref(), Some("ours\n"));
+                assert_eq!(read("new.txt").as_deref(), Some("ours new\n"));
+                assert_eq!(read("gone-there.txt").as_deref(), Some("ours edit\n"));
+                assert_eq!(read("gone-here.txt"), None, "ours deleted it");
+            }
+            Side::Incoming => {
+                assert_eq!(read("a.txt").as_deref(), Some("theirs\n"));
+                assert_eq!(read("new.txt").as_deref(), Some("theirs new\n"));
+                assert_eq!(read("gone-there.txt"), None, "theirs deleted it");
+                assert_eq!(read("gone-here.txt").as_deref(), Some("theirs edit\n"));
+            }
+        }
+        git_in(root, &["commit", "-q", "--no-edit"]);
+        assert_eq!(status_of(root).operation, None);
     }
 }

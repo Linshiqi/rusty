@@ -115,7 +115,17 @@ pub const ALL: &[Action] = &[
         Some("Ctrl+K Ctrl+0"),
     ),
     action("editor.vim", "menu.view.vim", None),
+    // A file's merge conflicts, no key of their own, as in VS Code.
+    action("editor.conflict-next", "desk.conflict-next", None),
+    action("editor.conflict-previous", "desk.conflict-previous", None),
+    action("editor.conflicts-current", "desk.conflicts-current", None),
+    action("editor.conflicts-incoming", "desk.conflicts-incoming", None),
+    action("editor.conflicts-both", "desk.conflicts-both", None),
+    action("git.mark-resolved", "git.mark-resolved", None),
+    action("git.show-conflicts", "git.show-conflicts", None),
     action("editor.split", "desk.split", Some("Ctrl+\\")),
+    // VS Code's Reopen Closed Editor, on its chord.
+    action("editor.reopen", "desk.reopen", Some("Ctrl+Shift+T")),
     // No key of its own, as in VS Code.
     action("editor.detach", "desk.detach", None),
     action("update.check", "menu.help.check-updates", None),

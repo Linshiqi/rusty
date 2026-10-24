@@ -133,6 +133,11 @@
 //! page's formulas and figures in both themes, the pictures beside it as
 //! pages of their own, and the book's symbol table (`book` below), and
 //! drags a selection across a page and selects all of it.
+//! With `RUSTY_PROBE_PLACES`, every tab comes back where it was read
+//! (`probe_places.rs`).
+//! With `RUSTY_PROBE_MERGE`, a merge stopped on conflicts is resolved
+//! through the Git panel and the conflict bar to its commit
+//! (`probe_merge.rs`).
 //! With `RUSTY_PROBE_CONFLICT`, on a file git left conflict markers in, it
 //! photographs the lenses and the tints in both themes, resolves the first
 //! block to its incoming side through the lens's own callback, prints the
@@ -331,6 +336,8 @@ pub fn start(window: &AppWindow) {
     let reading_book = std::env::var_os("RUSTY_PROBE_BOOK").is_some();
     let unlinking = std::env::var_os("RUSTY_PROBE_UNLINKED").is_some();
     let conflicting = std::env::var_os("RUSTY_PROBE_CONFLICT").is_some();
+    let placing = std::env::var_os("RUSTY_PROBE_PLACES").is_some();
+    let merging = std::env::var_os("RUSTY_PROBE_MERGE").is_some();
     let failing = std::env::var_os("RUSTY_PROBE_TESTFAIL").is_some();
     let chapter: Rc<RefCell<String>> = Rc::default();
     let picking_devices = std::env::var_os("RUSTY_PROBE_DEVICES").is_some();
@@ -582,6 +589,12 @@ pub fn start(window: &AppWindow) {
                 if conflicting {
                     step.set(8000);
                 }
+                if placing {
+                    step.set(8100);
+                }
+                if merging {
+                    step.set(8200);
+                }
                 if outputs {
                     step.set(7500);
                 }
@@ -621,6 +634,12 @@ pub fn start(window: &AppWindow) {
             // The History page's dividers, and selecting and copying in it
             // (`probe_history.rs`).
             7700..=7799 if history => crate::probe_history::history(n, &surfaces),
+            // Every tab back where it was read, and after a restart
+            // (`probe_places.rs`).
+            8100..=8199 if placing => crate::probe_places::places(n, &surfaces),
+            // A merge's conflicts resolved through the panel and the bar to
+            // its commit (`probe_merge.rs`).
+            8200..=8299 if merging => crate::probe_merge::merge(n, &surfaces),
             // The room below the last line, the caret kept off the view's
             // edge, and the hover card's documentation as Markdown
             // (`probe_surfaces.rs`).
@@ -1145,39 +1164,33 @@ pub fn start(window: &AppWindow) {
                 shell.invoke_show_panel("left".into(), "git".into());
             }
             1101 if repository => {
-                if shell.get_git_state() != 1 || shell.get_git_unstaged().row_count() == 0 {
+                if shell.get_git_state() != 1 || git_files(&shell, 2).is_empty() {
                     waited.set(waited.get() + 1);
                     if waited.get() < 500 {
                         step.set(1101);
                     }
                     return;
                 }
-                let names = |model: slint::ModelRc<crate::GitChange>| {
-                    model
-                        .iter()
-                        .map(|c| format!("{} {}", c.letter, c.path))
-                        .collect::<Vec<_>>()
-                };
                 eprintln!(
                     "git: head {:?} ({}); staged {:?}; unstaged {:?}",
                     shell.get_git_head(),
                     shell.get_git_upstream(),
-                    names(shell.get_git_staged()),
-                    names(shell.get_git_unstaged())
+                    git_files(&shell, 1),
+                    git_files(&shell, 2)
                 );
                 snapshot(&window, &dir.join("git-panel.png"));
                 shell.invoke_git_file("stage".into(), "src/lib.rs".into(), false);
                 waited.set(0);
             }
             1102 if repository => {
-                if shell.get_git_staged().row_count() == 0 {
+                if shell.get_git_staged_count() == 0 {
                     waited.set(waited.get() + 1);
                     if waited.get() < 200 {
                         step.set(1102);
                     }
                     return;
                 }
-                eprintln!("git: staged {}", shell.get_git_staged().row_count());
+                eprintln!("git: staged {}", shell.get_git_staged_count());
                 shell.invoke_git_file("diff".into(), "src/lib.rs".into(), true);
             }
             1110 if repository => {
@@ -1193,7 +1206,7 @@ pub fn start(window: &AppWindow) {
                 waited.set(0);
             }
             1111 if repository => {
-                if shell.get_git_staged().row_count() != 0 {
+                if shell.get_git_staged_count() != 0 {
                     waited.set(waited.get() + 1);
                     if waited.get() < 500 {
                         step.set(1111);
@@ -5446,6 +5459,18 @@ fn book(
         }
         _ => {}
     }
+}
+
+/// The files of one of the Git panel's groups — 0 the conflicts, 1 the
+/// staged, 2 the changes — as the panel's rows have them, with their
+/// letters.
+fn git_files(shell: &Shell, group: i32) -> Vec<String> {
+    shell
+        .get_git_rows()
+        .iter()
+        .filter(|row| row.kind == 2 && row.group == group)
+        .map(|row| format!("{} {}", row.letter, row.path))
+        .collect()
 }
 
 thread_local! {
