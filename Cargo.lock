@@ -6214,7 +6214,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty-ai"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6234,7 +6234,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-cli"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -6247,7 +6247,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-core"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "camino",
  "fs4",
@@ -6262,7 +6262,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-dbg"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "rusty-embed",
  "rusty-spawn",
@@ -6273,7 +6273,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-desk"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "arboard",
  "embed-resource",
@@ -6315,7 +6315,7 @@ version = "0.1.1"
 
 [[package]]
 name = "rusty-edit"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "encoding_rs",
  "grep-matcher",
@@ -6334,7 +6334,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-embed"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "cc",
  "gimli",
@@ -6360,7 +6360,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-git"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "rusty-spawn",
  "serde",
@@ -6370,14 +6370,14 @@ dependencies = [
 
 [[package]]
 name = "rusty-i18n"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "toml",
 ]
 
 [[package]]
 name = "rusty-lsp"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "rusty-spawn",
  "serde",
@@ -6389,11 +6389,11 @@ dependencies = [
 
 [[package]]
 name = "rusty-mcu"
-version = "0.7.7"
+version = "0.7.8"
 
 [[package]]
 name = "rusty-release"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "base64 0.22.1",
  "minisign",
@@ -6403,7 +6403,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-setup"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "embed-resource",
  "image",
@@ -6419,11 +6419,11 @@ dependencies = [
 
 [[package]]
 name = "rusty-spawn"
-version = "0.7.7"
+version = "0.7.8"
 
 [[package]]
 name = "rusty-term"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "brush-builtins",
  "brush-core",

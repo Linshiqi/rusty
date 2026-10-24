@@ -9,6 +9,42 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.7.8
+
+**Markdown pages keep your place too.** A chapter read as a page now comes
+back to the same paragraph when you return to its tab, and keeps it when
+the file reloads, reflows or is zoomed. Where every open file was left —
+code and pages — is remembered when rusty closes, so reopening a project
+picks up each chapter where you stopped. Ctrl+Shift+T reopens the tab you
+closed last.
+
+**The Git panel's lists fold and can be shown as a tree.** Conflicts,
+Staged, Changes and Stashes each fold away under their heading. The tree
+view groups files by folder, and a folder can be staged, unstaged or
+discarded as a whole. Discard all changes is on the Changes heading. The
+Git tab shows how many files have changed, in red while any is in conflict.
+Ctrl+Enter (Cmd+Enter on a Mac) commits from the message box.
+
+**Merge conflicts have a way through.** When a pull or merge stops on
+conflicts, rusty says so and opens the first conflicted file. Conflicted
+files get a list of their own, each saying how many conflicts are left or
+what each side did. From the list you can take a whole file from either
+side or mark it resolved. In the editor a bar over the code shows which
+conflict you are in, jumps between them, and accepts every block one way
+at once; once none are left it offers to mark the file resolved. A
+Markdown file with conflicts opens as its source, where the markers are.
+The banner says what is being merged.
+
+**Safer merges.** Unstaging files during a merge now warns first, since
+that is how a merge's changes end up left behind when it is aborted.
+Continuing with changes still unstaged offers to stage them first, so the
+merge commit keeps everything it brought.
+
+**Fixes.** A crash when the pointer rested over Chinese text while switching
+tabs is fixed. The Git panel no longer stays on "loading" when it was
+already open as a project opened. Conflicted files are no longer listed
+twice, and Stage all no longer marks them resolved.
+
 ## v0.7.7
 
 **A tab comes back where it was left.** Switching to another file and back
